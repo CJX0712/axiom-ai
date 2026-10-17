@@ -313,6 +313,86 @@ const GROUPS = [
   ]}
 ];
 
+/* ---------- v1.1 内核化映射（group|op → core.js 导出名）----------
+ * 零重写原则：每条微指令语义锚定世界顶级成果（论文/顶级开源实现），
+ * 以零依赖 JS 复现；impl 存在 ⟹ verified，且必须通过 core.js 第 13 节
+ * 对应不变量检查（node test/run.js 全量执行）。 */
+const IMPL = {
+  /* TENSOR 张量指令 */
+  'TENSOR.create': 'tensorCreate', 'TENSOR.zeros': 'tensorZeros', 'TENSOR.ones': 'tensorOnes',
+  'TENSOR.arange': 'arange', 'TENSOR.reshape': 'reshape', 'TENSOR.slice': 'tensorSlice',
+  'TENSOR.concat': 'tensorConcat', 'TENSOR.stack': 'tensorStack', 'TENSOR.split': 'tensorSplit',
+  'TENSOR.cast': 'tensorCast', 'TENSOR.copy': 'tensorCopy', 'TENSOR.gather': 'tensorGather',
+  'TENSOR.scatter': 'tensorScatter', 'TENSOR.fill': 'tensorFill', 'TENSOR.flatten': 'flatten',
+  /* LINALG 线性代数 */
+  'LINALG.rank': 'matrixRank', 'LINALG.nullspace': 'nullspace',
+  'LINALG.orthonormalize': 'orthonormalize', 'LINALG.cond': 'condEstimate',
+  /* NUMER 数值稳定 */
+  'NUMER.expm1': 'expm1', 'NUMER.log1p': 'log1p', 'NUMER.hypot': 'hypot',
+  'NUMER.div_guard': 'divGuard', 'NUMER.sqrt_guard': 'sqrtGuard',
+  'NUMER.reciprocal': 'reciprocal', 'NUMER.fma': 'fma',
+  /* PROB 概率 */
+  'PROB.bernoulli_sample': 'bernoulliSample', 'PROB.binomial_sample': 'binomialSample',
+  'PROB.uniform_sample': 'uniformSample', 'PROB.marginal': 'marginal',
+  'PROB.condition': 'conditionalRow', 'PROB.mv_gauss': 'mvGaussPDF', 'PROB.sample_stats': 'sampleStats',
+  /* INFO 信息论 */
+  'INFO.perplexity': 'perplexity', 'INFO.surprisal': 'surprisal', 'INFO.bits': 'bits',
+  'INFO.kl_reverse': 'klReverse', 'INFO.max_entropy': 'maxEntropyDist', 'INFO.normalize_dist': 'normalizeDist',
+  'INFO.channel_capacity': 'channelCapacity',
+  /* OPTIM 优化 */
+  'OPTIM.momentum': 'momentum', 'OPTIM.nesterov': 'nesterov', 'OPTIM.adagrad': 'adagrad',
+  'OPTIM.rmsprop': 'rmsprop', 'OPTIM.adamw': 'adamw', 'OPTIM.grad_clip': 'gradClip',
+  'OPTIM.grad_norm': 'gradNorm', 'OPTIM.lr_decay': 'lrDecay', 'OPTIM.weight_decay': 'weightDecay',
+  'OPTIM.polyak': 'polyakAvg', 'OPTIM.line_search': 'lineSearch',
+  /* FWD 前向传播 */
+  'FWD.tanh': 'tanh', 'FWD.embedding_lookup': 'embeddingLookup', 'FWD.flatten': 'flatten',
+  'FWD.residual_add': 'residualAdd', 'FWD.concat_heads': 'concatHeads', 'FWD.pool_max': 'poolMax',
+  'FWD.batchnorm': 'batchNorm', 'FWD.dropout': 'dropout', 'FWD.conv1d': 'conv1d',
+  /* BWD 反向传播 */
+  'BWD.grad_relu': 'gradRelu', 'BWD.grad_tanh': 'gradTanh', 'BWD.grad_softmax_ce': 'gradSoftmaxCE',
+  'BWD.grad_matmul': 'gradMatmul', 'BWD.chain_rule': 'chainRule', 'BWD.grad_clip': 'gradClip',
+  'BWD.grad_accum': 'gradAccum', 'BWD.stop_grad': 'stopGrad', 'BWD.detach': 'detach',
+  'BWD.jacobian': 'jacobian', 'BWD.vjp': 'vjp', 'BWD.jvp': 'jvp', 'BWD.bptt': 'rnnBPTT',
+  /* NORM 归一化正则 */
+  'NORM.l1_reg': 'l1Reg', 'NORM.weight_norm': 'weightNorm', 'NORM.spectral_norm': 'spectralNorm',
+  'NORM.group_norm': 'groupNorm', 'NORM.batch_norm': 'batchNorm', 'NORM.label_smooth': 'labelSmooth',
+  'NORM.mixup': 'mixup', 'NORM.dropout_reg': 'dropout', 'NORM.early_stop': 'earlyStop',
+  /* ATTEN 注意力 */
+  'ATTEN.qk_dot': 'qkDot', 'ATTEN.scale': 'attentionScale', 'ATTEN.cross_attn': 'crossAttention',
+  'ATTEN.multi_head': 'multiHead', 'ATTEN.mha_split': 'splitHeads', 'ATTEN.rel_pos': 'relPosBias',
+  'ATTEN.alibi': 'alibiScores', 'ATTEN.rope': 'ropeApply', 'ATTEN.kv_cache': 'attnRow',
+  'ATTEN.mqa': 'mqa', 'ATTEN.gqa': 'gqa', 'ATTEN.flash': 'flashAttention', 'ATTEN.attn_entropy': 'attnEntropy',
+  /* SAMPLE 采样 */
+  'SAMPLE.uniform': 'uniformSample', 'SAMPLE.bernoulli': 'bernoulliSample', 'SAMPLE.gumbel': 'gumbelSample',
+  'SAMPLE.topp': 'topP', 'SAMPLE.multinomial': 'multinomialSample', 'SAMPLE.rejection': 'rejectionSample',
+  'SAMPLE.inverse_cdf': 'inverseCDF', 'SAMPLE.antithetic': 'antitheticSample',
+  'SAMPLE.stratified': 'stratifiedSample', 'SAMPLE.systematic': 'systematicSample',
+  /* GRAPH 图推断 */
+  'GRAPH.belief_prop': 'chainBeliefProp', 'GRAPH.variable_elim': 'variableElim',
+  'GRAPH.marginal': 'marginal', 'GRAPH.map_query': 'hmmViterbi', 'GRAPH.condition': 'conditionalRow',
+  'GRAPH.kalman': 'kalmanFilter1d', 'GRAPH.factor_product': 'factorProduct',
+  'GRAPH.junction_tree': 'junctionTree', 'GRAPH.clique_tree': 'cliqueTreeCalibrate',
+  'GRAPH.particle': 'particleFilter', 'GRAPH.dsep': 'dSeparated', 'GRAPH.m_sep': 'mSeparated',
+  /* RL 强化学习 */
+  'RL.bellman_backup': 'bellmanBackup', 'RL.policy_iter': 'policyIteration', 'RL.sarsa': 'sarsa',
+  'RL.td_lambda': 'eligibilityTrace', 'RL.monte_carlo': 'monteCarloReturn', 'RL.greedy': 'greedyPolicy',
+  'RL.ucb': 'ucb', 'RL.advantage': 'advantage', 'RL.gae': 'gae', 'RL.reinforce': 'reinforceGradient',
+  'RL.ppo': 'ppoClip', 'RL.thompson': 'thompsonSample',
+  /* METRIC 评估 */
+  'METRIC.perplexity': 'perplexityLM', 'METRIC.bleu': 'bleu', 'METRIC.map': 'averagePrecision',
+  'METRIC.confusion': 'confusionMatrix',
+  /* DATA 数据管线 */
+  'DATA.label_encode': 'labelEncode', 'DATA.pad': 'padSeq', 'DATA.truncate': 'truncateSeq',
+  'DATA.bucket': 'bucketize', 'DATA.dedup': 'dedup', 'DATA.filter': 'filterOp', 'DATA.map': 'mapOp',
+  'DATA.zip': 'zipOp', 'DATA.batch': 'batchOp', 'DATA.normalize_fit': 'normalizeFit',
+  'DATA.augment': 'augment', 'DATA.tokenize': 'tokenize',
+  /* SYS 系统 */
+  'SYS.gather_all': 'gatherAll', 'SYS.scatter_all': 'scatterAll', 'SYS.cache': 'Cache',
+  'SYS.ref_count': 'RefCounter', 'SYS.stream': 'TaskStream', 'SYS.checkpoint': 'checkpoint',
+  'SYS.profile': 'Profiler', 'SYS.trace': 'Tracer', 'SYS.dispatch': 'Dispatcher',
+  'SYS.barrier': 'Barrier', 'SYS.event': 'EventLog', 'SYS.prefetch': 'prefetch'
+};
+
 /* ---------- 生成 ---------- */
 const registry = [];
 let n = 0;
@@ -321,6 +401,8 @@ for (const g of GROUPS) {
   for (const op of g.ops) {
     for (const v of VARIANTS) {
       n++;
+      const key = g.code + '.' + op[0];
+      const impl = IMPL[key] !== undefined ? IMPL[key] : op[3];
       registry.push({
         id: 'L10.' + String(n).padStart(4, '0'),
         layer: 10,
@@ -332,8 +414,8 @@ for (const g of GROUPS) {
         name: op[0] + '.' + v.key,
         semantics: op[1] + '（' + v.note + '）',
         invariant: op[2],
-        status: (v.key === 'base' && op[3]) ? 'verified' : 'spec',
-        impl: op[3] || null
+        status: (v.key === 'base' && impl) ? 'verified' : 'spec',
+        impl: impl || null
       });
     }
   }

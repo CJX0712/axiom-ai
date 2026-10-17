@@ -8,23 +8,23 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 ┌────────────────────────────────────────────────────────┐
 │ L9  组合应用层    推理编排 / 训练编排（由 L1–L8 组合）  │
 ├────────────────────────────────────────────────────────┤
-│ L8  系统运行时    arena / reduce / broadcast / 同步原语 │ 64 条
+│ L8  系统运行时    arena / reduce / broadcast / 同步原语 │ 15/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L7  评估与数据    metrics / split / fold / encode       │ 128 条
+│ L7  评估与数据    metrics / split / fold / encode       │ 32/128 verified
 ├────────────────────────────────────────────────────────┤
-│ L6  强化学习      Bellman / VI / TD / Q-Learning        │ 64 条
+│ L6  强化学习      Bellman / VI / TD / Q-Learning / GAE  │ 16/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L5  概率图模型    forward-backward / Viterbi / BP       │ 64 条
+│ L5  概率图模型    前向-后向 / Viterbi / BP / VE / D-分离 │ 14/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L4  序列与生成    attention / sampling                  │ 128 条
+│ L4  序列与生成    attention / flash / rope / sampling   │ 32/128 verified
 ├────────────────────────────────────────────────────────┤
-│ L3  表示学习      forward / backward / normalize        │ 192 条
+│ L3  表示学习      forward / backward / normalize        │ 47/192 verified
 ├────────────────────────────────────────────────────────┤
-│ L2  监督学习      optimizers                            │ 64 条
+│ L2  监督学习      optimizers（10 种，全部收敛验证）      │ 14/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L1  数学基础      tensor / linalg / numer / prob / info │ 320 条
+│ L1  数学基础      tensor / linalg / numer / prob / info │ 79/320 verified
 ├────────────────────────────────────────────────────────┤
-│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │
+│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 249/1024 verified
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -44,8 +44,8 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
   "name": "create.base",
   "semantics": "创建张量（标量/单样本语义）",
   "invariant": "元素总数 = ∏ shape",
-  "status": "spec",
-  "impl": null
+  "status": "verified",
+  "impl": "tensorCreate"
 }
 ```
 
@@ -54,7 +54,7 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 | `id` | `L10.NNNN`，N ∈ [1,1024]，连续唯一 |
 | `variant` | ∈ {`base`, `batched`, `fused`, `inplace`} |
 | `status` | `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；仅 `base` 变体可 verified |
-| `impl` | `core.js` 导出函数名；verified 项必须真实存在 |
+| `impl` | `core.js` 导出函数名；verified 项必须真实存在（注册表断言校验） |
 
 ### 执行变体契约
 
@@ -67,53 +67,78 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 
 ## 3. 指令族目录（16 族 × 16 算子）
 
-| 族 | 名称 | 层 | 代表算子 |
-|---|---|---|---|
-| TENSOR | 张量指令 | L1 | create/reshape/transpose/slice/gather |
-| LINALG | 线性代数指令 | L1 | matmul/cholesky/qr/eigen/pca/solve |
-| NUMER | 数值稳定指令 | L1 | logsumexp/softmax/kahan/gelu/erf |
-| PROB | 概率运算指令 | L1 | gauss_pdf/gauss_cdf/bayes/expectation |
-| INFO | 信息论指令 | L1 | entropy/kl/js/mutual_info/info_gain |
-| OPTIM | 优化算子指令 | L2 | gd/adam/cg/momentum/lbfgs |
-| FWD | 前向传播指令 | L3 | linear/layernorm/self_attn/gelu |
-| BWD | 反向传播指令 | L3 | grad_check/grad_linear/jacobian/vjp |
-| NORM | 归一化正则指令 | L3 | l1/l2/zscore/minmax/l2_reg |
-| ATTEN | 注意力指令 | L4 | softmax_attn/causal_mask/self_attn/rope |
-| SAMPLE | 采样生成指令 | L4 | box_muller/categorical/temperature/topk |
-| GRAPH | 图推断指令 | L5 | forward_backward/viterbi/belief_prop |
-| RL | 强化学习指令 | L6 | value_iter/q_learn/td0/epsilon_greedy |
-| METRIC | 评估度量指令 | L7 | accuracy/precision/recall/auc/r2 |
-| DATA | 数据管线指令 | L7 | shuffle/train_test/kfold/onehot |
-| SYS | 系统级微指令 | L8 | arena_alloc/reduce_all/broadcast |
+| 族 | 名称 | 层 | verified | 代表算子 |
+|---|---|---|---|---|
+| TENSOR | 张量指令 | L1 | 16/16 | create/reshape/transpose/slice/gather |
+| LINALG | 线性代数指令 | L1 | 16/16 | matmul/cholesky/qr/eigen/pca/rank/nullspace/cond |
+| NUMER | 数值稳定指令 | L1 | 16/16 | logsumexp/softmax/kahan/fma(Dekker)/gelu |
+| PROB | 概率运算指令 | L1 | 16/16 | gauss_pdf/mv_gauss/bayes/sample_stats |
+| INFO | 信息论指令 | L1 | 15/16 | entropy/kl/channel_capacity(AB)/max_entropy |
+| OPTIM | 优化算子指令 | L2 | 14/16 | gd/adam/cg/momentum/nesterov/adamw/line_search |
+| FWD | 前向传播指令 | L3 | 16/16 | linear/layernorm/self_attn/batchnorm/conv1d |
+| BWD | 反向传播指令 | L3 | 15/16 | grad_check/grad_matmul/vjp/jvp/bptt |
+| NORM | 归一化正则指令 | L3 | 16/16 | l1/l2/zscore/spectral_norm/group_norm/mixup |
+| ATTEN | 注意力指令 | L4 | 16/16 | flash/rope/alibi/mqa/gqa/kv_cache |
+| SAMPLE | 采样生成指令 | L4 | 16/16 | box_muller/topp/rejection/antithetic/stratified |
+| GRAPH | 图推断指令 | L5 | 14/16 | forward_backward/viterbi/variable_elim/dsep/particle |
+| RL | 强化学习指令 | L6 | 16/16 | value_iter/q_learn/sarsa/gae/ppo/thompson |
+| METRIC | 评估度量指令 | L7 | 16/16 | accuracy/auc/bleu/map/confusion |
+| DATA | 数据管线指令 | L7 | 16/16 | shuffle/kfold/onehot/normalize_fit/tokenize |
+| SYS | 系统级微指令 | L8 | 15/16 | arena/reduce/broadcast/checkpoint/dispatch |
 
-完整 1024 条见 `src/registry.js` 或运行 `node -e "console.table(require('./src/registry.js'))"`。
+完整 1024 条规格见 [ISA-1024.md](ISA-1024.md) 或运行 `node -e "console.table(require('./src/registry.js'))"`。
 
 ## 4. 核心 API 面（core.js）
 
 ```
 linalg    matMul matVec transpose trace det inverse solveLinear cholesky qrDecompose
-          jacobiEigen powerIteration pca
-numer     logsumexp softmax sigmoid gelu erf normalCDF kahanSum exactSum clip
-prob      gaussPDF expectation variance covariance normalSample categoricalSample bayesUpdate
+          jacobiEigen powerIteration pca matrixRank nullspace orthonormalize condEstimate
+numer     logsumexp softmax sigmoid gelu erf normalCDF kahanSum exactSum fma clip
+          divGuard sqrtGuard expm1 log1p hypot
+prob      gaussPDF mvGaussPDF expectation variance covariance normalSample categoricalSample
+          bayesUpdate uniformSample bernoulliSample binomialSample sampleStats marginal conditionalRow
 info      entropy crossEntropy klDivergence jsDivergence mutualInfo conditionalEntropy gini infoGain
-optim     gradientDescent adam conjugateGradient
+          perplexity surprisal bits klReverse maxEntropyDist normalizeDist channelCapacity
+optim     gradientDescent adam conjugateGradient momentum nesterov rmsprop adagrad adamw
+          gradClip gradNorm lrDecay weightDecay polyakAvg lineSearch
 models    linearRegression logisticRegression kmeans gmmEM knn decisionTree
           mlpTrain gradientCheck
-dl        linear layerNorm selfAttention
-graph     hmmForwardBackward hmmViterbi
-rl        valueIteration td0Sweep qLearning epsilonGreedy
-metric    accuracy precision recall f1 auc mse mae r2 logLoss cosineSimilarity editDistance silhouette
+dl        linear layerNorm selfAttention embeddingLookup batchNorm groupNorm dropout conv1d
+          splitHeads concatHeads poolMax residualAdd
+attn      qkDot crossAttention multiHead ropeApply attnRow mqa gqa flashAttention
+          relPosBias alibiScores attnEntropy
+autodiff  numericJacobian jacobian vjp jvp chainRule gradRelu gradTanh gradSoftmaxCE
+          gradMatmul gradAccum rnnForward rnnBPTT
+graph     hmmForwardBackward hmmViterbi chainBeliefProp variableElim factorProduct sumOut
+          junctionTree cliqueTreeCalibrate kalmanFilter1d dSeparated mSeparated particleFilter
+rl        valueIteration td0Sweep qLearning epsilonGreedy bellmanBackup policyIteration sarsa
+          eligibilityTrace monteCarloReturn greedyPolicy ucb advantage gae reinforceGradient
+          ppoClip thompsonSample
+metric    accuracy precision recall f1 auc r2 mse mae logLoss cosineSimilarity editDistance
+          silhouette perplexityLM bleu averagePrecision confusionMatrix
 data      l1Norm l2Norm linfNorm normalizeL2 minmaxScale zscore l2Reg temperatureSoftmax topK
-          shuffle trainTestSplit kFold oneHot
-sys       Arena reduceAll broadcast
+          shuffle trainTestSplit kFold oneHot labelEncode padSeq bucketize dedup normalizeFit
+          augment tokenize batchOp zipOp
+sys       Arena reduceAll broadcast gatherAll scatterAll Cache RefCounter TaskStream
+          checkpoint Profiler Tracer Dispatcher Barrier EventLog prefetch
 selftest  runChecks() → { total, passed, results[] }
 ```
 
-## 5. 扩展指令集
+## 5. L9 组合应用层（管线编排）
+
+L9 不新增指令：将 L1–L8 的已验证微指令按序组合为推理/训练管线。控制台「管线编排」视图提供：
+
+- **3 条预设管线**：Softmax 温度采样（temperatureSoftmax → topK）、归一化+激活（zscore → gelu）、注意力打分→熵（softmax → entropy）
+- **自定义管线**：从 14 个 vec→vec 算子池中选择、输入任意向量、逐步执行并展示每步的输入/输出张量与所携带的不变量
+
+管线的每一步都由通过不变量自检的微指令驱动——组合层的正确性由构件层的可验证性传递保证。
+
+## 6. 扩展指令集
 
 新增一条微指令的流程：
 
-1. 在 `tools/gen-registry.js` 对应族的 `ops` 数组中追加 `[算子名, 中文名, 不变量, impl]`
+1. 在 `tools/gen-registry.js` 对应族的 `ops` 数组中追加 `[算子名, 中文名, 不变量, impl]`（或在 `IMPL` 映射中登记）
 2. 在 `src/core.js` 实现该算子（若声称 verified）
 3. `node tools/gen-registry.js && node test/run.js` —— 注册表断言会校验总数/唯一性/每族 64/impl 真实存在
-4. 在 `src/core.js` 的 checks 表中追加不变量检查
+4. 在 `src/core.js` 第 13 节检查表中追加不变量检查（必须可被独立复算）
+5. `node tools/gen-verification.js && node tools/gen-isa-doc.js` —— 文档随实测重生

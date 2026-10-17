@@ -114,11 +114,11 @@ console.log('══════════════════════�
 ok(appEl.children.length > 0, '应用挂载到 #app');
 ok(documentStub.title === 'AXIOM · 自验证 AI 微指令操作系统', 'document.title 已设置');
 ok(headEl.children.length > 0, 'CSS 已注入 head');
-ok(sandbox.AXIOM.runChecks().passed === 64, 'core.js 在垫片环境中 64/64 通过');
+ok(sandbox.AXIOM.runChecks().passed === sandbox.AXIOM.checks.length, 'core.js 在垫片环境中 ' + sandbox.AXIOM.checks.length + '/' + sandbox.AXIOM.checks.length + ' 通过');
 ok(sandbox.AXIOM_REGISTRY.length === 1024, 'registry.js 1024 条已加载');
 
 var tabs = findAll(appEl, function (n) { return n.tagName === 'BUTTON' && n.getAttribute('data-tab'); });
-ok(tabs.length === 5, '5 个 Tab 渲染（实际 ' + tabs.length + '）');
+ok(tabs.length === 6, '6 个 Tab 渲染（实际 ' + tabs.length + '）');
 ok(findAll(appEl, function (n) { return n._cls.contains('layer'); }).length === 10, '架构视图 10 层卡片');
 
 /* Tab 1 → 指令集 */
@@ -145,7 +145,21 @@ var summaries = findAll(viewEl(), function (n) { return n._cls.contains('summary
 ok(summaries.length === 2, '自检后渲染 2 个汇总条（实际 ' + summaries.length + '）');
 ok(summaries.filter(function (s) { return s._cls.contains('ok'); }).length === 2, '两个汇总条均全绿');
 var verifyRows = findAll(viewEl(), function (n) { return n.tagName === 'TR'; }).length;
-ok(verifyRows >= 64, '自检结果表 ≥ 64 行（实际 ' + verifyRows + '）');
+ok(verifyRows >= sandbox.AXIOM.checks.length, '自检结果表 ≥ ' + sandbox.AXIOM.checks.length + ' 行（实际 ' + verifyRows + '）');
+
+/* Tab 3 → 管线编排（L9 组合应用层） */
+clickTab('pipeline');
+var presetBtns = findAll(viewEl(), function (n) { return n.tagName === 'BUTTON'; });
+ok(presetBtns.length >= 4, '管线视图：3 预设 + 加入 + 执行按钮（实际 ' + presetBtns.length + '）');
+var presetRun = presetBtns.filter(function (b) { return b.innerHTML.indexOf('运行预设') !== -1; })[0];
+if (presetRun) presetRun.dispatch('click');
+var pipeTables = findAll(viewEl(), function (n) { return n.tagName === 'TABLE'; });
+ok(pipeTables.length === 1, '预设管线执行后渲染步骤表（实际 ' + pipeTables.length + '）');
+var pipeRows = pipeTables.length ? findAll(pipeTables[0], function (n) { return n.tagName === 'TR'; }).length : 0;
+ok(pipeRows >= 2, '管线数据行 ≥ 2（2 步预设，实际 ' + pipeRows + '）');
+ok(pipeTables.length && pipeTables[0].innerHTML.indexOf('<thead>') !== -1, '管线表头已渲染');
+var pipeSummaries = findAll(viewEl(), function (n) { return n._cls.contains('summary'); });
+ok(pipeSummaries.length === 1 && pipeSummaries[0]._cls.contains('ok'), '管线执行汇总全绿');
 
 /* Tab 3 → 演示实验室 */
 clickTab('lab');

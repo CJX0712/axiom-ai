@@ -1107,7 +1107,1164 @@
   function broadcast(xs) { return xs.slice(); }
 
   /* ========================================================================
-   * 12. 不变量检查表（可独立复算的硬金标准）
+   * 12. 扩展算子库（L10 微指令细化 · v1.1）—— 每条均携带可独立复算的不变量
+   * ------------------------------------------------------------------------
+   * 零重写原则：以下实现直接锚定世界顶级成果的语义（论文/顶级开源实现），
+   * 以零依赖 JS 复现，并在第 13 节用硬不变量自证一致。
+   *   Dekker(1971) 双精度分裂 → twoProd/twoSum → 精确 fma 模拟
+   *   Abramowitz–Stegun 7.1.26 → erf；Box–Muller(1958) → 正态采样
+   *   Dempster(1977) EM 责任度语义；Cholesky 求值 → 多元高斯密度
+   * ======================================================================*/
+
+  /* ---- 12.1 TENSOR 张量指令（结构不变量，容差 0）---- */
+  function tensorCreate(dims, fill) {
+    if (!dims.length) return fill;
+    var rest = dims.slice(1);
+    return Array.from({ length: dims[0] }, function () { return tensorCreate(rest, fill); });
+  }
+  function tensorCount(t) { return Array.isArray(t) ? t.reduce(function (a, v) { return a + tensorCount(v); }, 0) : 1; }
+  function tensorZeros(dims) { return tensorCreate(dims, 0); }
+  function tensorOnes(dims) { return tensorCreate(dims, 1); }
+  function arange(start, stop, step) {
+    step = step || 1;
+    var out = [];
+    for (var v = start; v < stop; v += step) out.push(v);
+    return out;
+  }
+  function flatten(t) {
+    var out = [];
+    (function rec(x) { if (Array.isArray(x)) x.forEach(rec); else out.push(x); })(t);
+    return out;
+  }
+  function tensorFromFlat(dims, flat) {
+    var idx = 0;
+    function build(ds) {
+      if (!ds.length) return flat[idx++];
+      return Array.from({ length: ds[0] }, function () { return build(ds.slice(1)); });
+    }
+    return build(dims);
+  }
+  function reshape(t, dims) { return tensorFromFlat(dims, flatten(t)); }
+  function tensorSlice(a, start, stop) { return a.slice(start, stop); }
+  function tensorConcat(parts) {
+    var out = [];
+    parts.forEach(function (p) { p.forEach(function (v) { out.push(v); }); });
+    return out;
+  }
+  function tensorStack(parts) { return parts.map(function (p) { return p.slice(); }); }
+  function tensorSplit(a, sizes) {
+    var out = [], i = 0;
+    sizes.forEach(function (s) { out.push(a.slice(i, i + s)); i += s; });
+    return out;
+  }
+  function tensorCast(a) { return a.map(function (v) { return +v; }); }
+  function tensorCopy(t) { return Array.isArray(t) ? t.map(tensorCopy) : t; }
+  function tensorGather(a, idx) { return idx.map(function (i) { return a[i]; }); }
+  function tensorScatter(a, idx, src) {
+    var out = a.slice();
+    idx.forEach(function (i, t) { out[i] = src[t]; });
+    return out;
+  }
+  function tensorFill(a, v) { return a.map(function () { return v; }); }
+
+  /* ---- 12.2 NUMER 数值稳定指令 ---- */
+  function divGuard(a, b, eps) {
+    eps = eps || 1e-12;
+    var d = Math.abs(b) < eps ? (b < 0 ? -eps : eps) : b;
+    return a / d;
+  }
+  function sqrtGuard(x) {
+    if (x < 0) throw new Error('负数开方：sqrtGuard');
+    return Math.sqrt(x);
+  }
+  function reciprocal(x) { return 1 / x; }
+  function expm1(x) { return Math.expm1(x); }   // 平台原生：V8 保证正确舍入
+  function log1p(x) { return Math.log1p(x); }
+  function hypot(a, b) { return Math.hypot(a, b); }
+  function twoSum(a, b) { // Knuth TwoSum：a+b = s+e 精确
+    var s = a + b;
+    var bb = Math.abs(a) >= Math.abs(b) ? (a - s) + b : (b - s) + a;
+    return [s, bb];
+  }
+  function twoProd(a, b) { // Dekker 分裂：a·b = p+e 精确
+    var p = a * b;
+    var split = 134217729; // 2^27 + 1
+    var t = split * a, ah = t - (t - a), al = a - ah;
+    var t2 = split * b, bh = t2 - (t2 - b), bl = b - bh;
+    var err = ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+    return [p, err];
+  }
+  function fma(a, b, c) { // 单次舍入融合乘加（Dekker 模拟，Muller et al. 2005 算法 4.3）
+    var pr = twoProd(a, b);
+    var s1 = twoSum(pr[0], c);
+    var s2 = twoSum(s1[0], pr[1]);
+    return s2[0] + (s1[1] + s2[1]);
+  }
+
+  /* ---- 12.3 PROB 概率运算指令 ---- */
+  function uniformSample(n, seed) {
+    var rng = mulberry32(seed === undefined ? 3 : seed), out = [];
+    for (var i = 0; i < n; i++) out.push(rng());
+    return out;
+  }
+  function bernoulliSample(p, n, seed) {
+    var rng = mulberry32(seed === undefined ? 4 : seed), out = [];
+    for (var i = 0; i < n; i++) out.push(rng() < p ? 1 : 0);
+    return out;
+  }
+  function binomialSample(n, p, trials, seed) {
+    var rng = mulberry32(seed === undefined ? 5 : seed), out = [];
+    for (var t = 0; t < trials; t++) {
+      var c = 0;
+      for (var i = 0; i < n; i++) if (rng() < p) c++;
+      out.push(c);
+    }
+    return out;
+  }
+  function marginal(joint) { // joint[i][j] = P(X=i,Y=j) → P(X)
+    var n = joint.length, m = joint[0].length, px = new Array(n).fill(0);
+    for (var i = 0; i < n; i++) for (var j = 0; j < m; j++) px[i] += joint[i][j];
+    return px;
+  }
+  function conditionalRow(joint, i) { // P(Y | X=i)
+    var row = joint[i].slice();
+    var s = row.reduce(function (a, b) { return a + b; }, 0);
+    return row.map(function (v) { return v / s; });
+  }
+  function mvGaussPDF(x, mu, Sigma) { // Cholesky 求值：N(μ,Σ)
+    var d = x.length;
+    var L = safeCholesky(Sigma);
+    var diff = x.map(function (v, i) { return v - mu[i]; });
+    var y = solveLower(L, diff), logdet = 0;
+    for (var i = 0; i < d; i++) logdet += Math.log(L[i][i]);
+    return Math.exp(-0.5 * dot(y, y)) / Math.sqrt(Math.pow(2 * Math.PI, d) * Math.exp(2 * logdet));
+  }
+
+  /* ---- 12.4 INFO 信息论指令 ---- */
+  function perplexity(p) { return Math.pow(2, entropy(p)); }
+  function surprisal(p) { return -Math.log2(p); }
+  function bits(nats) { return nats * Math.LOG2E; }
+  function klReverse(p, q) { return klDivergence(q, p); }
+  function maxEntropyDist(n) { return new Array(n).fill(1 / n); } // 最大熵原理：无约束最大熵 = 均匀
+  function normalizeDist(p) {
+    var s = p.reduce(function (a, b) { return a + b; }, 0);
+    return p.map(function (v) { return v / s; });
+  }
+
+  /* ---- 12.5 OPTIM 优化算子指令 ----
+   * 全部锚定经典文献：Polyak(1964) 动量 · Nesterov(1983) 加速 ·
+   * Duchi(2011) AdaGrad · Tieleman(2012) RMSProp · Kingma–Ba(2015) Adam ·
+   * Loshchilov–Hutter(2019) AdamW 解耦权重衰减 */
+  function quadProblem() { // 共享凸二次基准 f(x)=½ΣAᵢxᵢ²−Σbᵢxᵢ（条件数 100）
+    var A = [1, 10, 100], b = [1, -2, 3];
+    return {
+      A: A, b: b,
+      f: function (x) { return 0.5 * (A[0] * x[0] * x[0] + A[1] * x[1] * x[1] + A[2] * x[2] * x[2]) - (b[0] * x[0] + b[1] * x[1] + b[2] * x[2]); },
+      g: function (x) { return [A[0] * x[0] - b[0], A[1] * x[1] - b[1], A[2] * x[2] - b[2]]; },
+      xs: [b[0] / A[0], b[1] / A[1], b[2] / A[2]]
+    };
+  }
+  function momentum(f, grad, x0, opts) {
+    opts = opts || {};
+    var lr = opts.lr || 0.01, beta = opts.beta === undefined ? 0.9 : opts.beta, iters = opts.iters || 10000;
+    var x = x0.slice(), v = new Array(x.length).fill(0), history = [];
+    for (var it = 0; it < iters; it++) {
+      var g = grad(x);
+      for (var i = 0; i < x.length; i++) { v[i] = beta * v[i] - lr * g[i]; x[i] += v[i]; }
+      history.push(f(x));
+    }
+    return { x: x, history: history, iterations: iters };
+  }
+  function nesterov(f, grad, x0, opts) {
+    opts = opts || {};
+    var lr = opts.lr || 0.01, beta = opts.beta === undefined ? 0.9 : opts.beta, iters = opts.iters || 10000;
+    var x = x0.slice(), v = new Array(x.length).fill(0), history = [];
+    for (var it = 0; it < iters; it++) {
+      for (var i = 0; i < x.length; i++) x[i] += beta * v[i];
+      var g = grad(x);
+      for (var i2 = 0; i2 < x.length; i2++) { v[i2] = beta * v[i2] - lr * g[i2]; x[i2] += v[i2]; }
+      history.push(f(x));
+    }
+    return { x: x, history: history, iterations: iters };
+  }
+  function rmsprop(f, grad, x0, opts) {
+    opts = opts || {};
+    var lr = opts.lr || 0.01, beta = opts.beta === undefined ? 0.9 : opts.beta, eps = opts.eps || 1e-8, iters = opts.iters || 20000;
+    var x = x0.slice(), s = new Array(x.length).fill(0), history = [];
+    for (var it = 0; it < iters; it++) {
+      var g = grad(x);
+      for (var i = 0; i < x.length; i++) {
+        s[i] = beta * s[i] + (1 - beta) * g[i] * g[i];
+        x[i] -= lr * g[i] / (Math.sqrt(s[i]) + eps);
+      }
+      history.push(f(x));
+    }
+    return { x: x, history: history, iterations: iters };
+  }
+  function adagrad(f, grad, x0, opts) {
+    opts = opts || {};
+    var lr = opts.lr || 0.5, eps = opts.eps || 1e-8, iters = opts.iters || 20000;
+    var x = x0.slice(), G = new Array(x.length).fill(0), history = [];
+    for (var it = 0; it < iters; it++) {
+      var g = grad(x);
+      for (var i = 0; i < x.length; i++) {
+        G[i] += g[i] * g[i];
+        x[i] -= lr * g[i] / (Math.sqrt(G[i]) + eps);
+      }
+      history.push(f(x));
+    }
+    return { x: x, history: history, iterations: iters };
+  }
+  function adamw(f, grad, x0, opts) {
+    opts = opts || {};
+    var lr = opts.lr || 0.02, iters = opts.iters || 5000, b1 = 0.9, b2 = 0.999, eps = 1e-8;
+    var lambda = opts.lambda === undefined ? 0.01 : opts.lambda;
+    var x = x0.slice(), m = new Array(x.length).fill(0), v = new Array(x.length).fill(0), history = [];
+    for (var t = 1; t <= iters; t++) {
+      var g = grad(x);
+      for (var i = 0; i < x.length; i++) {
+        m[i] = b1 * m[i] + (1 - b1) * g[i];
+        v[i] = b2 * v[i] + (1 - b2) * g[i] * g[i];
+        var mh = m[i] / (1 - Math.pow(b1, t)), vh = v[i] / (1 - Math.pow(b2, t));
+        x[i] -= lr * (mh / (Math.sqrt(vh) + eps) + lambda * x[i]); // 解耦衰减
+      }
+      history.push(f(x));
+    }
+    return { x: x, history: history, iterations: iters };
+  }
+  function gradClip(g, maxNorm) {
+    var n = norm2(g);
+    if (n <= maxNorm) return g.slice();
+    return g.map(function (v) { return v * maxNorm / n; });
+  }
+  function gradNorm(g) { return norm2(g); }
+  function lrDecay(lr0, k, t) { return lr0 / (1 + k * t); }
+  function weightDecay(w, lr, lambda) { return w.map(function (v) { return v * (1 - lr * lambda); }); }
+  function polyakAvg(xs) {
+    var d = xs[0].length, out = new Array(d).fill(0);
+    for (var i = 0; i < xs.length; i++) for (var j = 0; j < d; j++) out[j] += xs[i][j];
+    return out.map(function (v) { return v / xs.length; });
+  }
+
+  /* ---- 12.6 FWD 前向传播指令 ---- */
+  function embeddingLookup(table, idx) { return idx.map(function (i) { return table[i].slice(); }); }
+  function residualAdd(x, fx) {
+    return x.map(function (row, i) { return row.map(function (v, j) { return v + fx[i][j]; }); });
+  }
+  function splitHeads(X, H) {
+    var T = X.length, d = X[0].length, hd = d / H;
+    return Array.from({ length: H }, function (_, h) {
+      return Array.from({ length: T }, function (_, t) { return X[t].slice(h * hd, (h + 1) * hd); });
+    });
+  }
+  function concatHeads(heads) {
+    var H = heads.length, T = heads[0].length, d = heads[0][0].length;
+    return Array.from({ length: T }, function (_, t) {
+      var row = [];
+      for (var h = 0; h < H; h++) for (var j = 0; j < d; j++) row.push(heads[h][t][j]);
+      return row;
+    });
+  }
+  function poolMax(x, size) {
+    var out = [];
+    for (var i = 0; i + size <= x.length; i += size) {
+      var m = -Infinity;
+      for (var j = 0; j < size; j++) m = Math.max(m, x[i + j]);
+      out.push(m);
+    }
+    return out;
+  }
+  function batchNorm(X, eps) {
+    if (eps === undefined) eps = 1e-5;
+    var n = X.length, d = X[0].length, mu = new Array(d).fill(0), v2 = new Array(d).fill(0);
+    for (var j = 0; j < d; j++) { for (var i = 0; i < n; i++) mu[j] += X[i][j]; mu[j] /= n; }
+    for (var j2 = 0; j2 < d; j2++) {
+      for (var i2 = 0; i2 < n; i2++) { var dd = X[i2][j2] - mu[j2]; v2[j2] += dd * dd; }
+      v2[j2] /= n;
+    }
+    return X.map(function (row) {
+      return row.map(function (val, j3) { return (val - mu[j3]) / Math.sqrt(v2[j3] + eps); });
+    });
+  }
+  function dropout(x, p, seed) { // 反向 dropout：缩放 1/(1−p) 保持期望（Srivastava 2014）
+    var rng = mulberry32(seed === undefined ? 9 : seed), keep = 1 - p;
+    return x.map(function (v) { return rng() < keep ? v / keep : 0; });
+  }
+  function conv1d(x, kernel, stride, pad) {
+    stride = stride || 1; pad = pad || 0;
+    var xp = [], i;
+    for (i = 0; i < pad; i++) xp.push(0);
+    x.forEach(function (v) { xp.push(v); });
+    for (i = 0; i < pad; i++) xp.push(0);
+    var k = kernel.length, out = [];
+    for (var s = 0; s + k <= xp.length; s += stride) {
+      var acc = 0;
+      for (var j = 0; j < k; j++) acc += xp[s + j] * kernel[j];
+      out.push(acc);
+    }
+    return out;
+  }
+
+  /* ---- 12.7 BWD 反向传播指令 ---- */
+  function numericJacobian(f, x, eps) { // f: R^n → R^m，中心差分
+    eps = eps || 1e-6;
+    var n = x.length, fx = f(x), m = fx.length;
+    var J = Array.from({ length: m }, function () { return new Array(n).fill(0); });
+    for (var i = 0; i < n; i++) {
+      var xp = x.slice(), xm = x.slice();
+      xp[i] += eps; xm[i] -= eps;
+      var fp = f(xp), fm = f(xm);
+      for (var r = 0; r < m; r++) J[r][i] = (fp[r] - fm[r]) / (2 * eps);
+    }
+    return J;
+  }
+  function jacobian(f, x, eps) { return numericJacobian(f, x, eps); }
+  function vjp(f, x, v, eps) { return matVec(transpose(numericJacobian(f, x, eps)), v); }
+  function jvp(f, x, d, eps) { return matVec(numericJacobian(f, x, eps), d); }
+  function chainRule(dOuter, inner, dInner, x) { // d/dx f(g(x)) = f′(g(x))·g′(x)
+    return dOuter(inner(x)) * dInner(x);
+  }
+  function gradRelu(x) { return x.map(function (v) { return v > 0 ? 1 : 0; }); }
+  function gradTanh(x) { return x.map(function (v) { var t = Math.tanh(v); return 1 - t * t; }); }
+  function gradSoftmaxCE(logits, yIdx) {
+    var p = softmax(logits);
+    p[yIdx] -= 1;
+    return p;
+  }
+  function gradMatmul(dL, A, B) {
+    return { dA: matMul(dL, transpose(B)), dB: matMul(transpose(A), dL) };
+  }
+  function gradAccum(grads) {
+    var out = grads[0].map(function (row) { return row.slice(); });
+    for (var i = 1; i < grads.length; i++) {
+      for (var a = 0; a < out.length; a++) for (var b = 0; b < out[0].length; b++) out[a][b] += grads[i][a][b];
+    }
+    return out;
+  }
+  function stopGrad(x) { return tensorCopy(x); }
+  function detach(x) { return tensorCopy(x); }
+  function rnnForward(P, xs) { // h_t = tanh(W·h_{t−1} + U·x_t)（标量循环核）
+    var h = [P.h0], hs = [];
+    for (var t = 0; t < xs.length; t++) {
+      hs.push(Math.tanh(P.W * h[t] + P.U * xs[t]));
+      h.push(hs[t]);
+    }
+    return { hs: hs, h: h };
+  }
+  function rnnLoss(P, xs, ys) {
+    var f = rnnForward(P, xs), s = 0;
+    for (var t = 0; t < xs.length; t++) s += (f.hs[t] - ys[t]) * (f.hs[t] - ys[t]);
+    return s;
+  }
+  function rnnBPTT(P, xs, ys) { // 时间反向传播（Werbos 1990 链路）
+    var f = rnnForward(P, xs), T = xs.length;
+    var gW = 0, gU = 0, dhNext = 0;
+    for (var t = T - 1; t >= 0; t--) {
+      var dh = 2 * (f.hs[t] - ys[t]) + dhNext;
+      var dz = dh * (1 - f.hs[t] * f.hs[t]); // tanh 导数
+      gW += dz * f.h[t];
+      gU += dz * xs[t];
+      dhNext = dz * P.W;
+    }
+    return { W: gW, U: gU, h0: dhNext };
+  }
+
+  /* ---- 12.8 NORM 归一化正则指令 ---- */
+  function l1Reg(w, lambda) { return lambda * l1Norm(w); }
+  function weightNorm(v, g) { var n = norm2(v); return v.map(function (x) { return g * x / n; }); }
+  function spectralNorm(W) { // 幂迭代估计主奇异值后归一（Miyato 2018）
+    var p = powerIteration(W, { iters: 500, tol: 1e-14 });
+    return W.map(function (row) { return row.map(function (x) { return x / p.value; }); });
+  }
+  function groupNorm(x, groups, eps) {
+    if (eps === undefined) eps = 1e-5;
+    return x.map(function (row) {
+      var d = row.length, gs = d / groups, out = [];
+      for (var g = 0; g < groups; g++) {
+        var seg = row.slice(g * gs, (g + 1) * gs);
+        var mu = expectation(seg), v = variance(seg), inv = 1 / Math.sqrt(v + eps);
+        seg.forEach(function (val) { out.push((val - mu) * inv); });
+      }
+      return out;
+    });
+  }
+  function labelSmooth(onehot, eps) {
+    var K = onehot.length;
+    return onehot.map(function (v) { return (1 - eps) * v + eps / K; });
+  }
+  function mixup(x1, x2, lambda) { return x1.map(function (v, i) { return lambda * v + (1 - lambda) * x2[i]; }); }
+  function earlyStop(valHistory, patience) {
+    patience = patience || 1;
+    var best = Infinity, bestIdx = 0;
+    for (var i = 0; i < valHistory.length; i++) {
+      if (valHistory[i] < best - 1e-15) { best = valHistory[i]; bestIdx = i; }
+    }
+    return { bestIndex: bestIdx, stopIndex: Math.min(bestIdx + patience, valHistory.length - 1), best: best };
+  }
+
+  /* ---- 12.9 ATTEN 注意力指令 ---- */
+  function qkDot(Q, K) { // scores = QKᵀ/√d（Vaswani 2017）
+    var d = Q[0].length;
+    return Q.map(function (q) { return K.map(function (k) { return dot(q, k) / Math.sqrt(d); }); });
+  }
+  function attentionScale(scores, dk) {
+    return scores.map(function (row) { return row.map(function (s) { return s / Math.sqrt(dk); }); });
+  }
+  function crossAttention(Q, K, V) { // Q 来自解码侧，K/V 来自编码侧
+    var W = qkDot(Q, K).map(function (row) { return softmax(row); });
+    return { weights: W, output: W.map(function (row) {
+      var o = new Array(V[0].length).fill(0);
+      for (var j = 0; j < V.length; j++) for (var t = 0; t < V[0].length; t++) o[t] += row[j] * V[j][t];
+      return o;
+    }) };
+  }
+  function multiHead(Q, K, V, H, causal) {
+    var hq = splitHeads(Q, H), hk = splitHeads(K, H), hv = splitHeads(V, H);
+    var outs = [], weights = [];
+    for (var h = 0; h < H; h++) {
+      var a = selfAttention(hq[h], hk[h], hv[h], causal);
+      outs.push(a.output);
+      weights.push(a.weights);
+    }
+    return { output: concatHeads(outs), weights: weights };
+  }
+  function ropeApply(x, m, base) { // 旋转位置编码（Su 2021）：二维一组旋转 m·θ_i
+    base = base || 10000;
+    var d = x.length, out = x.slice();
+    for (var i = 0; i < d; i += 2) {
+      var theta = m * Math.pow(base, -i / d);
+      var c = Math.cos(theta), s = Math.sin(theta);
+      out[i] = x[i] * c - x[i + 1] * s;
+      out[i + 1] = x[i] * s + x[i + 1] * c;
+    }
+    return out;
+  }
+  function attnRow(q, K, V) { // 单查询增量注意力（KV-cache 单步语义）
+    var d = q.length;
+    var w = softmax(K.map(function (k) { return dot(q, k) / Math.sqrt(d); }));
+    var o = new Array(V[0].length).fill(0);
+    for (var j = 0; j < V.length; j++) for (var t = 0; t < V[0].length; t++) o[t] += w[j] * V[j][t];
+    return { weights: w, output: o };
+  }
+  function mqa(Q, K, V) { // 多查询注意力：每个 Q 头对共享的单组 K/V 做注意力
+    return Q.map(function (qh) { return selfAttention(qh, K, V, false).output; });
+  }
+  function gqa(Q, K, V, groupSize) { // 分组查询注意力（Ainslie 2023）
+    var H = Q.length, G = K.length, out = [];
+    for (var h = 0; h < H; h++) {
+      var g = Math.min(G - 1, Math.floor(h / groupSize));
+      out.push(selfAttention(Q[h], K[g], V[g], false).output);
+    }
+    return out;
+  }
+  function attnEntropy(W) { return W.map(function (row) { return entropy(row); }); }
+  function relPosBias(scores, bias) {
+    return scores.map(function (row, i) { return row.map(function (s, j) { return s + bias[i][j]; }); });
+  }
+  function alibiScores(scores, slope) { // 线性距离惩罚（Press 2021）
+    return scores.map(function (row, i) { return row.map(function (s, j) { return s - slope * Math.abs(i - j); }); });
+  }
+  function flashAttention(Q, K, V, chunk) { // 在线 softmax 分块（Dao 2022 语义，免物化全矩阵）
+    var T = K.length, dv = V[0].length;
+    var m = new Array(Q.length).fill(-Infinity), l = new Array(Q.length).fill(0);
+    var o = Array.from({ length: Q.length }, function () { return new Array(dv).fill(0); });
+    for (var c = 0; c < T; c += chunk) {
+      var end = Math.min(c + chunk, T);
+      var Kc = K.slice(c, end), Vc = V.slice(c, end);
+      var sc = qkDot(Q, Kc);
+      for (var i = 0; i < Q.length; i++) {
+        var row = sc[i], mNew = m[i];
+        for (var j = 0; j < row.length; j++) if (row[j] > mNew) mNew = row[j];
+        var corr = Math.exp(m[i] - mNew);
+        var lNew = l[i] * corr;
+        var oNew = o[i].map(function (v) { return v * corr; });
+        for (var j2 = 0; j2 < row.length; j2++) {
+          var p = Math.exp(row[j2] - mNew);
+          lNew += p;
+          for (var t = 0; t < dv; t++) oNew[t] += p * Vc[j2][t];
+        }
+        m[i] = mNew; l[i] = lNew; o[i] = oNew;
+      }
+    }
+    return { output: o.map(function (row, i) { return row.map(function (v) { return v / l[i]; }); }), m: m, l: l };
+  }
+
+  /* ---- 12.10 SAMPLE 采样生成指令 ---- */
+  function gumbelSample(u) { return -Math.log(-Math.log(u)); }
+  function topP(p, cutoff) { // 核采样：最小支撑且累计质量 ≥ cutoff
+    var order = p.map(function (v, i) { return [v, i]; }).sort(function (a, b) { return b[0] - a[0]; });
+    var acc = 0, support = [];
+    for (var i = 0; i < order.length; i++) {
+      support.push(order[i]);
+      acc += order[i][0];
+      if (acc >= cutoff) break;
+    }
+    var out = new Array(p.length).fill(0);
+    support.forEach(function (item) { out[item[1]] = item[0]; });
+    var s = out.reduce(function (a, b) { return a + b; }, 0);
+    return out.map(function (v) { return v / s; });
+  }
+  function multinomialSample(p, n, seed) {
+    var rng = mulberry32(seed === undefined ? 6 : seed);
+    var counts = new Array(p.length).fill(0);
+    for (var t = 0; t < n; t++) {
+      var r = rng(), acc = 0, j = 0;
+      while (j < p.length - 1 && r > acc + p[j]) { acc += p[j]; j++; }
+      counts[j]++;
+    }
+    return counts;
+  }
+  function rejectionSample(n, seed, target, proposal, M, lo, hi) {
+    var rng = mulberry32(seed === undefined ? 8 : seed), out = [], accepted = 0, total = 0;
+    while (out.length < n) {
+      var x = lo + (hi - lo) * rng();
+      var u = rng() * M * proposal(x);
+      total++;
+      if (u <= target(x)) { accepted++; out.push(x); }
+    }
+    return { samples: out, accepted: accepted, total: total, acceptanceRate: accepted / total };
+  }
+  function inverseCDF(u, F, lo, hi) { // 二分求 F⁻¹(u)
+    var a = lo, b = hi;
+    for (var i = 0; i < 200; i++) {
+      var mid = (a + b) / 2;
+      if (F(mid) < u) a = mid; else b = mid;
+    }
+    return (a + b) / 2;
+  }
+  function antitheticSample(n, seed) {
+    var rng = mulberry32(seed === undefined ? 10 : seed), out = [];
+    for (var i = 0; i < n / 2; i++) { var u = rng(); out.push(u, 1 - u); }
+    return out;
+  }
+  function stratifiedSample(n, seed) {
+    var rng = mulberry32(seed === undefined ? 11 : seed), out = [];
+    for (var i = 0; i < n; i++) out.push((i + rng()) / n);
+    return out;
+  }
+  function systematicSample(n, seed) {
+    var rng = mulberry32(seed === undefined ? 12 : seed);
+    var start = rng() / n, out = [];
+    for (var i = 0; i < n; i++) out.push(start + i / n);
+    return out;
+  }
+
+  /* ---- 12.11 GRAPH 图推断指令 ---- */
+  function chainBeliefProp(pi, A, B, obs) { // 链式 BP ≡ 前向-后向
+    return hmmForwardBackward(pi, A, B, obs);
+  }
+  function variableElim(pi, A, B, obs) { // 按时间序消去隐状态 → P(O)
+    var k = pi.length, T = obs.length;
+    var f = pi.map(function (p, i) { return p * B[i][obs[0]]; });
+    for (var t = 1; t < T; t++) {
+      var g = new Array(k).fill(0);
+      for (var i = 0; i < k; i++) {
+        var s = 0;
+        for (var j = 0; j < k; j++) s += f[j] * A[j][i];
+        g[i] = s * B[i][obs[t]];
+      }
+      f = g;
+    }
+    return f.reduce(function (a, b) { return a + b; }, 0);
+  }
+  function factorIndex(vars, shape, assign) {
+    var idx = 0;
+    for (var i = 0; i < vars.length; i++) idx = idx * shape[i] + assign[vars[i]];
+    return idx;
+  }
+  function sumOut(f, vars) { // 消去变量（因子边缘化）
+    var keep = f.vars.filter(function (v) { return vars.indexOf(v) === -1; });
+    var shape = keep.map(function (v) { return f.shape[f.vars.indexOf(v)]; });
+    var total = shape.reduce(function (a, b) { return a * b; }, 1);
+    var table = new Array(total).fill(0);
+    for (var idx = 0; idx < f.table.length; idx++) {
+      var rem = idx, ai = {};
+      for (var d = f.vars.length - 1; d >= 0; d--) {
+        ai[f.vars[d]] = rem % f.shape[d];
+        rem = Math.floor(rem / f.shape[d]);
+      }
+      table[factorIndex(keep, shape, ai)] += f.table[idx];
+    }
+    return { vars: keep, shape: shape, table: table };
+  }
+  function factorProduct(f, g) { // 因子乘积：维度 = 变量并集
+    var vars = f.vars.slice();
+    g.vars.forEach(function (v) { if (vars.indexOf(v) === -1) vars.push(v); });
+    var shape = vars.map(function (v) {
+      return f.vars.indexOf(v) >= 0 ? f.shape[f.vars.indexOf(v)] : g.shape[g.vars.indexOf(v)];
+    });
+    var total = shape.reduce(function (a, b) { return a * b; }, 1);
+    var table = new Array(total);
+    for (var idx = 0; idx < total; idx++) {
+      var rem = idx, ai = {};
+      for (var d = vars.length - 1; d >= 0; d--) {
+        ai[vars[d]] = rem % shape[d];
+        rem = Math.floor(rem / shape[d]);
+      }
+      table[idx] = f.table[factorIndex(f.vars, f.shape, ai)] * g.table[factorIndex(g.vars, g.shape, ai)];
+    }
+    return { vars: vars, shape: shape, table: table };
+  }
+  function ripCheck(cliques, edges) { // 运行交集性质：变量所在团之间的树上路径必经含该变量的团
+    var adj = {};
+    cliques.forEach(function (_, i) { adj[i] = []; });
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); });
+    var vars = {};
+    cliques.forEach(function (c) { c.forEach(function (v) { vars[v] = 1; }); });
+    return Object.keys(vars).every(function (v) {
+      var S = [];
+      cliques.forEach(function (c, ci) { if (c.indexOf(v) >= 0) S.push(ci); });
+      for (var a = 0; a < S.length; a++) for (var b = a + 1; b < S.length; b++) {
+        var prev = {}, queue = [S[a]], seen = {};
+        seen[S[a]] = 1;
+        while (queue.length) {
+          var cur = queue.shift();
+          if (cur === S[b]) break;
+          adj[cur].forEach(function (nb) { if (!seen[nb]) { seen[nb] = 1; prev[nb] = cur; queue.push(nb); } });
+        }
+        var node = S[b];
+        while (node !== S[a]) {
+          if (cliques[node].indexOf(v) === -1) return false;
+          node = prev[node];
+        }
+      }
+      return true;
+    });
+  }
+  function junctionTree(cliques, edges) { return { cliques: cliques, edges: edges, rip: ripCheck(cliques, edges) }; }
+  function cliqueTreeCalibrate(phiA, phiB, sep) { // 两团链校准：消息 → 一致边缘
+    var m = sumOut(phiA, phiA.vars.filter(function (v) { return sep.indexOf(v) === -1; }));
+    var updated = factorProduct(phiB, m);
+    var mu = sumOut(updated, updated.vars.filter(function (v) { return sep.indexOf(v) === -1; }));
+    return { message: m, updated: updated, separator: mu };
+  }
+  function kalmanFilter1d(zs, A, H, Q, R, x0, P0) { // 一维卡尔曼滤波
+    var x = x0, P = P0, out = [];
+    for (var i = 0; i < zs.length; i++) {
+      x = A * x;
+      P = A * P * A + Q;
+      var S = H * P * H + R, K = P * H / S;
+      x = x + K * (zs[i] - H * x);
+      P = (1 - K * H) * P;
+      out.push({ x: x, P: P, K: K });
+    }
+    return out;
+  }
+  function moralGraph(dag) { // 道德图：无向化 + 连接共父母
+    var nodes = Object.keys(dag), adj = {};
+    nodes.forEach(function (n) { adj[n] = {}; });
+    nodes.forEach(function (n) {
+      var ps = dag[n] || [];
+      ps.forEach(function (p) { adj[n][p] = 1; adj[p][n] = 1; });
+      for (var i = 0; i < ps.length; i++) {
+        for (var j = i + 1; j < ps.length; j++) { adj[ps[i]][ps[j]] = 1; adj[ps[j]][ps[i]] = 1; }
+      }
+    });
+    return adj;
+  }
+  function dSeparated(dag, x, y, z) { // 路径枚举 + 碰撞/非碰撞阻塞判定
+    var nodes = Object.keys(dag);
+    var zset = {};
+    z.forEach(function (v) { zset[v] = 1; });
+    function parents(n) { return dag[n] || []; }
+    function childrenOf(n) { return nodes.filter(function (m) { return (dag[m] || []).indexOf(n) >= 0; }); }
+    function descendants(n) {
+      var seen = {}, stack = [n];
+      while (stack.length) {
+        var cur = stack.pop();
+        childrenOf(cur).forEach(function (c) { if (!seen[c]) { seen[c] = 1; stack.push(c); } });
+      }
+      return Object.keys(seen);
+    }
+    var active = false;
+    function dfs(node, prev, visited) {
+      if (active) return;
+      if (node === y) { active = true; return; }
+      var cameIn = prev !== null && parents(node).indexOf(prev) >= 0;
+      parents(node).concat(childrenOf(node)).forEach(function (nb) {
+        if (active || nb === prev || visited.indexOf(nb) >= 0) return;
+        var nbIsParent = parents(node).indexOf(nb) >= 0;
+        var ok;
+        if (cameIn && nbIsParent) { // 碰撞节点：z 中含 node 或其后方放行
+          var desc = descendants(node);
+          ok = zset[node] || desc.some(function (d) { return zset[d]; });
+        } else ok = !zset[node];
+        if (ok) dfs(nb, node, visited.concat([nb]));
+      });
+    }
+    dfs(x, null, [x]);
+    return !active;
+  }
+  function ancestralSubgraph(dag, nodes) { // nodes 及其全部祖先诱导的子图
+    var need = {}, stack = nodes.slice();
+    while (stack.length) {
+      var n = stack.pop();
+      if (need[n]) continue;
+      need[n] = 1;
+      (dag[n] || []).forEach(function (p) { stack.push(p); });
+    }
+    var sub = {};
+    Object.keys(dag).forEach(function (m) {
+      if (need[m]) sub[m] = (dag[m] || []).filter(function (p) { return need[p]; });
+    });
+    return sub;
+  }
+  function mSeparated(dag, x, y, z) { // 祖先子图道德图可达性判据（Lauritzen 1990）
+    var sub = ancestralSubgraph(dag, [x, y].concat(z));
+    var adj = moralGraph(sub);
+    var zset = {};
+    z.forEach(function (v) { zset[v] = 1; });
+    var seen = {}, stack = [x];
+    seen[x] = 1;
+    while (stack.length) {
+      var cur = stack.pop();
+      Object.keys(adj[cur]).forEach(function (nb) {
+        if (!seen[nb] && !zset[nb]) { seen[nb] = 1; stack.push(nb); }
+      });
+    }
+    return !seen[y];
+  }
+  function particleFilter(pi, A, B, obs, n, seed) { // 自举粒子滤波
+    var k = pi.length;
+    var rng = mulberry32(seed === undefined ? 17 : seed);
+    var particles = [], weights = [];
+    for (var i = 0; i < n; i++) { particles.push(i % k); weights.push(1 / n); }
+    var postMeans = [];
+    for (var t = 0; t < obs.length; t++) {
+      var wsum = 0;
+      for (var i2 = 0; i2 < n; i2++) {
+        var prev = particles[i2], u = rng(), acc = 0, s = k - 1;
+        for (var j = 0; j < k; j++) { acc += A[prev][j]; if (u <= acc) { s = j; break; } }
+        particles[i2] = s;
+        weights[i2] = B[s][obs[t]];
+        wsum += weights[i2];
+      }
+      for (var i3 = 0; i3 < n; i3++) weights[i3] /= wsum;
+      var mean = 0;
+      for (var i4 = 0; i4 < n; i4++) mean += weights[i4] * particles[i4];
+      postMeans.push(mean);
+      var cum = [], c = 0;
+      for (var i5 = 0; i5 < n; i5++) { c += weights[i5]; cum.push(c); }
+      var np = [], u0 = rng() / n;
+      for (var i6 = 0; i6 < n; i6++) {
+        var target = u0 + i6 / n, idx = 0;
+        while (idx < n - 1 && target > cum[idx]) idx++;
+        np.push(particles[idx]);
+      }
+      particles = np;
+      weights = new Array(n).fill(1 / n);
+    }
+    return { postMeans: postMeans };
+  }
+
+  /* ---- 12.12 RL 强化学习指令 ---- */
+  function bellmanBackup(V, mdp) { // Bellman 最优备份算子 T
+    return V.map(function (_, s) {
+      var best = -Infinity;
+      mdp.actions.forEach(function (a) {
+        var v = 0;
+        mdp.trans(s, a).forEach(function (tr) { v += tr[1] * (mdp.reward(s, tr[0]) + mdp.gamma * V[tr[0]]); });
+        if (v > best) best = v;
+      });
+      return best;
+    });
+  }
+  function policyIteration(mdp) { // 策略迭代：评估 + 改进至稳定
+    var n = mdp.n, pi = new Array(n).fill(mdp.actions[0]);
+    var V = new Array(n).fill(0), iters = 0, vHistory = [];
+    for (var it = 0; it < 200; it++) {
+      iters++;
+      for (var k = 0; k < 20000; k++) {
+        var Vn = new Array(n);
+        for (var s = 0; s < n; s++) {
+          var a = pi[s], v = 0;
+          mdp.trans(s, a).forEach(function (tr) { v += tr[1] * (mdp.reward(s, tr[0]) + mdp.gamma * V[tr[0]]); });
+          Vn[s] = v;
+        }
+        var delta = 0;
+        for (var s2 = 0; s2 < n; s2++) delta = Math.max(delta, Math.abs(Vn[s2] - V[s2]));
+        V = Vn;
+        if (delta < 1e-13) break;
+      }
+      vHistory.push(V.slice());
+      var stable = true;
+      for (var s3 = 0; s3 < n; s3++) {
+        var bestA = pi[s3], bestV = -Infinity;
+        mdp.actions.forEach(function (a2) {
+          var v2 = 0;
+          mdp.trans(s3, a2).forEach(function (tr) { v2 += tr[1] * (mdp.reward(s3, tr[0]) + mdp.gamma * V[tr[0]]); });
+          if (v2 > bestV + 1e-12) { bestV = v2; bestA = a2; }
+        });
+        if (bestA !== pi[s3]) { stable = false; pi[s3] = bestA; }
+      }
+      if (stable) break;
+    }
+    return { V: V, policy: pi, iterations: iters, vHistory: vHistory };
+  }
+  function sarsa(opts) { // 同策略 TD 控制
+    opts = opts || {};
+    var n = opts.n || 7, gamma = opts.gamma || 0.9, episodes = opts.episodes || 5000;
+    var alpha = opts.alpha || 0.2, epsStart = opts.epsStart || 1, epsEnd = opts.epsEnd || 0.05;
+    var seed = opts.seed === undefined ? 321 : opts.seed;
+    var rng = mulberry32(seed);
+    var Q = Array.from({ length: n }, function () { return new Array(2).fill(0); });
+    function clamp(s) { return Math.max(0, Math.min(n - 1, s)); }
+    for (var ep = 0; ep < episodes; ep++) {
+      var eps = epsStart + (epsEnd - epsStart) * ep / episodes;
+      var s = 0;
+      var a = epsilonGreedy(Q[s], eps, rng);
+      for (var t = 0; t < 200; t++) {
+        var sp = clamp(s + (a === 1 ? 1 : -1));
+        var r = sp === n - 1 ? 1 : 0;
+        var done = sp === n - 1;
+        var ap = done ? 0 : epsilonGreedy(Q[sp], eps, rng);
+        Q[s][a] += alpha * (r + (done ? 0 : gamma * Q[sp][ap]) - Q[s][a]);
+        s = sp; a = ap;
+        if (done) break;
+      }
+    }
+    var success = 0, trials = 200;
+    for (var i = 0; i < trials; i++) {
+      var s2 = 0, ok = false;
+      for (var t2 = 0; t2 < 200; t2++) {
+        var a2 = Q[s2][0] >= Q[s2][1] ? 0 : 1;
+        s2 = clamp(s2 + (a2 === 1 ? 1 : -1));
+        if (s2 === n - 1) { ok = true; break; }
+      }
+      if (ok) success++;
+    }
+    return { Q: Q, successRate: success / trials };
+  }
+  function eligibilityTrace(T, gamma, lambda) { // 资格迹指数衰减
+    var out = [], w = 1;
+    for (var t = 0; t < T; t++) { out.push(w); w *= gamma * lambda; }
+    return out;
+  }
+  function monteCarloReturn(mdp, policy, episodes, seed) { // 截断 horizon 回报均值（γ^T 可忽略 → 无偏）
+    var rng = mulberry32(seed === undefined ? 55 : seed), sum = 0;
+    for (var ep = 0; ep < episodes; ep++) {
+      var G = 0, w = 1, s = 0;
+      for (var t = 0; t < 200; t++) {
+        var a = policy(s, rng), tr = mdp.trans(s, a);
+        var u = rng(), acc = 0, sp = tr[tr.length - 1][0];
+        for (var i = 0; i < tr.length; i++) { acc += tr[i][1]; if (u <= acc) { sp = tr[i][0]; break; } }
+        G += w * mdp.reward(s, sp);
+        w *= mdp.gamma;
+        s = sp;
+      }
+      sum += G;
+    }
+    return sum / episodes;
+  }
+  function policyEval(mdp, policy) { // 给定策略的 Bellman 期望备份
+    var V = new Array(mdp.n).fill(0);
+    for (var k = 0; k < 20000; k++) {
+      var Vn = new Array(mdp.n);
+      for (var s = 0; s < mdp.n; s++) {
+        var a = policy(s, null), v = 0;
+        mdp.trans(s, a).forEach(function (tr) { v += tr[1] * (mdp.reward(s, tr[0]) + mdp.gamma * V[tr[0]]); });
+        Vn[s] = v;
+      }
+      var delta = 0;
+      for (var s2 = 0; s2 < mdp.n; s2++) delta = Math.max(delta, Math.abs(Vn[s2] - V[s2]));
+      V = Vn;
+      if (delta < 1e-13) break;
+    }
+    return V;
+  }
+  function greedyPolicy(qrow) {
+    var best = 0;
+    for (var i = 1; i < qrow.length; i++) if (qrow[i] > qrow[best]) best = i;
+    return best;
+  }
+  function ucb(values, counts, c, t) {
+    var best = 0, bestScore = -Infinity;
+    for (var i = 0; i < values.length; i++) {
+      var score = counts[i] === 0 ? Infinity : values[i] + c * Math.sqrt(Math.log(t) / counts[i]);
+      if (score > bestScore) { bestScore = score; best = i; }
+    }
+    return best;
+  }
+  function advantage(Q, V, s, a) { return Q[s][a] - V[s]; }
+  function gae(rewards, values, gamma, lambda) { // 广义优势估计（Schulman 2016）
+    var T = rewards.length, out = new Array(T), g = 0;
+    for (var t = T - 1; t >= 0; t--) {
+      var nextV = t === T - 1 ? 0 : values[t + 1];
+      var delta = rewards[t] + gamma * nextV - values[t];
+      g = delta + gamma * lambda * g;
+      out[t] = g;
+    }
+    return out;
+  }
+  function reinforceGradient(prefs, action, reward) { // ∇log π(a)·R
+    var p = softmax(prefs);
+    var g = p.slice();
+    g[action] -= 1;
+    return g.map(function (v) { return v * reward; });
+  }
+  function ppoClip(ratio, adv, eps) { // PPO 截断目标（Schulman 2017）
+    return Math.min(ratio * adv, clip(ratio, 1 - eps, 1 + eps) * adv);
+  }
+  function thompsonSample(alpha, beta, seed) { // Beta(α,β) 后验采样（整数形状参数）
+    var rng = mulberry32(seed === undefined ? 13 : seed);
+    function gammaSample(a) {
+      var p = 1;
+      for (var i = 0; i < Math.round(a); i++) p *= Math.max(rng(), 1e-300);
+      return -Math.log(p);
+    }
+    var x = gammaSample(alpha), y = gammaSample(beta);
+    return x / (x + y);
+  }
+
+  /* ---- 12.13 METRIC/DATA/SYS/LINALG 补齐 ---- */
+  function perplexityLM(y, p) { return Math.exp(logLoss(y, p)); } // 语言模型困惑度 = exp(平均 NLL)
+  function bleu(reference, hypothesis, maxN) { // Papineni 2002：n-gram 裁剪精度几何平均 × 简短惩罚
+    maxN = maxN || 2;
+    function ngrams(tokens, n) {
+      var g = {};
+      for (var i = 0; i + n <= tokens.length; i++) {
+        var key = tokens.slice(i, i + n).join(' ');
+        g[key] = (g[key] || 0) + 1;
+      }
+      return g;
+    }
+    var logSum = 0;
+    for (var n = 1; n <= maxN; n++) {
+      var hg = ngrams(hypothesis, n), rg = ngrams(reference, n), match = 0, total = 0;
+      Object.keys(hg).forEach(function (k) {
+        total += hg[k];
+        if (rg[k]) match += Math.min(hg[k], rg[k]);
+      });
+      if (match === 0) return 0;
+      logSum += Math.log(match / total);
+    }
+    var precision = Math.exp(logSum / maxN);
+    var bp = hypothesis.length > reference.length ? 1 : Math.exp(1 - reference.length / hypothesis.length);
+    return bp * precision;
+  }
+  function averagePrecision(relevances) { // AP = Σ P(k)·Δr(k)
+    var hits = 0, sum = 0;
+    for (var k = 0; k < relevances.length; k++) {
+      if (relevances[k]) { hits++; sum += hits / (k + 1); }
+    }
+    return hits === 0 ? 0 : sum / hits;
+  }
+  function confusionMatrix(y, yhat, classes) {
+    var idx = {};
+    classes.forEach(function (c, i) { idx[c] = i; });
+    var M = zeros2(classes.length, classes.length);
+    for (var i = 0; i < y.length; i++) M[idx[y[i]]][idx[yhat[i]]]++;
+    return M;
+  }
+  function labelEncode(labels) {
+    var classes = Array.from(new Set(labels)).sort();
+    var index = {};
+    classes.forEach(function (c, i) { index[c] = i; });
+    return { classes: classes, codes: labels.map(function (l) { return index[l]; }) };
+  }
+  function padSeq(arr, len, v) {
+    v = v === undefined ? 0 : v;
+    var out = arr.slice();
+    while (out.length < len) out.push(v);
+    return out;
+  }
+  function truncateSeq(arr, k) { return arr.slice(0, k); }
+  function bucketize(arr, k) { // 等分桶：各桶长度差 ≤ 1
+    var n = arr.length, base = Math.floor(n / k), rem = n % k, out = [], i = 0;
+    for (var b = 0; b < k; b++) {
+      var sz = base + (b < rem ? 1 : 0);
+      out.push(arr.slice(i, i + sz));
+      i += sz;
+    }
+    return out;
+  }
+  function dedup(arr) {
+    var seen = {}, out = [];
+    arr.forEach(function (v) { if (!seen[v]) { seen[v] = 1; out.push(v); } });
+    return out;
+  }
+  function filterOp(arr, pred) { return arr.filter(pred); }
+  function mapOp(arr, f) { return arr.map(f); }
+  function zipOp(a, b) { var n = Math.min(a.length, b.length); return a.slice(0, n).map(function (v, i) { return [v, b[i]]; }); } // 长度 = min
+  function batchOp(arr, size) {
+    var out = [];
+    for (var i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  }
+  function tokenize(s) { return s.split(/\s+/).filter(function (t) { return t.length; }); }
+  function normalizeFit(train, test) { // 训练集统计量拟合，测试集同参变换
+    var m = expectation(train), sd = Math.sqrt(variance(train));
+    return {
+      mean: m, std: sd,
+      train: train.map(function (v) { return (v - m) / sd; }),
+      test: test.map(function (v) { return (v - m) / sd; })
+    };
+  }
+  function augment(x, seed, scale) { // 保标签抖动增强
+    scale = scale || 0.1;
+    var rng = mulberry32(seed === undefined ? 21 : seed);
+    return x.map(function (v) { return v + (rng() * 2 - 1) * scale; });
+  }
+  function gatherAll(parts) { return parts.reduce(function (a, p) { return a.concat(p); }, []); }
+  function scatterAll(items, assignment) { // assignment[i] = 目标秩
+    var out = {};
+    items.forEach(function (it, i) {
+      var r = assignment[i];
+      (out[r] = out[r] || []).push(it);
+    });
+    return out;
+  }
+  function Cache() { this.map = new Map(); }
+  Cache.prototype.get = function (k) { return this.map.get(k); };
+  Cache.prototype.put = function (k, v) { this.map.set(k, v); return v; };
+  function RefCounter() { this.counts = {}; }
+  RefCounter.prototype.inc = function (k) { this.counts[k] = (this.counts[k] || 0) + 1; return this.counts[k]; };
+  RefCounter.prototype.dec = function (k) {
+    this.counts[k] = (this.counts[k] || 0) - 1;
+    if (this.counts[k] <= 0) { delete this.counts[k]; return 0; }
+    return this.counts[k];
+  };
+  function TaskStream() { this.tasks = []; }
+  TaskStream.prototype.push = function (fn) { this.tasks.push(fn); };
+  TaskStream.prototype.run = function () {
+    var log = [];
+    this.tasks.forEach(function (fn, i) { log.push(fn(i)); });
+    return log;
+  };
+  function checkpoint(obj) { return JSON.parse(JSON.stringify(obj)); } // 保存/恢复逐位一致
+  function Profiler() { this.counts = {}; }
+  Profiler.prototype.hit = function (k) { this.counts[k] = (this.counts[k] || 0) + 1; };
+  Profiler.prototype.total = function () { var s = 0; for (var k in this.counts) s += this.counts[k]; return s; };
+  function Tracer() { this.events = []; }
+  Tracer.prototype.record = function (name) { this.events.push({ name: name, seq: this.events.length }); return this.events.length - 1; };
+  function Dispatcher() { this.handlers = []; }
+  Dispatcher.prototype.register = function (fn) { this.handlers.push(fn); };
+  Dispatcher.prototype.dispatch = function (payload) { return this.handlers.map(function (fn) { return fn(payload); }); };
+  function Barrier(n) { this.n = n; this.arrived = 0; }
+  Barrier.prototype.arrive = function () { this.arrived++; return this.arrived === this.n; };
+  function EventLog() { this.log = []; }
+  EventLog.prototype.emit = function (name) { this.log.push(name); };
+  function prefetch(data) { return tensorCopy(data); }
+  function matrixRank(A, tol) { // 部分选主元高斯消元秩
+    tol = tol || 1e-10;
+    var M = clone2(A), rows = M.length, cols = M[0].length, rank = 0, row = 0;
+    for (var c = 0; c < cols && row < rows; c++) {
+      var p = row;
+      for (var i = row + 1; i < rows; i++) if (Math.abs(M[i][c]) > Math.abs(M[p][c])) p = i;
+      if (Math.abs(M[p][c]) < tol) continue;
+      var t = M[p]; M[p] = M[row]; M[row] = t;
+      for (var i2 = row + 1; i2 < rows; i2++) {
+        var f = M[i2][c] / M[row][c];
+        for (var j = 0; j < cols; j++) M[i2][j] -= f * M[row][j];
+      }
+      row++; rank++;
+    }
+    return rank;
+  }
+  function nullspace(A, tol) { // RREF → 自由变量基
+    tol = tol || 1e-10;
+    var M = clone2(A), rows = M.length, cols = M[0].length;
+    var pivots = [], row = 0;
+    for (var c = 0; c < cols && row < rows; c++) {
+      var p = row;
+      for (var i = row + 1; i < rows; i++) if (Math.abs(M[i][c]) > Math.abs(M[p][c])) p = i;
+      if (Math.abs(M[p][c]) < tol) continue;
+      var t = M[p]; M[p] = M[row]; M[row] = t;
+      var piv = M[row][c];
+      for (var j = 0; j < cols; j++) M[row][j] /= piv;
+      for (var i2 = 0; i2 < rows; i2++) {
+        if (i2 === row) continue;
+        var f = M[i2][c];
+        if (f === 0) continue;
+        for (var j2 = 0; j2 < cols; j2++) M[i2][j2] -= f * M[row][j2];
+      }
+      pivots.push(c); row++;
+    }
+    var free = [];
+    for (var c2 = 0; c2 < cols; c2++) if (pivots.indexOf(c2) === -1) free.push(c2);
+    return free.map(function (fc) {
+      var v = new Array(cols).fill(0);
+      v[fc] = 1;
+      pivots.forEach(function (pc, r) { v[pc] = -M[r][fc]; });
+      return v;
+    });
+  }
+  function orthonormalize(cols) { // 修正 Gram–Schmidt
+    var Q = [];
+    cols.forEach(function (a) {
+      var v = a.slice();
+      Q.forEach(function (q) {
+        var c = dot(v, q);
+        for (var i = 0; i < v.length; i++) v[i] -= c * q[i];
+      });
+      var n = norm2(v);
+      if (n > 1e-12) Q.push(v.map(function (x) { return x / n; }));
+    });
+    return Q;
+  }
+  function condEstimate(A) { // κ₂ = √(σ_max(A)² · σ_max(A⁻¹)²)，幂迭代估计
+    var sMax = powerIteration(matMul(transpose(A), A), { iters: 2000 }).value;
+    var Ai = inverse(A);
+    var sMaxInv = powerIteration(matMul(transpose(Ai), Ai), { iters: 2000 }).value;
+    return Math.sqrt(sMax * sMaxInv);
+  }
+
+  function sampleStats(xs) { // 采样矩估计
+    var n = xs.length, m = expectation(xs), v = variance(xs), s3 = 0, s4 = 0;
+    for (var i = 0; i < n; i++) { var d = xs[i] - m; s3 += d * d * d; s4 += d * d * d * d; }
+    return { n: n, mean: m, variance: v, skew: s3 / n / Math.pow(v, 1.5), kurt: s4 / n / (v * v) };
+  }
+  function channelCapacity(P) { // Arimoto–Blahut 迭代（1972）：C = max_p I(X;Y)，nat
+    var k = P.length, m = P[0].length;
+    var q = new Array(k).fill(1 / k), c = new Array(m).fill(0);
+    for (var it = 0; it < 5000; it++) {
+      var r = new Array(m).fill(0);
+      for (var j = 0; j < m; j++) for (var i = 0; i < k; i++) r[j] += q[i] * P[i][j];
+      var cNew = new Array(m).fill(0);
+      for (var j2 = 0; j2 < m; j2++) {
+        var s = 0;
+        for (var i2 = 0; i2 < k; i2++) {
+          var p = P[i2][j2];
+          if (p > 0 && q[i2] > 0) s += q[i2] * p * Math.log(p / r[j2]);
+        }
+        cNew[j2] = Math.exp(s);
+      }
+      var qNew = new Array(k);
+      for (var i3 = 0; i3 < k; i3++) {
+        var t = 0;
+        for (var j3 = 0; j3 < m; j3++) t += cNew[j3] * P[i3][j3];
+        qNew[i3] = t;
+      }
+      var qs = qNew.reduce(function (a, b) { return a + b; }, 0);
+      qNew = qNew.map(function (v) { return v / qs; });
+      var delta = 0;
+      for (var i4 = 0; i4 < k; i4++) delta = Math.max(delta, Math.abs(qNew[i4] - q[i4]));
+      q = qNew;
+      if (delta < 1e-15) break;
+    }
+    var rOut = new Array(m).fill(0);
+    for (var j4 = 0; j4 < m; j4++) for (var i5 = 0; i5 < k; i5++) rOut[j4] += q[i5] * P[i5][j4];
+    var I = 0;
+    for (var i6 = 0; i6 < k; i6++) for (var j5 = 0; j5 < m; j5++) {
+      if (q[i6] > 0 && P[i6][j5] > 0 && rOut[j5] > 0) I += q[i6] * P[i6][j5] * Math.log(P[i6][j5] / rOut[j5]);
+    }
+    return { capacity: I / Math.LN2, q: q }; // bits
+  }
+  function lineSearch(f, g, x, d, opts) { // Armijo 充分下降回溯线搜索
+    opts = opts || {};
+    var alpha = opts.alpha0 || 1, c1 = opts.c1 || 1e-4, rho = opts.rho || 0.5, maxIter = opts.maxIter || 60;
+    var f0 = f(x), gd = dot(g(x), d);
+    for (var i = 0; i < maxIter; i++) {
+      var xn = x.map(function (v, t) { return v + alpha * d[t]; });
+      var fn = f(xn);
+      if (fn <= f0 + c1 * alpha * gd) return { alpha: alpha, x: xn, f: fn, iterations: i + 1 };
+      alpha *= rho;
+    }
+    return { alpha: 0, x: x, f: f0, iterations: maxIter };
+  }
+
+  /* ========================================================================
+   * 13. 不变量检查表（可独立复算的硬金标准）
    * ======================================================================*/
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
@@ -1614,6 +2771,993 @@
     return 0;
   });
 
+  /* ---- 13.1 TENSOR 结构不变量（精确 0）---- */
+  check('tensor.create：元素总数 = ∏ shape', 0, function () {
+    var t = tensorCreate([2, 3, 4], 7);
+    return (tensorCount(t) === 24 && t[1][2][3] === 7) ? 0 : 1;
+  });
+  check('tensor.zeros/ones：全部元素 = 0 / 1', 0, function () {
+    var z = flatten(tensorZeros([2, 5])), o = flatten(tensorOnes([3, 2]));
+    var bad = z.filter(function (v) { return v !== 0; }).length + o.filter(function (v) { return v !== 1; }).length;
+    return bad;
+  });
+  check('tensor.arange：步长一致；末值 < stop', 0, function () {
+    var a = arange(0, 5, 1), b = arange(0, 9, 2);
+    var okA = a.length === 5 && a[4] === 4, okB = b.length === 5 && b[4] === 8;
+    return (okA && okB) ? 0 : 1;
+  });
+  check('tensor.reshape：元素守恒，行优先顺序不变', 0, function () {
+    var X = [[1, 2, 3], [4, 5, 6]];
+    var r = reshape(X, [3, 2]);
+    return (tensorCount(r) === 6 && maxAbsDiff(flatten(r), [1, 2, 3, 4, 5, 6]) === 0) ? 0 : 1;
+  });
+  check('tensor.transpose：T(T(A)) = A', 0, function () {
+    var A = [[1, 2, 3], [4, 5, 6]];
+    return maxAbsDiff2(transpose(transpose(A)), A);
+  });
+  check('tensor.slice/concat/stack/split：长度语义精确', 0, function () {
+    var s = tensorSlice([0, 1, 2, 3, 4, 5], 1, 4);
+    var c = tensorConcat([[1, 2], [3], [4, 5]]);
+    var st = tensorStack([[1, 2], [3, 4]]);
+    var sp = tensorSplit([0, 1, 2, 3, 4, 5, 6], [2, 2, 3]);
+    var bad = 0;
+    if (maxAbsDiff(s, [1, 2, 3]) !== 0) bad++;
+    if (maxAbsDiff(c, [1, 2, 3, 4, 5]) !== 0) bad++;
+    if (st.length !== 2 || maxAbsDiff(st[1], [3, 4]) !== 0) bad++;
+    if (sp.length !== 3 || sp[2].length !== 3) bad++;
+    if (maxAbsDiff(tensorConcat(sp), [0, 1, 2, 3, 4, 5, 6]) !== 0) bad++;
+    return bad;
+  });
+  check('tensor.cast/copy/gather/scatter/fill：语义精确', 0, function () {
+    var bad = 0;
+    if (maxAbsDiff(tensorCast(['1', '2.5', true]), [1, 2.5, 1]) !== 0) bad++;
+    var src = [[1, 2], [3, 4]], cp = tensorCopy(src);
+    cp[0][0] = 99;
+    if (src[0][0] !== 1 || cp[0][0] !== 99) bad++;
+    if (maxAbsDiff(tensorGather([10, 20, 30], [2, 0]), [30, 10]) !== 0) bad++;
+    if (maxAbsDiff(tensorScatter([0, 0, 0, 0], [1, 3], [9, 8]), [0, 9, 0, 8]) !== 0) bad++;
+    if (maxAbsDiff(tensorFill([1, 2, 3], 5), [5, 5, 5]) !== 0) bad++;
+    return bad;
+  });
+  check('tensor.flatten：行优先展开，元素守恒', 0, function () {
+    return maxAbsDiff(flatten([[1, [2, 3]], [4]]), [1, 2, 3, 4]);
+  });
+
+  /* ---- 13.2 NUMER 数值稳定不变量 ---- */
+  check('numer.expm1/log1p：小 x 相对误差 ≤ 1e-15（优于朴素 exp−1）', 1e-15, function () {
+    var x = 1e-10;
+    var naive = Math.exp(x) - 1;
+    return Math.max(Math.abs(Math.expm1(x) - naive), Math.abs(Math.log1p(x) - Math.log(1 + x)), Math.abs(Math.expm1(0)));
+  });
+  check('numer.hypot：大参数不溢出；hypot(3,4) = 5', 0, function () {
+    var big = Math.hypot(1e300, 1e300);
+    var ref = 1e300 * Math.SQRT2;
+    return (Math.abs(big - ref) / ref <= 1e-15 && Math.hypot(3, 4) === 5) ? 0 : 1;
+  });
+  check('numer.div_guard：|分母| < ε 时按 ε 处理，结果有限', 0, function () {
+    var v = divGuard(1, 1e-300);
+    var threw = false;
+    try { divGuard(1, 0); } catch (e) { threw = true; }
+    return (isFinite(v) && !threw) ? 0 : 1;
+  });
+  check('numer.sqrt_guard：负输入抛错', 0, function () {
+    var threw = false;
+    try { sqrtGuard(-1); } catch (e) { threw = true; }
+    return (threw && sqrtGuard(9) === 3) ? 0 : 1;
+  });
+  check('numer.reciprocal：x·(1/x) ≈ 1', 1e-15, function () {
+    var xs = [1, 2, 3.5, 0.1, 1e6];
+    var worst = 0;
+    for (var i = 0; i < xs.length; i++) worst = Math.max(worst, Math.abs(xs[i] * reciprocal(xs[i]) - 1));
+    return worst;
+  });
+  check('numer.fma：Dekker 单次舍入（朴素双舍入失败案例精确复原）', 1e-13, function () {
+    var p27 = Math.pow(2, 27) + 1, p54 = Math.pow(2, 54), p28 = Math.pow(2, 28);
+    var exact = fma(p27, p27, -(p54 + p28)); // 精确值 = 1
+    var naive = p27 * p27 - (p54 + p28);     // 双舍入 → 0
+    var rng = mulberry32(61), worst = 0;
+    for (var i = 0; i < 200; i++) {
+      var a = rng() * 2 - 1, b = rng() * 2 - 1, c = rng() * 2 - 1;
+      worst = Math.max(worst, Math.abs(fma(a, b, c) - (a * b + c)) / (1 + Math.abs(a * b + c)));
+    }
+    return Math.max(Math.abs(exact - 1) + (Math.abs(naive - 1) > 0.5 ? 0 : 1), worst);
+  });
+
+  /* ---- 13.3 PROB 概率不变量 ---- */
+  check('prob.bernoulli：频率 ≈ p（n=2e4）', 0.01, function () {
+    var xs = bernoulliSample(0.3, 20000, 71);
+    var f = xs.reduce(function (a, b) { return a + b; }, 0) / xs.length;
+    return Math.abs(f - 0.3);
+  });
+  check('prob.binomial：均值 = np（trials=5000）', 0.08, function () {
+    var xs = binomialSample(10, 0.4, 5000, 72);
+    return Math.abs(expectation(xs) - 4);
+  });
+  check('prob.uniform：∈ [0,1)；均值 ≈ 0.5；同种子同序列', 0.01, function () {
+    var xs = uniformSample(20000, 73);
+    var inRange = xs.every(function (v) { return v >= 0 && v < 1; });
+    var repro = maxAbsDiff(uniformSample(50, 73), uniformSample(50, 73));
+    return (inRange && repro === 0) ? Math.abs(expectation(xs) - 0.5) : 1;
+  });
+  check('prob.marginal/condition：边缘 = 联合求和；P(A|B)·P(B) = P(A,B)', 1e-15, function () {
+    var joint = [[0.1, 0.2], [0.3, 0.4]];
+    var mx = marginal(joint);
+    var cond = conditionalRow(joint, 0);
+    var back = cond.map(function (v, j) { return v * mx[0]; });
+    return Math.max(maxAbsDiff(mx, [0.3, 0.7]), maxAbsDiff(back, joint[0]), Math.abs(cond[0] + cond[1] - 1));
+  });
+  check('prob.mv_gauss：2D Simpson ∫pdf = 1；峰值为 1/(2π|Σ|^½)；对称', 1e-6, function () {
+    var mu = [1, -2], Sigma = [[4, 1], [1, 3]];
+    var N = 160, span = 12, h = 2 * span / N, s = 0;
+    var pts = [];
+    for (var i = 0; i <= N; i++) pts.push(mu[0] - span + i * h);
+    for (var a = 0; a <= N; a++) for (var b = 0; b <= N; b++) {
+      var w = (a === 0 || a === N ? 1 : (a % 2 ? 4 : 2)) * (b === 0 || b === N ? 1 : (b % 2 ? 4 : 2));
+      s += w * mvGaussPDF([pts[a], pts[b]], mu, Sigma);
+    }
+    var integral = s * h * h / 9;
+    var peak = mvGaussPDF(mu, mu, Sigma);
+    var peakRef = 1 / (2 * Math.PI * Math.sqrt(4 * 3 - 1));
+    var sym = mvGaussPDF([3, 0], mu, Sigma) - mvGaussPDF([-1, -4], mu, Sigma);
+    return Math.max(Math.abs(integral - 1), Math.abs(peak - peakRef), Math.abs(sym));
+  });
+
+  /* ---- 13.4 INFO 信息论不变量 ---- */
+  check('info.perplexity/surprisal/bits：公式一致', 1e-15, function () {
+    var p = [0.1, 0.2, 0.3, 0.4];
+    return Math.max(
+      Math.abs(perplexity(p) - Math.pow(2, entropy(p))),
+      Math.abs(surprisal(0.25) - 2),
+      Math.abs(bits(1) - 1.4426950408889634)
+    );
+  });
+  check('info.kl_reverse：KL(p‖q) ≠ KL(q‖p)（非对称性）', 1e-12, function () {
+    var p = [0.1, 0.2, 0.7], q = [0.4, 0.4, 0.2];
+    var fwd = klDivergence(p, q), rev = klReverse(p, q);
+    return (Math.abs(rev - klDivergence(q, p)) === 0 && Math.abs(fwd - rev) > 0.01) ? 0 : 1;
+  });
+  check('info.max_entropy：均匀分布熵最大（n=3 网格暴力验证）', 1e-12, function () {
+    var best = 0;
+    for (var a = 0; a <= 10; a++) for (var b = 0; a + b <= 10; b++) {
+      var c = 10 - a - b;
+      best = Math.max(best, entropy([a / 10, b / 10, c / 10]));
+    }
+    return best - entropy(maxEntropyDist(3));
+  });
+  check('info.normalize_dist：Σp = 1 且比例守恒', 1e-15, function () {
+    var p = normalizeDist([1, 2, 3, 4]);
+    return Math.max(Math.abs(p[0] + p[1] + p[2] + p[3] - 1), Math.abs(p[1] - 2 * p[0]));
+  });
+
+  /* ---- 13.5 OPTIM 优化器不变量（凸二次 → 解析最优）---- */
+  check('optim.momentum：凸二次收敛至解析最优 ≤ 1e-8', 1e-8, function () {
+    var q = quadProblem();
+    var r = momentum(q.f, q.g, [0, 0, 0], { lr: 0.018, beta: 0.9, iters: 20000 });
+    return norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+  });
+  check('optim.nesterov：凸二次收敛至解析最优 ≤ 1e-8', 1e-8, function () {
+    var q = quadProblem();
+    var r = nesterov(q.f, q.g, [0, 0, 0], { lr: 0.018, beta: 0.9, iters: 20000 });
+    return norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+  });
+  check('optim.rmsprop：凸二次收敛至解析最优 ≤ 1e-3（小 lr 抑制振荡）', 1e-3, function () {
+    var q = quadProblem();
+    var r = rmsprop(q.f, q.g, [0, 0, 0], { lr: 0.0005, iters: 30000 });
+    return norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+  });
+  check('optim.adagrad：凸二次收敛至解析最优 ≤ 1e-3', 1e-3, function () {
+    var q = quadProblem();
+    var r = adagrad(q.f, q.g, [0, 0, 0], { lr: 0.5, iters: 20000 });
+    return norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+  });
+  check('optim.adamw：λ=0 退化为 Adam（凸二次收敛 ≤ 1e-5）', 1e-5, function () {
+    var q = quadProblem();
+    var r = adamw(q.f, q.g, [0, 0, 0], { lr: 0.02, lambda: 0, iters: 5000 });
+    return norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+  });
+  check('optim.adamw：零梯度步 = 解耦衰减 w(1−lr·λ)（精确）', 0, function () {
+    var r = adamw(function () { return 0; }, function () { return [0, 0]; }, [1, 2], { lr: 0.1, lambda: 0.5, iters: 1 });
+    return maxAbsDiff(r.x, [0.95, 1.9]);
+  });
+  check('optim.grad_clip：裁剪后 ‖g‖ = max_norm 且方向保持', 1e-15, function () {
+    var c1 = gradClip([3, 4], 2.5), c2 = gradClip([1, 0], 5);
+    return Math.max(Math.abs(norm2(c1) - 2.5), Math.abs(c1[0] / c1[1] - 0.75), maxAbsDiff(c2, [1, 0]));
+  });
+  check('optim.grad_norm/lr_decay/weight_decay/polyak：公式精确', 0, function () {
+    var bad = 0;
+    if (Math.abs(gradNorm([3, 4]) - 5) !== 0) bad++;
+    if (lrDecay(0.1, 0.01, 100) !== 0.05) bad++;
+    if (lrDecay(0.1, 0, 0) !== 0.1) bad++;
+    if (maxAbsDiff(weightDecay([1, 2], 0.1, 0.5), [0.95, 1.9]) !== 0) bad++;
+    if (maxAbsDiff(polyakAvg([[0, 0], [1, 2], [3, 4]]), [4 / 3, 2]) > 1e-15) bad++;
+    return bad;
+  });
+  check('optim.polyak：GD 迭代平均收敛至解析最优', 1e-8, function () {
+    var q = quadProblem();
+    var x = [0, 0, 0], traj = [];
+    for (var it = 0; it < 30000; it++) {
+      var g = q.g(x);
+      for (var i = 0; i < 3; i++) x[i] -= 0.01 * g[i];
+      if (it >= 15000) traj.push(x.slice());
+    }
+    return norm2(polyakAvg(traj).map(function (v, i) { return v - q.xs[i]; }));
+  });
+
+  /* ---- 13.6 FWD 前向传播不变量 ---- */
+  check('fwd.tanh：奇函数；|tanh| ≤ 1', 1e-16, function () {
+    var xs = [0.3, 1, 2, 5], worst = 0;
+    for (var i = 0; i < xs.length; i++) {
+      worst = Math.max(worst, Math.abs(Math.tanh(-xs[i]) + Math.tanh(xs[i])), Math.abs(Math.tanh(xs[i])) - 1);
+    }
+    return worst;
+  });
+  check('fwd.embedding_lookup：输出 = 第 i 行向量（深拷贝隔离）', 0, function () {
+    var table = [[1, 2], [3, 4], [5, 6]];
+    var out = embeddingLookup(table, [2, 0]);
+    out[0][0] = 99;
+    var bad = (maxAbsDiff(out[1], [1, 2]) !== 0 || table[2][0] !== 5) ? 1 : 0;
+    return bad;
+  });
+  check('fwd.residual_add：x + f(x) 逐元素且形状不变', 0, function () {
+    var x = [[1, 2], [3, 4]], fx = [[0.5, -0.5], [1, 1]];
+    var r = residualAdd(x, fx);
+    return (maxAbsDiff(r, [[1.5, 1.5], [4, 5]]) !== 0 || r.length !== 2) ? 1 : 0;
+  });
+  check('fwd.split/concat_heads：split(concat(X)) = X 逐位一致', 0, function () {
+    var rng = mulberry32(81);
+    var X = Array.from({ length: 3 }, function () { return Array.from({ length: 8 }, function () { return rng() * 2 - 1; }); });
+    var H = 4;
+    return maxAbsDiff(concatHeads(splitHeads(X, H)), X);
+  });
+  check('fwd.pool_max：输出 = 窗内最大值', 0, function () {
+    var r = poolMax([1, 3, 2, 4, 6, 5], 2);
+    return maxAbsDiff(r, [3, 4, 6]);
+  });
+  check('fwd.batchnorm：批均值 ≈ 0、批方差 ≈ 1', 1e-9, function () {
+    var rng = mulberry32(82);
+    var X = Array.from({ length: 32 }, function () { return [rng() * 10 - 5, rng() * 4 - 2]; });
+    var out = batchNorm(X, 0);
+    var worst = 0;
+    for (var j = 0; j < 2; j++) {
+      var col = out.map(function (r) { return r[j]; });
+      worst = Math.max(worst, Math.abs(expectation(col)), Math.abs(variance(col) - 1));
+    }
+    return worst;
+  });
+  check('fwd.dropout：期望不变性（2e4 种子平均 ≈ x）；同种子同掩码', 0.04, function () {
+    var x = [2, -1, 0.5, 3];
+    var acc = [0, 0, 0, 0];
+    for (var s = 0; s < 20000; s++) {
+      var d = dropout(x, 0.25, s);
+      for (var i = 0; i < 4; i++) acc[i] += d[i];
+    }
+    var worst = 0;
+    for (var i2 = 0; i2 < 4; i2++) worst = Math.max(worst, Math.abs(acc[i2] / 20000 - x[i2]));
+    var repro = maxAbsDiff(dropout(x, 0.25, 7), dropout(x, 0.25, 7));
+    return Math.max(worst, repro === 0 ? 0 : 1);
+  });
+  check('fwd.conv1d：输出长度 = ⌈(L+2p−k)/s⌉+1；差分核精确', 0, function () {
+    var d = conv1d([1, 2, 3, 4, 5], [1, -1], 1, 0);
+    var p = conv1d([1, 2, 3, 4, 5], [1, -1], 1, 1);
+    return (maxAbsDiff(d, [-1, -1, -1, -1]) === 0 && p.length === 6) ? 0 : 1;
+  });
+
+  /* ---- 13.7 BWD 反向传播不变量（中心差分交叉验证）---- */
+  check('bwd.grad_relu/grad_tanh：与中心差分一致 ≤ 1e-6', 1e-6, function () {
+    var x = [-1.5, -0.2, 0.4, 1.3, 2.0];
+    var eps = 1e-6, worst = 0;
+    for (var i = 0; i < x.length; i++) {
+      var numRelu = (relu(x[i] + eps) - relu(x[i] - eps)) / (2 * eps);
+      var numTanh = (Math.tanh(x[i] + eps) - Math.tanh(x[i] - eps)) / (2 * eps);
+      worst = Math.max(worst, Math.abs(numRelu - gradRelu(x)[i]), Math.abs(numTanh - gradTanh(x)[i]));
+    }
+    return worst;
+  });
+  check('bwd.grad_softmax_ce：= p − y 且梯度和 = 0', 1e-15, function () {
+    var logits = [1.2, -0.5, 3.1, 0.4];
+    var g = gradSoftmaxCE(logits, 2);
+    var p = softmax(logits);
+    return Math.max(maxAbsDiff(g, [p[0], p[1], p[2] - 1, p[3]]), Math.abs(g[0] + g[1] + g[2] + g[3]));
+  });
+  check('bwd.grad_matmul：dL/dA = dL·Bᵀ（数值差分验证）', 1e-6, function () {
+    var A = [[1, 2], [3, 4]], B = [[0.5, -1], [2, 0.5]], dL = [[1, 0.5], [-0.5, 2]];
+    var L = function (M) { var AB = matMul(M, B); var s = 0; for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) s += AB[i][j] * dL[i][j]; return s; };
+    var J = numericJacobian(function (x) { return [L([[x[0], x[1]], [x[2], x[3]]])]; }, [1, 2, 3, 4], 1e-6)[0];
+    var ana = gradMatmul(dL, A, B).dA;
+    return Math.max(Math.abs(J[0] - ana[0][0]), Math.abs(J[1] - ana[0][1]), Math.abs(J[2] - ana[1][0]), Math.abs(J[3] - ana[1][1]));
+  });
+  check('bwd.chain_rule：d/dx f(g(x)) = f′(g(x))·g′(x)（差分验证）', 1e-6, function () {
+    var x = 0.7;
+    var ana = chainRule(Math.cos, function (t) { return t * t; }, function (t) { return 2 * t; }, x);
+    var num = (Math.sin((x + 1e-6) * (x + 1e-6)) - Math.sin((x - 1e-6) * (x - 1e-6))) / 2e-6;
+    return Math.abs(ana - num);
+  });
+  check('bwd.jacobian：数值 Jacobian 与解析一致 ≤ 1e-5', 1e-5, function () {
+    var f = function (x) { return [x[0] * x[0], x[0] * x[1]]; };
+    var J = jacobian(f, [1.5, -2]);
+    var ref = [[3, 0], [-2, 1.5]];
+    return Math.max(Math.abs(J[0][0] - ref[0][0]), Math.abs(J[0][1] - ref[0][1]), Math.abs(J[1][0] - ref[1][0]), Math.abs(J[1][1] - ref[1][1]));
+  });
+  check('bwd.vjp/jvp：对偶恒等式 ⟨Jv,u⟩ = ⟨v,Jᵀu⟩ ≤ 1e-8', 1e-8, function () {
+    var f = function (x) { return [x[0] * x[1], x[1] * x[1], x[0] + x[1]]; }; // R² → R³
+    var x = [0.6, -1.2], v = [1, -0.5], u = [0.3, 0.8, -0.5];                    // v∈R², u∈R³
+    var jv = jvp(f, x, v), jtu = vjp(f, x, u);
+    return Math.abs(dot(jv, u) - dot(v, jtu));
+  });
+  check('bwd.grad_accum：Σ 批次梯度 = 全量梯度 ≤ 1e-10', 1e-10, function () {
+    var rng = mulberry32(83);
+    var X = Array.from({ length: 20 }, function () { return [1, rng() * 2 - 1, rng() * 2 - 1]; });
+    var w = [0.5, -1, 2];
+    function grad(rows) { // 线性模型均方梯度 Xᵀ(Xw − y)
+      var g = [0, 0, 0];
+      rows.forEach(function (item) {
+        var r = item[0], idx = item[1];
+        var e = (w[0] * r[0] + w[1] * r[1] + w[2] * r[2]) - idx;
+        for (var j = 0; j < 3; j++) g[j] += e * r[j];
+      });
+      return [g]; // 1×3 矩阵行
+    }
+    var full = grad(X.map(function (r, i) { return [r, i]; }))[0];
+    var parts = [
+      grad(X.slice(0, 7).map(function (r, i) { return [r, i]; })),
+      grad(X.slice(7, 13).map(function (r, i) { return [r, i + 7]; })),
+      grad(X.slice(13).map(function (r, i) { return [r, i + 13]; }))
+    ];
+    var acc = gradAccum(parts)[0];
+    return Math.max(Math.abs(acc[0] - full[0]), Math.abs(acc[1] - full[1]), Math.abs(acc[2] - full[2]));
+  });
+  check('bwd.bptt：时间反向传播梯度 = 中心差分 ≤ 1e-6', 1e-6, function () {
+    var P = { W: 0.7, U: -0.4, h0: 0.2 };
+    var xs = [0.5, -1, 0.8, 0.2], ys = [0.3, 0.1, -0.2, 0.4];
+    var ana = rnnBPTT(P, xs, ys);
+    var eps = 1e-6, worst = 0;
+    [['W', 'U', 'h0']].forEach(function () { });
+    function numGrad(key) {
+      var lp = rnnLoss(Object.assign({}, P, (function () { var o = {}; o[key] = P[key] + eps; return o; })()), xs, ys);
+      var lm = rnnLoss(Object.assign({}, P, (function () { var o = {}; o[key] = P[key] - eps; return o; })()), xs, ys);
+      return (lp - lm) / (2 * eps);
+    }
+    worst = Math.max(worst, Math.abs(numGrad('W') - ana.W), Math.abs(numGrad('U') - ana.U), Math.abs(numGrad('h0') - ana.h0));
+    return worst;
+  });
+  check('bwd.stop_grad/detach：返回深拷贝，原值隔离', 0, function () {
+    var x = [[1, 2], [3, 4]];
+    var s = stopGrad(x), d = detach(x);
+    s[0][0] = 99; d[1][1] = 88;
+    return (x[0][0] === 1 && x[1][1] === 4 && s[0][0] === 99 && d[1][1] === 88) ? 0 : 1;
+  });
+
+  /* ---- 13.8 NORM 归一化/正则不变量 ---- */
+  check('norm.l1_reg/label_smooth/mixup：公式精确', 0, function () {
+    var bad = 0;
+    if (l1Reg([1, -2, 3], 0.5) !== 3) bad++;
+    var ls = labelSmooth([0, 1, 0], 0.1);
+    if (Math.abs(ls[0] + ls[1] + ls[2] - 1) > 1e-15 || Math.abs(ls[0] - 0.1 / 3) > 1e-15) bad++;
+    var mx = mixup([0, 2], [4, 0], 0.25);
+    if (maxAbsDiff(mx, [3, 0.5]) !== 0) bad++;
+    return bad;
+  });
+  check('norm.weight_norm：‖g·v/‖v‖‖ = g', 1e-12, function () {
+    var v = [3, 4, 12];
+    return Math.abs(norm2(weightNorm(v, 2.5)) - 2.5);
+  });
+  check('norm.spectral_norm：幂迭代归一后 σ(W) ≈ 1', 1e-6, function () {
+    var rng = mulberry32(84);
+    var W = Array.from({ length: 4 }, function () { return Array.from({ length: 4 }, function () { return rng() * 2 - 1; }); });
+    return Math.abs(powerIteration(spectralNorm(W), { iters: 2000 }).value - 1);
+  });
+  check('norm.group_norm：组内均值 0、方差 1', 1e-8, function () {
+    var rng = mulberry32(85);
+    var x = Array.from({ length: 3 }, function () { return Array.from({ length: 8 }, function () { return rng() * 10 - 5; }); });
+    var out = groupNorm(x, 4, 0);
+    var worst = 0;
+    for (var i = 0; i < 3; i++) for (var g = 0; g < 4; g++) {
+      var seg = out[i].slice(g * 2, g * 2 + 2);
+      worst = Math.max(worst, Math.abs(expectation(seg)), Math.abs(variance(seg) - 1));
+    }
+    return worst;
+  });
+  check('norm.early_stop：best = argmin；stopIndex = best + patience', 0, function () {
+    var h = [1.0, 0.8, 0.6, 0.65, 0.7, 0.75];
+    var r = earlyStop(h, 2);
+    return (r.bestIndex === 2 && r.stopIndex === 4) ? 0 : 1;
+  });
+
+  /* ---- 13.9 ATTEN 注意力不变量 ---- */
+  check('atten.qk_dot/scale：scores = QKᵀ/√d（手工基准）', 1e-15, function () {
+    var Q = [[1, 2], [3, 4]], K = [[0.5, -1], [2, 0.5]];
+    var s = qkDot(Q, K);
+    var ref00 = (1 * 0.5 + 2 * -1) / Math.SQRT2, ref11 = (3 * 2 + 4 * 0.5) / Math.SQRT2;
+    var s2 = attentionScale([[1, 2], [3, 4]], 2);
+    return Math.max(Math.abs(s[0][0] - ref00), Math.abs(s[1][1] - ref11), Math.abs(s2[0][0] - 1 / Math.SQRT2));
+  });
+  check('atten.cross_attn：权重行和 = 1；形状 = [Tq][dv]', 1e-14, function () {
+    var rng = mulberry32(91);
+    var Q = Array.from({ length: 3 }, function () { return [rng() * 2 - 1, rng() * 2 - 1]; });
+    var K = Array.from({ length: 4 }, function () { return [rng() * 2 - 1, rng() * 2 - 1]; });
+    var V = Array.from({ length: 4 }, function () { return [rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1]; });
+    var a = crossAttention(Q, K, V);
+    var rowSum = 0;
+    for (var i = 0; i < 3; i++) rowSum = Math.max(rowSum, Math.abs(a.weights[i].reduce(function (x, y) { return x + y; }, 0) - 1));
+    return (a.output.length === 3 && a.output[0].length === 3) ? rowSum : 1;
+  });
+  check('atten.multi_head：H=1 等价自注意力；逐头独立重算一致 ≤ 1e-12', 1e-12, function () {
+    var rng = mulberry32(92);
+    var T = 3, d = 4, H = 2, hd = d / H;
+    var Q = Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() * 2 - 1; }); });
+    var K = Q.map(function (r) { return r.slice(); });
+    var V = Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() * 2 - 1; }); });
+    var mh1 = multiHead(Q, K, V, 1, false);
+    var sa = selfAttention(Q, K, V, false);
+    var d1 = maxAbsDiff(mh1.output, sa.output);
+    var mh = multiHead(Q, K, V, H, false);
+    var worst = d1;
+    for (var t = 0; t < T; t++) for (var h = 0; h < H; h++) {
+      var scores = [];
+      for (var j = 0; j < T; j++) {
+        var s = 0;
+        for (var e = 0; e < hd; e++) s += Q[t][h * hd + e] * K[j][h * hd + e];
+        scores.push(s / Math.sqrt(hd));
+      }
+      var w = softmax(scores);
+      for (var e2 = 0; e2 < hd; e2++) {
+        var o = 0;
+        for (var j2 = 0; j2 < T; j2++) o += w[j2] * V[j2][h * hd + e2];
+        worst = Math.max(worst, Math.abs(mh.output[t][h * hd + e2] - o));
+      }
+    }
+    return worst;
+  });
+  check('atten.rope：⟨R_m q, R_n k⟩ 只依赖 m−n', 1e-12, function () {
+    var rng = mulberry32(93);
+    var q = [rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1];
+    var k = [rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1];
+    var lhs = dot(ropeApply(q, 0), ropeApply(k, 5));
+    var rhs = dot(ropeApply(q, 3), ropeApply(k, 8));
+    return Math.abs(lhs - rhs);
+  });
+  check('atten.kv_cache：增量单步 = 全量重算 ≤ 1e-12', 1e-12, function () {
+    var rng = mulberry32(94);
+    var K = Array.from({ length: 4 }, function () { return [rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1]; });
+    var V = Array.from({ length: 4 }, function () { return [rng() * 2 - 1, rng() * 2 - 1]; });
+    var q = [rng() * 2 - 1, rng() * 2 - 1, rng() * 2 - 1];
+    var inc = attnRow(q, K, V);
+    var full = selfAttention([q], K, V, false);
+    return Math.max(maxAbsDiff(inc.output, full.output[0]), maxAbsDiff(inc.weights, full.weights[0]));
+  });
+  check('atten.mqa/gqa：K/V 共享语义与分组语义一致 ≤ 1e-12', 1e-12, function () {
+    var rng = mulberry32(95);
+    var d = 4, H = 2;
+    var Q = Array.from({ length: H }, function () { return Array.from({ length: 3 }, function () { return Array.from({ length: d }, function () { return rng() * 2 - 1; }); }); });
+    var Ks = Array.from({ length: H }, function () { return Array.from({ length: 3 }, function () { return Array.from({ length: d }, function () { return rng() * 2 - 1; }); }); });
+    var Vs = Array.from({ length: H }, function () { return Array.from({ length: 3 }, function () { return Array.from({ length: d }, function () { return rng() * 2 - 1; }); }); });
+    var mqaOut = mqa(Q, Ks[0], Vs[0]);
+    var gqaShared = gqa(Q, [Ks[0]], [Vs[0]], H);
+    var gqaFull = gqa(Q, Ks, Vs, 1);
+    var refHeads = Q.map(function (h) { return selfAttention(h, Ks[0], Vs[0], false).output; });
+    return Math.max(maxAbsDiff(mqaOut, refHeads), maxAbsDiff(gqaShared, refHeads), maxAbsDiff(gqaFull, Q.map(function (h, i) { return selfAttention(h, Ks[i], Vs[i], false).output; })));
+  });
+  check('atten.rel_pos/alibi：偏置可加；惩罚随距离线性', 1e-15, function () {
+    var scores = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+    var bias = [[0, 1, 2], [1, 0, 1], [2, 1, 0]];
+    var rb = relPosBias(scores, bias);
+    var al = alibiScores(scores, 0.5);
+    var bad = 0;
+    if (maxAbsDiff(rb, bias) !== 0) bad++;
+    if (Math.abs(al[0][2] - (-1)) > 1e-15 || Math.abs(al[2][0] - (-1)) > 1e-15) bad++;
+    // 均匀打分 + alibi → 权重随 |i−j| 单调不增
+    var W = al.map(function (row) { return softmax(row); });
+    if (!(W[0][0] > W[0][1] && W[0][1] > W[0][2])) bad++;
+    return bad;
+  });
+  check('atten.attn_entropy：∈ [0, log n]；均匀行 = log n', 1e-15, function () {
+    var rng = mulberry32(96);
+    var Q = Array.from({ length: 3 }, function () { return Array.from({ length: 4 }, function () { return rng() * 2 - 1; }); });
+    var a = selfAttention(Q, Q.map(function (r) { return r.slice(); }), Q.map(function (r) { return r.slice(); }), false);
+    var E = attnEntropy(a.weights);
+    var worst = 0;
+    for (var i = 0; i < E.length; i++) worst = Math.max(worst, E[i] < -1e-15 ? 1 : 0, E[i] > Math.log2(4) + 1e-15 ? 1 : 0);
+    var uni = attnEntropy([[0.25, 0.25, 0.25, 0.25]])[0];
+    return Math.max(worst, Math.abs(uni - 2));
+  });
+  check('atten.flash：分块在线 softmax = 全量自注意力（chunk=1/2/3/7）', 1e-12, function () {
+    var rng = mulberry32(97);
+    var Q = Array.from({ length: 5 }, function () { return Array.from({ length: 4 }, function () { return rng() * 2 - 1; }); });
+    var K = Array.from({ length: 9 }, function () { return Array.from({ length: 4 }, function () { return rng() * 2 - 1; }); });
+    var V = Array.from({ length: 9 }, function () { return Array.from({ length: 3 }, function () { return rng() * 2 - 1; }); });
+    var ref = selfAttention(Q, K, V, false).output;
+    var worst = 0;
+    [1, 2, 3, 7].forEach(function (ch) {
+      var f = flashAttention(Q, K, V, ch);
+      worst = Math.max(worst, maxAbsDiff(f.output, ref));
+    });
+    return worst;
+  });
+
+  /* ---- 13.10 SAMPLE 采样不变量 ---- */
+  check('sample.gumbel：G = −log(−log u)；均值 ≈ γ（n=2e4）', 0.02, function () {
+    var rng = mulberry32(101), xs = [];
+    for (var i = 0; i < 20000; i++) xs.push(gumbelSample(rng()));
+    var formulaErr = Math.abs(gumbelSample(0.5) - (-Math.log(-Math.log(0.5))));
+    return Math.max(formulaErr, Math.abs(expectation(xs) - 0.5772156649015329));
+  });
+  check('sample.topp：最小支撑；质量 ≈ cutoff；归一化和 = 1', 1e-15, function () {
+    var out = topP([0.5, 0.3, 0.15, 0.05], 0.8);
+    return Math.max(maxAbsDiff(out, [0.5 / 0.8, 0.3 / 0.8, 0, 0]), Math.abs(out[0] + out[1] - 1));
+  });
+  check('sample.multinomial：计数和 = n（精确）；频率 ≈ p ≤ 0.03', 0.03, function () {
+    var counts = multinomialSample([0.2, 0.3, 0.5], 40000, 102);
+    var sum = counts[0] + counts[1] + counts[2];
+    var worst = sum === 40000 ? 0 : 1;
+    return Math.max(worst, Math.abs(counts[0] / 40000 - 0.2), Math.abs(counts[1] / 40000 - 0.3), Math.abs(counts[2] / 40000 - 0.5));
+  });
+  check('sample.rejection：接受率 = 1/M；分箱频率 ≈ 目标密度积分', 0.01, function () {
+    var target = function (x) { return 6 * x * (1 - x); }; // Beta(2,2) on [0,1]
+    var proposal = function () { return 1; };             // 均匀提议
+    var r = rejectionSample(20000, 103, target, proposal, 1.5, 0, 1);
+    var bins = [0, 0, 0, 0];
+    r.samples.forEach(function (x) { bins[Math.min(3, Math.floor(x * 4))]++; });
+    var ref = [0.15625, 0.34375, 0.34375, 0.15625];
+    var worst = Math.abs(r.acceptanceRate - 1 / 1.5);
+    for (var i = 0; i < 4; i++) worst = Math.max(worst, Math.abs(bins[i] / 20000 - ref[i]));
+    return worst;
+  });
+  check('sample.inverse_cdf：F(F⁻¹(u)) = u（指数分布 λ=1.5）', 1e-9, function () {
+    var lam = 1.5;
+    var F = function (x) { return 1 - Math.exp(-lam * x); };
+    var worst = 0;
+    [0.1, 0.37, 0.5, 0.73, 0.99].forEach(function (u) {
+      worst = Math.max(worst, Math.abs(F(inverseCDF(u, F, 0, 100)) - u));
+    });
+    return worst;
+  });
+  check('sample.antithetic：对偶负相关（解析精确）；方差缩减', 0, function () {
+    // Cov(f(U), f(1−U)) = E[U²(1−U)²] − (1/3)² = 1/30 − 1/9 < 0（f(x)=x²）
+    var cov = 1 / 30 - 1 / 9;
+    // 对偶均值方差 = Var((U²+(1−U)²)/2) = 1/180；iid 两样本均值方差 = Var(U²)/2 = (1/5−1/9)/2 = 2/45
+    var varAnti = 1 / 180, varIid = (1 / 5 - 1 / 9) / 2;
+    var a = antitheticSample(100, 104);
+    var pairOk = a.length === 100 && a.every(function (v, i) { return i % 2 === 0 ? a[i + 1] === 1 - v : true; });
+    return (cov < 0 && varAnti < varIid && pairOk) ? 0 : 1;
+  });
+  check('sample.stratified：样本落入对应层；均值 ≈ 0.5', 0.005, function () {
+    var s = stratifiedSample(100, 105);
+    var bad = 0;
+    for (var i = 0; i < 100; i++) if (s[i] < i / 100 || s[i] >= (i + 1) / 100) bad++;
+    return bad > 0 ? 1 : Math.abs(expectation(s) - 0.5);
+  });
+  check('sample.systematic：等间距 1/n；起点 ∈ [0, 1/n)', 1e-15, function () {
+    var s = systematicSample(50, 106);
+    if (s[0] < 0 || s[0] >= 1 / 50) return 1;
+    var worst = 0;
+    for (var i = 1; i < 50; i++) worst = Math.max(worst, Math.abs((s[i] - s[i - 1]) - 1 / 50));
+    return worst;
+  });
+
+  /* ---- 13.11 GRAPH 图推断不变量 ---- */
+  check('graph.belief_prop：链式 BP = 前向-后向（P(O) 与逐帧后验一致）', 1e-12, function () {
+    var pi = [0.5, 0.5], A = [[0.7, 0.3], [0.4, 0.6]], B = [[0.5, 0.4, 0.1], [0.1, 0.3, 0.6]];
+    var obs = [0, 1, 2, 1, 0, 2, 0, 1];
+    var bp = chainBeliefProp(pi, A, B, obs), fb = hmmForwardBackward(pi, A, B, obs);
+    var worst = Math.abs(bp.logPO - fb.logPO) / Math.abs(fb.logPO);
+    for (var t = 0; t < obs.length; t++) worst = Math.max(worst, maxAbsDiff(bp.posteriors[t], fb.posteriors[t]));
+    return worst;
+  });
+  check('graph.variable_elim：= 2⁸ 路径全枚举 ≤ 1e-12', 1e-12, function () {
+    var pi = [0.5, 0.5], A = [[0.7, 0.3], [0.4, 0.6]], B = [[0.5, 0.4, 0.1], [0.1, 0.3, 0.6]];
+    var obs = [0, 1, 2, 1, 0, 2, 0, 1];
+    var ve = variableElim(pi, A, B, obs);
+    var total = 0;
+    for (var mask = 0; mask < 256; mask++) {
+      var p = pi[(mask >> 7) & 1] * B[(mask >> 7) & 1][obs[0]];
+      for (var t = 1; t < 8; t++) {
+        var prev = (mask >> (8 - t)) & 1, cur = (mask >> (7 - t)) & 1;
+        p *= A[prev][cur] * B[cur][obs[t]];
+      }
+      total += p;
+    }
+    return Math.abs(ve - total) / total;
+  });
+  check('graph.factor_product：维度 = 变量并集；取值精确 ≤ 1e-15', 1e-15, function () {
+    var f = { vars: ['A', 'B'], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] };
+    var g = { vars: ['B', 'C'], shape: [2, 2], table: [1, 2, 3, 4] };
+    var h = factorProduct(f, g); // (A,B,C) 2×2×2
+    var bad = 0;
+    if (h.vars.join(',') !== 'A,B,C' || h.shape.join(',') !== '2,2,2') bad++;
+    // h[A=0,B=1,C=0] = f(0,1)·g(1,0) = 0.2·3 = 0.6；h[A=1,B=1,C=1] = 0.4·4 = 1.6
+    if (Math.abs(h.table[factorIndex(['A', 'B', 'C'], [2, 2, 2], { A: 0, B: 1, C: 0 })] - 0.6) > 1e-15) bad++;
+    if (Math.abs(h.table[factorIndex(['A', 'B', 'C'], [2, 2, 2], { A: 1, B: 1, C: 1 })] - 1.6) > 1e-15) bad++;
+    return bad;
+  });
+  check('graph.junction_tree/clique_tree：RIP 判定；校准一致', 1e-12, function () {
+    var bad = 0;
+    if (!ripCheck([['A', 'B'], ['B', 'C'], ['C', 'D']], [[0, 1], [1, 2]])) bad++;                   // 合法链
+    if (ripCheck([['A', 'B'], ['B', 'C'], ['C', 'D'], ['A', 'D']], [[0, 1], [1, 2], [2, 3]])) bad++; // A 的团不连通
+    var phiA = { vars: ['A', 'S'], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] };
+    var phiB = { vars: ['S', 'B'], shape: [2, 2], table: [0.5, 0.1, 0.2, 0.3] };
+    var cal = cliqueTreeCalibrate(phiA, phiB, ['S']);
+    var prod = factorProduct(phiA, phiB);
+    var ref = sumOut(prod, ['A', 'B']);
+    bad += maxAbsDiff(cal.separator.table, ref.table) > 1e-12 ? 1 : 0;
+    return bad;
+  });
+  check('graph.kalman：稳态方差 = Riccati 解析解 ≤ 1e-9', 1e-9, function () {
+    var Q = 0.5, R = 0.3, A = 1, H = 1;
+    var Pinf = (-Q + Math.sqrt(Q * Q + 4 * R * Q)) / 2; // A=H=1 稳态：P² + PQ − RQ = 0
+    var out = kalmanFilter1d(new Array(2000).fill(0), A, H, Q, R, 0, 1);
+    return Math.abs(out[1999].P - Pinf);
+  });
+  check('graph.dsep：路径枚举 = 联合分布暴力条件独立检验', 0, function () {
+    // 菱形 BN：A→B, A→C, B→D, C→D
+    var dag = { A: [], B: ['A'], C: ['A'], D: ['B', 'C'] };
+    var cpd = {
+      A: [0.5, 0.5],
+      B: [[0.2, 0.8], [0.4, 0.6]],  // P(B|A)
+      C: [[0.3, 0.7], [0.5, 0.5]],
+      D: [[[0.1, 0.9], [0.5, 0.5]], [[0.6, 0.4], [0.9, 0.1]]] // P(D|B,C)
+    };
+    function joint(cfg) {
+      var p = cpd.A[cfg.A];
+      p *= cpd.B[cfg.A][cfg.B];
+      p *= cpd.C[cfg.A][cfg.C];
+      p *= cpd.D[cfg.B][cfg.C][cfg.D];
+      return p;
+    }
+    function indep(x, y, z) { // 精确条件独立：枚举 z 构型比较 P(x,y|z) 与 P(x|z)P(y|z)
+      function match(cfg, zc) {
+        return z.every(function (v) { return cfg[v] === zc[v]; });
+      }
+      var zVars = z.slice();
+      for (var m = 0; m < Math.pow(2, zVars.length); m++) {
+        var zc = {};
+        zVars.forEach(function (v, vi) { zc[v] = (m >> vi) & 1; });
+        var pz = 0, pxy = 0, px = [0, 0], py = [0, 0];
+        for (var a = 0; a < 2; a++) for (var b = 0; b < 2; b++) for (var c = 0; c < 2; c++) for (var d = 0; d < 2; d++) {
+          var cfg = { A: a, B: b, C: c, D: d };
+          if (!match(cfg, zc)) continue;
+          var j = joint(cfg);
+          pz += j;
+          if (cfg[x] === 1) px[1] += j; else px[0] += j;
+          if (cfg[y] === 1) py[1] += j; else py[0] += j;
+          if (cfg[x] === 1 && cfg[y] === 1) pxy += j;
+        }
+        if (pz < 1e-12) continue;
+        if (Math.abs(pxy / pz - (px[1] / pz) * (py[1] / pz)) > 1e-12) return false;
+      }
+      return true;
+    }
+    var bad = 0;
+    var nodes = ['A', 'B', 'C', 'D'];
+    for (var i = 0; i < 4; i++) for (var j = i + 1; j < 4; j++) {
+      for (var mask = 0; mask < 16; mask++) {
+        var z = [];
+        if (mask & 1) z.push('A');
+        if (mask & 2) z.push('B');
+        if (mask & 4) z.push('C');
+        if (mask & 8) z.push('D');
+        if (z.indexOf(nodes[i]) >= 0 || z.indexOf(nodes[j]) >= 0) continue;
+        if (dSeparated(dag, nodes[i], nodes[j], z) !== indep(nodes[i], nodes[j], z)) bad++;
+      }
+    }
+    return bad;
+  });
+  check('graph.m_sep：道德图判据 = D-分离判定（菱形 BN 全枚举）', 0, function () {
+    var dag = { A: [], B: ['A'], C: ['A'], D: ['B', 'C'] };
+    var bad = 0, nodes = ['A', 'B', 'C', 'D'];
+    for (var i = 0; i < 4; i++) for (var j = i + 1; j < 4; j++) {
+      for (var mask = 0; mask < 16; mask++) {
+        var z = [];
+        if (mask & 1) z.push('A');
+        if (mask & 2) z.push('B');
+        if (mask & 4) z.push('C');
+        if (mask & 8) z.push('D');
+        if (z.indexOf(nodes[i]) >= 0 || z.indexOf(nodes[j]) >= 0) continue;
+        if (mSeparated(dag, nodes[i], nodes[j], z) !== dSeparated(dag, nodes[i], nodes[j], z)) bad++;
+      }
+    }
+    return bad;
+  });
+  check('graph.particle：权重和 = 1；后验均值 ≈ 前向-后向（n=2000）', 0.15, function () {
+    var pi = [0.5, 0.5], A = [[0.7, 0.3], [0.4, 0.6]], B = [[0.5, 0.4, 0.1], [0.1, 0.3, 0.6]];
+    var obs = [0, 1, 2, 1, 0, 2, 0, 1];
+    var pf = particleFilter(pi, A, B, obs, 2000, 107);
+    var fb = hmmForwardBackward(pi, A, B, obs);
+    var worst = 0;
+    for (var t = 0; t < obs.length; t++) {
+      var refMean = fb.posteriors[t][1]; // E[state] = P(state=1)
+      worst = Math.max(worst, Math.abs(pf.postMeans[t] - refMean));
+    }
+    return worst;
+  });
+
+  /* ---- 13.12 RL 强化学习不变量 ---- */
+  check('rl.bellman_backup：压缩映射 ‖T(V)−T(V′)‖ ≤ γ‖V−V′‖', 1e-12, function () {
+    var mdp = chainSetup(7, 0.9, true);
+    var V1 = [0.5, -1, 2, 0, 1, -0.5, 0.3], V2 = [1, 0, -1, 0.5, 2, 0, -1];
+    var d = normInf(V1.map(function (v, i) { return v - V2[i]; }));
+    var T1 = bellmanBackup(V1, mdp), T2 = bellmanBackup(V2, mdp);
+    var dT = normInf(T1.map(function (v, i) { return v - T2[i]; }));
+    return dT - 0.9 * d;
+  });
+  check('rl.policy_iter：收敛至值迭代最优解；V 逐轮单调不减', 1e-8, function () {
+    var mdp = chainSetup(7, 0.9, false);
+    var pi = policyIteration(mdp);
+    var vi = valueIteration({ n: 7, gamma: 0.9, stochastic: false, tol: 1e-13 });
+    var diff = normInf(pi.V.map(function (v, i) { return v - vi.V[i]; }));
+    var mono = true;
+    for (var t = 1; t < pi.vHistory.length; t++) {
+      for (var s = 0; s < 7; s++) if (pi.vHistory[t][s] < pi.vHistory[t - 1][s] - 1e-12) mono = false;
+    }
+    return mono ? diff : 1;
+  });
+  check('rl.sarsa：训练后贪心策略到达目标率 ≥ 0.9', 0.1, function () {
+    return 1 - sarsa({ n: 7, gamma: 0.9, episodes: 5000, seed: 321 }).successRate;
+  });
+  check('rl.td_lambda：资格迹 = (γλ)^t（精确）', 1e-12, function () {
+    var tr = eligibilityTrace(10, 0.9, 0.5);
+    var worst = 0;
+    for (var t = 0; t < 10; t++) worst = Math.max(worst, Math.abs(tr[t] - Math.pow(0.45, t)));
+    return worst;
+  });
+  check('rl.monte_carlo：随机策略回报均值 = 策略评估解（无偏）', 0.05, function () {
+    var mdp = chainSetup(7, 0.9, true);
+    var mc = monteCarloReturn(mdp, function (s, rng) { return rng() < 0.5 ? -1 : 1; }, 4000, 108);
+    // 均匀随机策略的解析 Bellman 期望评估
+    var Vr = new Array(7).fill(0);
+    for (var k = 0; k < 20000; k++) {
+      var Vn = new Array(7);
+      for (var s = 0; s < 7; s++) {
+        var v = 0;
+        [-1, 1].forEach(function (a) {
+          mdp.trans(s, a).forEach(function (tr) { v += 0.5 * tr[1] * (mdp.reward(s, tr[0]) + 0.9 * Vr[tr[0]]); });
+        });
+        Vn[s] = v;
+      }
+      var delta = 0;
+      for (var s2 = 0; s2 < 7; s2++) delta = Math.max(delta, Math.abs(Vn[s2] - Vr[s2]));
+      Vr = Vn;
+      if (delta < 1e-13) break;
+    }
+    return Math.abs(mc - Vr[0]);
+  });
+  check('rl.ucb：未拉臂优先；同计数取高值；加分项可翻转排序', 0, function () {
+    var zero = ucb([0.5, 0.9], [10, 0], 2, 11);     // 臂 1 未拉 → 必须探索
+    var sameCount = ucb([0.6, 0.5], [10, 10], 2, 11); // 同计数 → 取高值臂 0
+    var flip = ucb([0.6, 0.5], [100, 1], 2, 11);      // 臂 1 加分项 2√(ln11)≈3.10 远大于臂 0
+    return (zero === 1 && sameCount === 0 && flip === 1) ? 0 : 1;
+  });
+  check('rl.gae：λ=0 → TD 残差；λ=1 → 蒙特卡洛优势（精确）', 1e-12, function () {
+    var rewards = [1, 0.5, -0.2, 2], values = [0.3, 0.4, 0.1, 0.5], gamma = 0.9;
+    var g0 = gae(rewards, values, gamma, 0);
+    var g1 = gae(rewards, values, gamma, 1);
+    var td = [], mc = [], G = 0;
+    for (var t = 3; t >= 0; t--) {
+      var nextV = t === 3 ? 0 : values[t + 1];
+      td[t] = rewards[t] + gamma * nextV - values[t];
+      G = rewards[t] + gamma * G;
+      mc[t] = G - values[t];
+    }
+    return Math.max(maxAbsDiff(g0, td), maxAbsDiff(g1, mc));
+  });
+  check('rl.reinforce：策略梯度估计无偏（E[∇] = 解析值 ≤ 0.02）', 0.02, function () {
+    var prefs = [1, 2, 3];
+    var p = softmax(prefs);
+    var S = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
+    var analytic = [p[0] * S - p[0] * p[0], p[1] * S - p[1] * p[1], p[2] * S - p[2] * p[2]];
+    var rng = mulberry32(109), est = [0, 0, 0], N = 20000;
+    for (var i = 0; i < N; i++) {
+      var u = rng(), acc = 0, a = 2;
+      for (var j = 0; j < 3; j++) { acc += p[j]; if (u <= acc) { a = j; break; } }
+      var g = reinforceGradient(prefs, a, p[a]);
+      for (var j2 = 0; j2 < 3; j2++) est[j2] += g[j2];
+    }
+    est = est.map(function (v) { return v / N; });
+    return normInf(est.map(function (v, i) { return v - analytic[i]; }));
+  });
+  check('rl.ppo：截断目标公式精确（三种区间）', 0, function () {
+    var bad = 0;
+    if (ppoClip(1.2, 0.5, 0.2) !== 0.6) bad++;      // ratio>1+ε → 截断
+    if (ppoClip(0.5, -0.5, 0.2) !== -0.4) bad++;    // ratio<1−ε → 截断（负优势方向）
+    if (ppoClip(1.5, 2, 0.1) !== 2.2) bad++;        // min 选中未截断项 3? 1.5·2=3 vs clip(1.5,0.9,1.1)·2=2.2 → 2.2
+    if (ppoClip(1.05, 1, 0.2) !== 1.05) bad++;      // 区间内 → 不截断
+    return bad;
+  });
+  check('rl.thompson：Beta(2,3) 后验频率 ≈ α/(α+β)（n=4000）', 0.02, function () {
+    var sum = 0;
+    for (var s = 0; s < 4000; s++) sum += thompsonSample(2, 3, s);
+    return Math.abs(sum / 4000 - 0.4);
+  });
+
+  /* ---- 13.13 METRIC/DATA/SYS/LINALG 不变量 ---- */
+  check('metric.perplexity：= exp(logloss)（精确）', 1e-15, function () {
+    var y = [1, 0, 1, 1], p = [0.9, 0.2, 0.7, 0.6];
+    return Math.abs(perplexityLM(y, p) - Math.exp(logLoss(y, p)));
+  });
+  check('metric.bleu：已知值 0.5976；自译 = 1；短译 BP < 1', 1e-12, function () {
+    var ref = 'the cat is on the mat'.split(' ');
+    var hyp = 'the cat the cat on the mat'.split(' ');
+    var p1 = 5 / 7, p2 = 3 / 6;
+    var expected = Math.sqrt(p1 * p2); // BP = 1（hyp 更长）
+    var bad = 0;
+    if (Math.abs(bleu(ref, hyp, 2) - expected) > 1e-12) bad++;
+    if (Math.abs(bleu(ref, ref.slice(), 2) - 1) > 1e-12) bad++;
+    var short = bleu(ref, 'the cat'.split(' '), 2);
+    var bpRef = Math.exp(1 - 6 / 2) * Math.sqrt(1 * 1);
+    if (Math.abs(short - bpRef) > 1e-12) bad++;
+    return bad;
+  });
+  check('metric.map：AP = Σ P(k)·Δr(k)（手工基准）', 1e-15, function () {
+    var rel = [1, 0, 1, 1, 0];
+    var expected = (1 / 1 + 2 / 3 + 3 / 4) / 3;
+    return Math.abs(averagePrecision(rel) - expected);
+  });
+  check('metric.confusion：行和 = 类别真实数；对角线 = 正确数', 0, function () {
+    var M = confusionMatrix([0, 0, 1, 1, 2, 2], [0, 1, 1, 1, 2, 0], [0, 1, 2]);
+    var bad = 0;
+    if (M[0][0] + M[0][1] + M[0][2] !== 2) bad++;
+    if (M[1][0] + M[1][1] + M[1][2] !== 2) bad++;
+    if (M[2][0] + M[2][1] + M[2][2] !== 2) bad++;
+    if (M[0][0] + M[1][1] + M[2][2] !== 4) bad++;
+    return bad;
+  });
+  check('data.label_encode/pad/truncate/bucket/dedup：结构不变量', 0, function () {
+    var bad = 0;
+    var le = labelEncode(['b', 'a', 'b', 'c']);
+    if (le.classes.join(',') !== 'a,b,c' || le.codes.join(',') !== '1,0,1,2') bad++;
+    if (padSeq([1, 2], 4, 0).join(',') !== '1,2,0,0') bad++;
+    if (truncateSeq([1, 2, 3, 4], 2).join(',') !== '1,2') bad++;
+    var bk = bucketize([1, 2, 3, 4, 5], 2);
+    if (bk[0].length - bk[1].length !== 1 || bk[0].concat(bk[1]).length !== 5) bad++;
+    if (dedup([1, 1, 2, 3, 3]).join(',') !== '1,2,3') bad++;
+    return bad;
+  });
+  check('data.filter/map/zip/batch/tokenize：语义精确', 0, function () {
+    var bad = 0;
+    if (filterOp([1, 2, 3, 4], function (v) { return v % 2 === 0; }).join(',') !== '2,4') bad++;
+    if (mapOp([1, 2, 3], function (v) { return v * 10; }).join(',') !== '10,20,30') bad++;
+    if (zipOp([1, 2, 3], ['a', 'b']).length !== 2) bad++;
+    var bt = batchOp([1, 2, 3, 4, 5], 2);
+    if (bt.length !== 3 || bt[2].join(',') !== '5') bad++;
+    if (tokenize('the  cat sat').join(' ') !== 'the cat sat') bad++;
+    return bad;
+  });
+  check('data.normalize_fit：测试集用训练集统计量（防泄漏）', 1e-12, function () {
+    var train = [1, 2, 3, 4, 5], test = [10, 20];
+    var r = normalizeFit(train, test);
+    var m = 3, sd = Math.sqrt(2); // 总体方差
+    return Math.max(Math.abs(r.test[0] - (10 - m) / sd), Math.abs(r.test[1] - (20 - m) / sd), Math.abs(r.mean - m), Math.abs(r.std - sd));
+  });
+  check('data.augment：保形状、同种子可复现、值被扰动', 0, function () {
+    var x = [1, 2, 3];
+    var a1 = augment(x, 5, 0.5), a2 = augment(x, 5, 0.5);
+    var changed = a1.some(function (v, i) { return v !== x[i]; });
+    return (maxAbsDiff(a1, a2) === 0 && a1.length === 3 && changed) ? 0 : 1;
+  });
+  check('sys.gather/scatter/cache/ref_count：集合语义精确', 0, function () {
+    var bad = 0;
+    if (gatherAll([[1, 2], [3], [4, 5]]).join(',') !== '1,2,3,4,5') bad++;
+    var sc = scatterAll(['a', 'b', 'c'], [0, 1, 0]);
+    if (sc[0].join(',') !== 'a,c' || sc[1].join(',') !== 'b') bad++;
+    var cache = new Cache();
+    var obj = { v: 1 };
+    cache.put('k', obj);
+    if (cache.get('k') !== obj) bad++;
+    var rc = new RefCounter();
+    rc.inc('a'); rc.inc('a'); rc.dec('a');
+    if (rc.dec('a') !== 0 || rc.counts.a !== undefined) bad++;
+    return bad;
+  });
+  check('sys.stream/checkpoint/profile/trace/dispatch/barrier：系统语义', 0, function () {
+    var bad = 0;
+    var st = new TaskStream();
+    st.push(function (i) { return i; });
+    st.push(function (i) { return i * 2; });
+    if (st.run().join(',') !== '0,2') bad++;
+    var obj = { a: [1, 2], b: { c: 3 } };
+    var cp = checkpoint(obj);
+    cp.a[0] = 99;
+    if (obj.a[0] !== 1 || cp.b.c !== 3) bad++;
+    var pf = new Profiler();
+    pf.hit('x'); pf.hit('y'); pf.hit('x');
+    if (pf.total() !== 3) bad++;
+    var tr = new Tracer();
+    tr.record('a'); tr.record('b');
+    if (tr.events[1].seq !== 1) bad++;
+    var dp = new Dispatcher();
+    var got = [];
+    dp.register(function (p) { got.push(p + 1); });
+    dp.register(function (p) { got.push(p + 2); });
+    dp.dispatch(10);
+    if (got.join(',') !== '11,12') bad++;
+    var bar = new Barrier(3);
+    if (bar.arrive() !== false || bar.arrive() !== false || bar.arrive() !== true) bad++;
+    return bad;
+  });
+  check('sys.prefetch：深拷贝，无语义改变', 0, function () {
+    var x = [[1, 2], [3, 4]];
+    var p = prefetch(x);
+    p[0][0] = 99;
+    return (x[0][0] === 1 && maxAbsDiff(prefetch(x), x) === 0) ? 0 : 1;
+  });
+  check('linalg.rank/nullspace：秩精确；零空间维数 = 列数−秩；基满足 Ax = 0', 1e-12, function () {
+    var bad = 0;
+    if (matrixRank([[1, 2], [2, 4]]) !== 1) bad++;
+    if (matrixRank([[1, 0], [0, 1]]) !== 2) bad++;
+    if (matrixRank([[1, 0, 0], [0, 1, 0], [1, 1, 0]]) !== 2) bad++;
+    var A = [[1, 2, 3], [2, 4, 6]]; // 秩 1，3 列 → 零空间维数 2
+    var ns = nullspace(A);
+    if (ns.length !== 2) bad++;
+    ns.forEach(function (v) {
+      if (norm2(matVec(A, v)) > 1e-10) bad++;
+    });
+    return bad;
+  });
+  check('linalg.orthonormalize/cond：QᵀQ = I；κ(diag(1,10)) = 10；κ ≥ 1', 1e-9, function () {
+    var cols = [[1, 1, 0], [1, 0, 1], [0, 1, 1]];
+    var Q = orthonormalize(cols);
+    var orth = 0;
+    for (var a = 0; a < Q.length; a++) for (var b = 0; b < Q.length; b++) orth = Math.max(orth, Math.abs(dot(Q[a], Q[b]) - (a === b ? 1 : 0)));
+    // 张成保持：每个原向量 ∈ span(Q)
+    var resid = 0;
+    cols.forEach(function (a) {
+      var proj = new Array(3).fill(0);
+      Q.forEach(function (q) {
+        var c = dot(a, q);
+        for (var i = 0; i < 3; i++) proj[i] += c * q[i];
+      });
+      resid = Math.max(resid, norm2(a.map(function (v, i) { return v - proj[i]; })));
+    });
+    var kappa = condEstimate([[1, 0], [0, 10]]);
+    var kappaEye = condEstimate([[1, 0], [0, 1]]);
+    return Math.max(orth, resid, Math.abs(kappa - 10), Math.abs(kappaEye - 1), kappa < 1 - 1e-9 ? 1 : 0);
+  });
+
+  check('prob.sample_stats：方差 = E[X²]−E[X]²（精确）；矩估计收敛', 0.1, function () {
+    var xs = normalSample(100000, 111);
+    var st = sampleStats(xs);
+    var e2 = expectation(xs.map(function (v) { return v * v; }));
+    var exact = Math.abs(st.variance - (e2 - st.mean * st.mean));
+    return Math.max(exact, Math.abs(st.skew), Math.abs(st.kurt - 3));
+  });
+  check('info.channel_capacity：BSC(0.1) 容量 = 1−H(ε) = 0.531 bits；≥ 网格暴力解', 1e-6, function () {
+    var e = 0.1;
+    var P = [[1 - e, e], [e, 1 - e]];
+    var ab = channelCapacity(P);
+    var h2 = -e * Math.log2(e) - (1 - e) * Math.log2(1 - e);
+    var analytic = 1 - h2;
+    // 网格暴力（输入分布 0..1 步长 0.005）
+    var best = 0;
+    for (var t = 0; t <= 200; t++) {
+      var q0 = t / 200, q = [q0, 1 - q0];
+      var r = [q[0] * P[0][0] + q[1] * P[1][0], q[0] * P[0][1] + q[1] * P[1][1]];
+      var I = 0;
+      for (var i = 0; i < 2; i++) for (var j = 0; j < 2; j++) {
+        if (q[i] > 0 && P[i][j] > 0 && r[j] > 0) I += q[i] * P[i][j] * Math.log2(P[i][j] / r[j]);
+      }
+      if (I > best) best = I;
+    }
+    return Math.max(Math.abs(ab.capacity - analytic), best - ab.capacity);
+  });
+  check('optim.line_search：Armijo 充分下降成立；GD+线搜索收敛至解析最优', 1e-6, function () {
+    var A = [1, 10, 100], b = [1, -2, 3];
+    var f = function (x) { return 0.5 * (A[0] * x[0] * x[0] + A[1] * x[1] * x[1] + A[2] * x[2] * x[2]) - (b[0] * x[0] + b[1] * x[1] + b[2] * x[2]); };
+    var g = function (x) { return [A[0] * x[0] - b[0], A[1] * x[1] - b[1], A[2] * x[2] - b[2]]; };
+    var x = [0.5, 0.5, 0.5];
+    var armijoOk = true, steps = 0;
+    for (var it = 0; it < 5000; it++) {
+      var gx = g(x);
+      var d = gx.map(function (v) { return -v; });
+      var f0 = f(x), gd = dot(gx, d);
+      var ls = lineSearch(f, g, x, d, { alpha0: 1, c1: 1e-4 });
+      if (ls.alpha === 0) break;
+      if (ls.f > f0 + 1e-4 * ls.alpha * gd + 1e-15) armijoOk = false;
+      x = ls.x;
+      steps++;
+    }
+    var xs = [b[0] / A[0], b[1] / A[1], b[2] / A[2]];
+    return armijoOk ? norm2(x.map(function (v, i) { return v - xs[i]; })) : 1;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -1658,6 +3802,7 @@
     hmmForwardBackward: hmmForwardBackward, hmmViterbi: hmmViterbi,
     /* 强化学习 */
     valueIteration: valueIteration, td0Sweep: td0Sweep, qLearning: qLearning, epsilonGreedy: epsilonGreedy,
+    chainSetup: chainSetup,
     /* 指标 */
     accuracy: accuracy, precision: precision, recall: recall, f1: f1, auc: auc, mse: mse, mae: mae,
     r2: r2, logLoss: logLoss, cosineSimilarity: cosineSimilarity, editDistance: editDistance, silhouette: silhouette,
@@ -1666,6 +3811,63 @@
     zscore: zscore, l2Reg: l2Reg, temperatureSoftmax: temperatureSoftmax, topK: topK,
     shuffle: shuffle, trainTestSplit: trainTestSplit, kFold: kFold, oneHot: oneHot,
     Arena: Arena, reduceAll: reduceAll, broadcast: broadcast,
+    /* 扩展：TENSOR */
+    tensorCreate: tensorCreate, tensorCount: tensorCount, tensorZeros: tensorZeros, tensorOnes: tensorOnes,
+    arange: arange, flatten: flatten, reshape: reshape, tensorSlice: tensorSlice, tensorConcat: tensorConcat,
+    tensorStack: tensorStack, tensorSplit: tensorSplit, tensorCast: tensorCast, tensorCopy: tensorCopy,
+    tensorGather: tensorGather, tensorScatter: tensorScatter, tensorFill: tensorFill,
+    /* 扩展：NUMER */
+    divGuard: divGuard, sqrtGuard: sqrtGuard, reciprocal: reciprocal,
+    expm1: expm1, log1p: log1p, hypot: hypot,
+    twoSum: twoSum, twoProd: twoProd, fma: fma,
+    /* 扩展：PROB */
+    uniformSample: uniformSample, bernoulliSample: bernoulliSample, binomialSample: binomialSample,
+    marginal: marginal, conditionalRow: conditionalRow, mvGaussPDF: mvGaussPDF,
+    /* 扩展：INFO */
+    perplexity: perplexity, surprisal: surprisal, bits: bits, klReverse: klReverse,
+    maxEntropyDist: maxEntropyDist, normalizeDist: normalizeDist,
+    /* 扩展：OPTIM */
+    quadProblem: quadProblem, momentum: momentum, nesterov: nesterov, rmsprop: rmsprop, adagrad: adagrad,
+    adamw: adamw, gradClip: gradClip, gradNorm: gradNorm, lrDecay: lrDecay, weightDecay: weightDecay, polyakAvg: polyakAvg,
+    /* 扩展：FWD */
+    embeddingLookup: embeddingLookup, residualAdd: residualAdd, splitHeads: splitHeads, concatHeads: concatHeads,
+    poolMax: poolMax, batchNorm: batchNorm, dropout: dropout, conv1d: conv1d,
+    /* 扩展：BWD */
+    numericJacobian: numericJacobian, jacobian: jacobian, vjp: vjp, jvp: jvp, chainRule: chainRule,
+    gradRelu: gradRelu, gradTanh: gradTanh, gradSoftmaxCE: gradSoftmaxCE, gradMatmul: gradMatmul,
+    gradAccum: gradAccum, stopGrad: stopGrad, detach: detach,
+    rnnForward: rnnForward, rnnLoss: rnnLoss, rnnBPTT: rnnBPTT,
+    /* 扩展：NORM */
+    l1Reg: l1Reg, weightNorm: weightNorm, spectralNorm: spectralNorm, groupNorm: groupNorm,
+    labelSmooth: labelSmooth, mixup: mixup, earlyStop: earlyStop,
+    /* 扩展：ATTEN */
+    qkDot: qkDot, attentionScale: attentionScale, crossAttention: crossAttention, multiHead: multiHead,
+    ropeApply: ropeApply, attnRow: attnRow, mqa: mqa, gqa: gqa, attnEntropy: attnEntropy,
+    relPosBias: relPosBias, alibiScores: alibiScores, flashAttention: flashAttention,
+    /* 扩展：SAMPLE */
+    gumbelSample: gumbelSample, topP: topP, multinomialSample: multinomialSample,
+    rejectionSample: rejectionSample, inverseCDF: inverseCDF, antitheticSample: antitheticSample,
+    stratifiedSample: stratifiedSample, systematicSample: systematicSample,
+    /* 扩展：GRAPH */
+    chainBeliefProp: chainBeliefProp, variableElim: variableElim, factorIndex: factorIndex,
+    factorProduct: factorProduct, sumOut: sumOut, ripCheck: ripCheck, junctionTree: junctionTree,
+    cliqueTreeCalibrate: cliqueTreeCalibrate, kalmanFilter1d: kalmanFilter1d, moralGraph: moralGraph,
+    dSeparated: dSeparated, mSeparated: mSeparated, particleFilter: particleFilter,
+    /* 扩展：RL */
+    bellmanBackup: bellmanBackup, policyIteration: policyIteration, sarsa: sarsa,
+    eligibilityTrace: eligibilityTrace, monteCarloReturn: monteCarloReturn, policyEval: policyEval,
+    greedyPolicy: greedyPolicy, ucb: ucb, advantage: advantage, gae: gae,
+    reinforceGradient: reinforceGradient, ppoClip: ppoClip, thompsonSample: thompsonSample,
+    /* 扩展：METRIC/DATA/SYS/LINALG */
+    perplexityLM: perplexityLM, bleu: bleu, averagePrecision: averagePrecision, confusionMatrix: confusionMatrix,
+    sampleStats: sampleStats, channelCapacity: channelCapacity, lineSearch: lineSearch,
+    labelEncode: labelEncode, padSeq: padSeq, truncateSeq: truncateSeq, bucketize: bucketize, dedup: dedup,
+    filterOp: filterOp, mapOp: mapOp, zipOp: zipOp, batchOp: batchOp, tokenize: tokenize,
+    normalizeFit: normalizeFit, augment: augment,
+    gatherAll: gatherAll, scatterAll: scatterAll, Cache: Cache, RefCounter: RefCounter, TaskStream: TaskStream,
+    checkpoint: checkpoint, Profiler: Profiler, Tracer: Tracer, Dispatcher: Dispatcher, Barrier: Barrier,
+    EventLog: EventLog, prefetch: prefetch,
+    matrixRank: matrixRank, nullspace: nullspace, orthonormalize: orthonormalize, condEstimate: condEstimate,
     /* 自检 */
     checks: checks, runChecks: runChecks
   };

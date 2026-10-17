@@ -144,7 +144,7 @@
     chips.appendChild(el('span', 'chip', '微指令 <b>' + REG.length + '</b>'));
     chips.appendChild(el('span', 'chip', '已验证 <b>' + verified + '</b>'));
     chips.appendChild(el('span', 'chip', '系统层 <b>10</b>'));
-    chips.appendChild(el('span', 'chip', '不变量 <b>64</b>'));
+    chips.appendChild(el('span', 'chip', '不变量 <b>' + AXIOM.checks.length + '</b>'));
     var gh = el('a', 'gh', 'GitHub ↗');
     gh.href = 'https://github.com/CJX0712/axiom-ai';
     gh.target = '_blank';
@@ -156,7 +156,7 @@
 
     var wrap = el('div', 'wrap');
     var tabs = el('div', 'tabs');
-    var TAB_DEFS = [['arch', '架构总览'], ['isa', '指令集 · 1024'], ['verify', '实时自检'], ['lab', '演示实验室'], ['export', '导出']];
+    var TAB_DEFS = [['arch', '架构总览'], ['isa', '指令集 · 1024'], ['verify', '实时自检'], ['pipeline', '管线编排 · L9'], ['lab', '演示实验室'], ['export', '导出']];
     var view = el('div', 'view');
     TAB_DEFS.forEach(function (d) {
       var t = el('button', 'tab' + (state.tab === d[0] ? ' on' : ''), esc(d[1]));
@@ -185,6 +185,7 @@
     if (state.tab === 'arch') renderArch(view);
     else if (state.tab === 'isa') renderISA(view);
     else if (state.tab === 'verify') renderVerify(view);
+    else if (state.tab === 'pipeline') renderPipeline(view);
     else if (state.tab === 'lab') renderLab(view);
     else renderExport(view);
   }
@@ -226,7 +227,7 @@
       '<div style="margin-top:18px;font-size:12px;color:var(--txt3);line-height:2">' +
       '设计原则：<b style="color:var(--txt2)">下层提供可验证原语，上层由下层组合</b>。L1–L8 的每条微指令都携带数学不变量；' +
       'L9 不新增指令，由已有微指令组合成推理 / 训练编排；L10 为指令集主体（1024 条）。' +
-      '全部 64 项不变量在「实时自检」视图中可一键复算。</div>'));
+      '全部 ' + AXIOM.checks.length + ' 项不变量在「实时自检」视图中可一键复算。</div>'));
   }
 
   /* ---------------- 视图 2：指令集 ---------------- */
@@ -382,7 +383,138 @@
     return Object.keys(m).map(function (k) { return m[k]; });
   }
 
-  /* ---------------- 视图 4：演示实验室 ---------------- */
+  /* ---------------- 视图 4：管线编排（L9 组合应用层） ---------------- */
+  var PIPELINE_OPS = [
+    ['zscore', '标准化', '均值=0、方差=1', 'NORM'],
+    ['normalizeL2', 'L2 归一化', '‖x̂‖ = 1', 'NORM'],
+    ['minmaxScale', '最小最大缩放', '输出 ∈ [0,1]', 'NORM'],
+    ['softmax', 'Softmax', '平移不变；输出和 = 1', 'NUMER'],
+    ['temperatureSoftmax', '温度采样（T=0.7）', 'T↓ → 熵↓', 'SAMPLE'],
+    ['topK', 'Top-K（k=3）', '支撑外 = 0；支撑上和 = 1', 'SAMPLE'],
+    ['sigmoid', 'Sigmoid', 'σ(−x) = 1 − σ(x)', 'FWD'],
+    ['tanh', 'Tanh', '奇函数；|tanh| ≤ 1', 'FWD'],
+    ['relu', 'ReLU', 'max(0,x)', 'FWD'],
+    ['gelu', 'GELU', 'xΦ(x) 夹于 min/max(0,x)', 'FWD'],
+    ['l1Norm', 'L1 范数（标量）', 'Σ|xᵢ|', 'NORM'],
+    ['entropy', '熵（标量，bits）', '0 ≤ H ≤ log₂n', 'INFO'],
+    ['logsumexp', '稳定对数和（标量）', '±1e300 不溢出', 'NUMER'],
+    ['kahanSum', 'Kahan 精确和（标量）', '病态序列误差 ≤ 1e-9', 'NUMER']
+  ];
+  var PIPELINE_PRESETS = [
+    { name: 'Softmax 温度采样管线', ops: ['temperatureSoftmax', 'topK'], input: '2.0, 1.0, 0.5, 3.0, -1.0' },
+    { name: '归一化 + 激活管线', ops: ['zscore', 'gelu'], input: '-2, -1, 0, 1, 2' },
+    { name: '注意力打分 → 熵', ops: ['softmax', 'entropy'], input: '1.2, -0.7, 3.1, 0.4' }
+  ];
+  function pipelineApply(op, v) {
+    switch (op) {
+      case 'temperatureSoftmax': return AXIOM.temperatureSoftmax(v, 0.7);
+      case 'topK': return AXIOM.topK(v, 3);
+      default: return AXIOM[op](v);
+    }
+  }
+  function fmtVec(v) {
+    if (typeof v === 'number') return v.toFixed(6);
+    return '[' + v.map(function (x) { return x.toFixed(6); }).join(', ') + ']';
+  }
+  function renderPipeline(view) {
+    view.appendChild(el('h2', null, '管线编排 · L9 组合应用层 <span style="font-size:12px;color:var(--txt3);font-weight:400">不新增指令 —— 由 L1–L8 已验证微指令组合成推理管线，逐步执行并展示中间张量</span>'));
+    view.appendChild(el('div', null, '<div style="height:14px"></div>'));
+
+    var presetBox = el('div', 'exp-grid');
+    PIPELINE_PRESETS.forEach(function (p, pi) {
+      var card = el('div', 'exp-card');
+      card.appendChild(el('h4', null, esc(p.name)));
+      card.appendChild(el('p', null, '管线：' + p.ops.map(function (o) { return o; }).join(' → ') + ' · 输入 [' + esc(p.input) + ']'));
+      var b = el('button', null, '▶ 运行预设');
+      b.addEventListener('click', function () { runPipe(p.ops.slice(), p.input.split(',').map(function (s) { return parseFloat(s); })); });
+      card.appendChild(b);
+      presetBox.appendChild(card);
+    });
+    view.appendChild(presetBox);
+
+    var d = el('div', 'demo');
+    d.style.marginTop = '18px';
+    d.appendChild(el('h3', null, '自定义管线<span>从算子池选择（vec → vec；标量算子作为终点指标）</span>'));
+    var sel = el('select');
+    sel.style.cssText = 'background:var(--panel);border:1px solid var(--border2);border-radius:8px;color:var(--txt);padding:7px 12px;font-size:13px;margin-right:10px';
+    PIPELINE_OPS.forEach(function (o) {
+      var op = document.createElement('option');
+      op.value = o[0];
+      op.textContent = o[1] + '（' + o[3] + ' · ' + o[2] + '）';
+      sel.appendChild(op);
+    });
+    var addBtn = el('button', null, '＋ 加入管线');
+    var input = el('input');
+    input.type = 'text';
+    input.value = '2.0, 1.0, 0.5, 3.0, -1.0';
+    input.style.cssText = 'background:var(--panel2);border:1px solid var(--border2);border-radius:8px;color:var(--txt);padding:7px 12px;font-size:13px;width:260px;margin-left:auto';
+    var row = el('div', 'controls');
+    row.appendChild(sel);
+    row.appendChild(addBtn);
+    row.appendChild(input);
+    d.appendChild(row);
+
+    var chainBox = el('div');
+    chainBox.style.cssText = 'font-family:var(--mono);font-size:13px;color:var(--txt2);margin:10px 0;min-height:24px';
+    chainBox.textContent = '当前管线：（空）';
+    d.appendChild(chainBox);
+    var runBtn = el('button', null, '▶ 执行管线');
+    runBtn.disabled = true;
+    d.appendChild(runBtn);
+    var out = el('div');
+    d.appendChild(out);
+    view.appendChild(d);
+
+    var chain = [];
+    function renderChain() {
+      chainBox.innerHTML = chain.length
+        ? '当前管线：<b style="color:var(--cyan)">' + chain.map(function (c) { return esc(c[1]); }).join(' → ') + '</b>'
+        : '当前管线：（空，从上方加入算子）';
+      runBtn.disabled = chain.length === 0;
+    }
+    function runPipe(ops, v) {
+      out.innerHTML = '';
+      var table = el('table');
+      table.innerHTML = '<thead><tr><th>#</th><th>微指令</th><th>族</th><th>输入</th><th>输出</th><th>携带不变量</th></tr></thead>';
+      var tbody = el('tbody');
+      var frag = document.createDocumentFragment();
+      var ok = true;
+      ops.forEach(function (c, i) {
+        var opName = Array.isArray(c) ? c[0] : c;
+        var meta = PIPELINE_OPS.filter(function (o) { return o[0] === opName; })[0] || [opName, opName, '', ''];
+        var before = fmtVec(v);
+        try { v = pipelineApply(opName, v); } catch (e) { ok = false; }
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td class="tid">' + (i + 1) + '</td><td class="tname">' + esc(opName) + '</td>' +
+          '<td style="font-size:12px;color:var(--txt2)">' + esc(meta[3]) + '</td>' +
+          '<td class="res">' + esc(before) + '</td>' +
+          '<td class="res" style="color:var(--cyan)">' + esc(fmtVec(v)) + '</td>' +
+          '<td class="inv">' + esc(meta[2]) + '</td>';
+        frag.appendChild(tr);
+      });
+      tbody.appendChild(frag);
+      table.appendChild(tbody);
+      out.appendChild(table);
+      var sum = el('div', 'summary' + (ok ? ' ok' : ' bad'));
+      sum.textContent = ok
+        ? '管线执行完成 —— ' + ops.length + ' 步全部由已验证微指令驱动（L9 组合层不新增指令）'
+        : '管线执行异常（算子输入类型不匹配）';
+      out.appendChild(sum);
+    }
+    addBtn.addEventListener('click', function () {
+      var op = PIPELINE_OPS.filter(function (o) { return o[0] === sel.value; })[0];
+      if (!op) return;
+      chain.push([op[0], op[1]]);
+      renderChain();
+    });
+    runBtn.addEventListener('click', function () {
+      var v = input.value.split(',').map(function (s) { return parseFloat(s); });
+      if (v.some(function (x) { return !isFinite(x); })) { out.innerHTML = '<div class="summary bad">输入含有非数值</div>'; return; }
+      runPipe(chain, v);
+    });
+  }
+
+  /* ---------------- 视图 5：演示实验室 ---------------- */
   function renderLab(view) {
     view.appendChild(el('h2', null, '演示实验室 <span style="font-size:12px;color:var(--txt3);font-weight:400">三个演示全部由 core.js 真实计算驱动，确定性种子，可复现</span>'));
     view.appendChild(el('div', null, '<div style="height:14px"></div>'));
@@ -556,7 +688,7 @@
     return box;
   }
 
-  /* ---------------- 视图 5：导出 ---------------- */
+  /* ---------------- 视图 6：导出 ---------------- */
   function renderExport(view) {
     view.appendChild(el('h2', null, '导出'));
     view.appendChild(el('div', null, '<div style="height:14px"></div>'));
@@ -572,7 +704,7 @@
 
     var c2 = el('div', 'exp-card');
     c2.appendChild(el('h4', null, '自检报告（Markdown）'));
-    c2.appendChild(el('p', null, '在浏览器内运行全部 64 项不变量检查，导出含实测残差的 Markdown 报告。'));
+    c2.appendChild(el('p', null, '在浏览器内运行全部 ' + AXIOM.checks.length + ' 项不变量检查，导出含实测残差的 Markdown 报告。'));
     var b2 = el('button', null, '⬇ 运行并下载报告');
     b2.addEventListener('click', function () {
       var r = AXIOM.runChecks();
