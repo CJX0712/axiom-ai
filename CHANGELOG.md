@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.1.4] - 2026-10-18
+
+### 通用批处理引擎（Generic Batched Engine）
+- 建造**单一 `batched` 调度器 + `BATCH_SIG` 签名表**，把"沿 batch 维逐位一致"语义一次性覆盖到全部 49 个批兼容算子（取代 v1.1.2 的 16 个手写 `batched_*` 函数）
+- 签名表区分六类：`vec`（整张量算子，如 softmax/normalizeL2）、`elem`（逐元素标量函数，如 sigmoid/relu/gelu）、`pair`、`triple`、`shared`（共享权/参数，如 linear/epsilon_greedy）、`special`（多返回/对象型，如 selfAttention/oneHot）
+- 不变量 +0（仍为 178 核心）：`variant.batched` 聚合检查遍历 `BATCH_SIG`，断言 `batched` 路径 ≡ 逐样本朴素路径（残差 ≤ 1e-15），并带"至少覆盖 60 个算子"守卫
+- 覆盖 16 族：TENSOR/NUMER/NORM/FWD/BWD/INFO/PROB/METRIC/LINALG/OPTIM/SYS/ATTEN/GRAPH/RL/DATA/SAMPLE
+- `arrMaxDiff` 增强：支持对象型返回值（跳过多态 `predict` 等函数字段），避免误判
+- 指标：verified **290 → 339 / 1024**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 484.5 KB
+- 文档：README/ARCHITECTURE 徽章与分层计数一致性更新；gen-registry 由 `BATCH_SIG` 驱动 batched 变体，移除 16 个显式条目
+
 ## [1.1.3] - 2026-10-18
 
 ### 融合变体内核化（fused variant layer）

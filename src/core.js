@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.3';
+  var VERSION = '1.1.4';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2411,37 +2411,152 @@
    * 12.15 执行变体内核（v1.1.2）—— batched：沿 batch 维独立执行，与逐样本调用逐位一致
    *        inplace：原地执行，返回值与 out-of-place 逐位一致
    * ======================================================================*/
-  function arrMaxDiff(a, b) { // 递归逐位最大绝对差（数值数组）
+  function arrMaxDiff(a, b) { // 递归逐位最大绝对差（数值数组/对象）
     if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b);
     if (Array.isArray(a) && Array.isArray(b)) {
       var mx = 0;
       for (var i = 0; i < a.length; i++) mx = Math.max(mx, arrMaxDiff(a[i], b[i]));
       return mx;
     }
+    if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+      var ks = Object.keys(a), mo = 0;
+      for (var ki = 0; ki < ks.length; ki++) {
+        var av = a[ks[ki]], bv = b[ks[ki]];
+        if (typeof av === 'function' || typeof bv === 'function') continue; // 函数不比较（仅校验数值数据）
+        mo = Math.max(mo, arrMaxDiff(av, bv));
+      }
+      return mo;
+    }
     return (a === b) ? 0 : 1; // 非数值/数组（如 classes 数组、字符串）
   }
-  function batched_transpose(Abatch) { return Abatch.map(function (M) { return transpose(M); }); }
-  function batched_matVec(pairs) { return pairs.map(function (p) { return matVec(p[0], p[1]); }); }
-  function batched_softmax(Xbatch) { return Xbatch.map(function (r) { return softmax(r); }); }
-  function batched_gaussPDF(triples) { return triples.map(function (t) { return gaussPDF(t[0], t[1], t[2]); }); }
-  function batched_entropy(Pbatch) { return Pbatch.map(function (p) { return entropy(p); }); }
-  function batched_normalizeL2(Xbatch) { return Xbatch.map(function (x) { return normalizeL2(x); }); }
-  function batched_linear(Xbatch, W, b) { return Xbatch.map(function (X) { return linear(X, W, b); }); }
-  function batched_gradRelu(Xbatch) { return Xbatch.map(function (x) { return gradRelu(x); }); }
-  function batched_mse(pairs) { return pairs.map(function (p) { return mse(p[0], p[1]); }); }
+  /* batched 特殊变体（多返回 / 对象型，需自定义聚合） */
   function batched_selfAttention(pairs) {
     return pairs.map(function (p) { var r = selfAttention(p[0], p[1], p[2], false); return [r.weights, r.output]; });
   }
-  function batched_marginal(Jbatch) { return Jbatch.map(function (J) { return marginal(J); }); }
-  function batched_epsilonGreedy(qrows, eps, rng) { return qrows.map(function (q) { return epsilonGreedy(q, eps, rng); }); }
-  function batched_gradClip(Gbatch, maxNorm) { return Gbatch.map(function (g) { return gradClip(g, maxNorm); }); }
   function batched_oneHot(labelsBatch) {
     var single = oneHot(labelsBatch[0]);
     var matrix = labelsBatch.map(function (lbls) { return oneHot(lbls).matrix; });
     return { classes: single.classes, matrix: matrix };
   }
-  function batched_reduceAll(Xbatch) { return Xbatch.map(function (xs) { return reduceAll(xs); }); }
-  function batched_categorical(Pbatch) { return Pbatch.map(function (p) { return categoricalSample(p[0], p[1]); }); }
+
+  /* 12.16 通用批处理引擎（v1.1.4）—— 单一 batched 调度器覆盖全部批兼容算子
+   * 零重写原则落地：batched 路径 ≡ 逐样本朴素路径（参照实现 vs 主实现）
+   *   cls: 'vec'     batch 为张量数组，fn 吃整个张量         → batch.map(fn)
+   *        'elem'    fn 为逐元素标量函数                     → batch.map(v => v.map(fn))
+   *        'pair'    batch 为 [a,b] 对数组                   → batch.map(p => fn(p[0],p[1]))
+   *        'triple'  batch 为 [a,b,c] 数组                   → batch.map(p => fn(p[0],p[1],p[2]))
+   *        'shared'  batch 为张量数组，shared 参数共享        → batch.map(x => fn(x,...shared))
+   *        'special' 自定义聚合（多返回/对象型），ref 在 sig 给定 */
+  var _V = [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]];
+  var _M = [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]];
+  var _P = [[[1, 2, 3], [3, 2, 1]], [[4, 5, 6], [6, 5, 4]], [[0.1, 0.2, 0.3], [0.3, 0.2, 0.1]]];
+  var _T = [[1, 0, 1], [0.5, 0, 1], [2, 1, 1]];
+  var _MM = [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]], [[[5, 6], [7, 8]], [[2, 1], [0, 3]]], [[[2, 1], [0, 3]], [[1, 2], [3, 4]]]];
+  var _MV = [[[[1, 2], [3, 4]], [1, 1]], [[[5, 6], [7, 8]], [0, 1]], [[[2, 1], [0, 3]], [1, 0]]];
+  var _MS = [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]]; // 对称正定（Cholesky/逆 所需）
+  var _SOLVE = (function () { var A1 = spdMatrix(2, 1), A2 = spdMatrix(2, 2); return [[A1, [1, 2]], [A2, [3, 4]]]; })();
+  var _LSTSQ = [[[[1, 2], [3, 4], [5, 6]], [1, 2, 3]], [[[2, 1], [1, 2], [0, 1]], [4, 5, 6]]];
+  var BATCH_SIG = {
+    /* TENSOR 张量变换（整张量算子） */
+    'TENSOR.transpose': { cls: 'vec', fn: transpose, sample: _M },
+    'TENSOR.copy': { cls: 'vec', fn: tensorCopy, sample: _M },
+    'TENSOR.flatten': { cls: 'vec', fn: flatten, sample: _M },
+    /* NUMER 数值稳定：激活类为逐元素标量，其余为整向量 */
+    'NUMER.softmax': { cls: 'vec', fn: softmax, sample: _V },
+    'NUMER.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V },
+    'NUMER.tanh': { cls: 'elem', fn: tanh, sample: _V },
+    'NUMER.relu': { cls: 'elem', fn: relu, sample: _V },
+    'NUMER.gelu': { cls: 'elem', fn: gelu, sample: _V },
+    'NUMER.erf': { cls: 'elem', fn: erf, sample: _V },
+    'NUMER.reciprocal': { cls: 'elem', fn: reciprocal, sample: _V },
+    'NUMER.expm1': { cls: 'elem', fn: expm1, sample: _V },
+    'NUMER.log1p': { cls: 'elem', fn: log1p, sample: _V },
+    'NUMER.kahanSum': { cls: 'vec', fn: kahanSum, sample: _V },
+    'NUMER.exactSum': { cls: 'vec', fn: exactSum, sample: _V },
+    /* NORM 归一化（整向量） */
+    'NORM.l1': { cls: 'vec', fn: l1Norm, sample: _V },
+    'NORM.l2': { cls: 'vec', fn: l2Norm, sample: _V },
+    'NORM.linf': { cls: 'vec', fn: linfNorm, sample: _V },
+    'NORM.normalize_l2': { cls: 'vec', fn: normalizeL2, sample: _V },
+    'NORM.minmax': { cls: 'vec', fn: minmaxScale, sample: _V },
+    'NORM.zscore': { cls: 'vec', fn: zscore, sample: _V },
+    /* FWD 前向：线性层为共享权变体，激活类逐元素标量 */
+    'FWD.softmax': { cls: 'vec', fn: softmax, sample: _V },
+    'FWD.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V },
+    'FWD.gelu': { cls: 'elem', fn: gelu, sample: _V },
+    'FWD.relu': { cls: 'elem', fn: relu, sample: _V },
+    'FWD.tanh': { cls: 'elem', fn: tanh, sample: _V },
+    'FWD.linear': { cls: 'shared', fn: linear, shared: [[[1, 0], [0, 1]], [0, 0]], sample: _M },
+    /* BWD 反向：梯度算子为整向量 */
+    'BWD.grad_relu': { cls: 'vec', fn: gradRelu, sample: _V },
+    'BWD.grad_tanh': { cls: 'vec', fn: gradTanh, sample: _V },
+    /* INFO 信息论 */
+    'INFO.entropy': { cls: 'vec', fn: entropy, sample: _V },
+    'INFO.cross_entropy': { cls: 'pair', fn: crossEntropy, sample: _P },
+    'INFO.kl': { cls: 'pair', fn: klDivergence, sample: _P },
+    'INFO.js': { cls: 'pair', fn: jsDivergence, sample: _P },
+    'INFO.mutual_info': { cls: 'vec', fn: mutualInfo, sample: _M },
+    'INFO.conditional_entropy': { cls: 'vec', fn: conditionalEntropy, sample: _M },
+    'INFO.gini': { cls: 'vec', fn: gini, sample: _V },
+    'INFO.normalize_dist': { cls: 'vec', fn: normalizeDist, sample: _V },
+    /* PROB 概率 */
+    'PROB.gauss_pdf': { cls: 'triple', fn: gaussPDF, sample: _T },
+    'PROB.gauss_cdf': { cls: 'triple', fn: normalCDF, sample: _T },
+    'PROB.covariance': { cls: 'pair', fn: covariance, sample: _P },
+    'PROB.expectation': { cls: 'vec', fn: expectation, sample: _V },
+    'PROB.variance': { cls: 'vec', fn: variance, sample: _V },
+    'PROB.marginal': { cls: 'vec', fn: marginal, sample: _M },
+    'PROB.normalize_dist': { cls: 'vec', fn: normalizeDist, sample: _V },
+    /* METRIC 评估（成对） */
+    'METRIC.accuracy': { cls: 'pair', fn: accuracy, sample: _P },
+    'METRIC.precision': { cls: 'pair', fn: precision, sample: _P },
+    'METRIC.recall': { cls: 'pair', fn: recall, sample: _P },
+    'METRIC.f1': { cls: 'pair', fn: f1, sample: _P },
+    'METRIC.mse': { cls: 'pair', fn: mse, sample: _P },
+    'METRIC.mae': { cls: 'pair', fn: mae, sample: _P },
+    'METRIC.cosine': { cls: 'pair', fn: cosineSimilarity, sample: _P },
+    /* LINALG 线性代数 */
+    'LINALG.matmul': { cls: 'pair', fn: matMul, sample: _MM },
+    'LINALG.matvec': { cls: 'pair', fn: matVec, sample: _MV },
+    'LINALG.solve': { cls: 'pair', fn: solveLinear, sample: _SOLVE },
+    'LINALG.lstsq': { cls: 'pair', fn: linearRegression, sample: _LSTSQ },
+    'LINALG.trace': { cls: 'vec', fn: trace, sample: _MS },
+    'LINALG.det': { cls: 'vec', fn: det, sample: _MS },
+    'LINALG.inverse': { cls: 'vec', fn: inverse, sample: _MS },
+    'LINALG.cholesky': { cls: 'vec', fn: cholesky, sample: _MS },
+    /* OPTIM 优化 */
+    'OPTIM.grad_clip': { cls: 'shared', fn: gradClip, shared: [1], sample: _V },
+    'OPTIM.grad_norm': { cls: 'vec', fn: gradNorm, sample: _V },
+    /* SYS 系统 */
+    'SYS.reduce_all': { cls: 'vec', fn: reduceAll, sample: _V },
+    'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: _V },
+    /* ATTEN 注意力（特殊聚合） */
+    'ATTEN.self_attn': { cls: 'special', fn: batched_selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]]]],
+      ref: function (b) { return b.map(function (p) { var r = selfAttention(p[0], p[1], p[2], false); return [r.weights, r.output]; }); } },
+    /* GRAPH 图推断 */
+    'GRAPH.marginal': { cls: 'vec', fn: marginal, sample: _M },
+    /* RL 强化学习（共享 ε/rng） */
+    'RL.epsilon_greedy': { cls: 'shared', fn: epsilonGreedy, shared: [0, mulberry32(99)], sample: [[1, 5, 2], [4, 1, 0]] },
+    /* DATA 数据管线（特殊聚合） */
+    'DATA.onehot': { cls: 'special', fn: batched_oneHot, sample: [[0, 1, 2]],
+      ref: function (b) { var o = oneHot(b[0]); return { classes: o.classes, matrix: [o.matrix] }; } },
+    /* SAMPLE 采样生成 */
+    'SAMPLE.categorical': { cls: 'pair', fn: categoricalSample, sample: [[[0.2, 0.3, 0.5], 7], [[0.1, 0.4, 0.5], 5]] },
+    'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V },
+    'SAMPLE.topk': { cls: 'shared', fn: topK, shared: [2], sample: _V }
+  };
+  function batched(opCode, batch) {
+    var s = BATCH_SIG[opCode];
+    if (!s) throw new Error('batched: 无签名 ' + opCode);
+    var f = s.fn;
+    if (s.cls === 'vec') return batch.map(function (x) { return f(x); });
+    if (s.cls === 'elem') return batch.map(function (v) { return v.map(function (e) { return f(e); }); });
+    if (s.cls === 'pair') return batch.map(function (p) { return f(p[0], p[1]); });
+    if (s.cls === 'triple') return batch.map(function (p) { return f(p[0], p[1], p[2]); });
+    if (s.cls === 'shared') return batch.map(function (x) { return f.apply(null, [x].concat(s.shared)); });
+    if (s.cls === 'special') return f(batch);
+    throw new Error('batched: 未知 cls ' + s.cls);
+  }
   /* inplace 变体（原地覆盖输入，返回值与 out-of-place 逐位一致） */
   function inplace_tensorFill(dst, val) { for (var i = 0; i < dst.length; i++) dst[i] = val; return dst; }
   function inplace_tensorCopy(dst, src) { for (var i = 0; i < dst.length; i++) dst[i] = src[i]; return dst; }
@@ -3998,42 +4113,29 @@
     return bad;
   });
 
-  /* 执行变体：batched / inplace 逐位一致性（v1.1.2） */
-  check('variant.batched：沿 batch 维独立执行，与逐样本调用逐位一致（16 族代表算子）', 1e-15, function () {
-    var bad = 0;
-    var A3 = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];
-    if (arrMaxDiff(batched_transpose(A3), A3.map(transpose)) > 1e-15) bad++;
-    var M = [[1, 2], [3, 4]], x = [1, 1];
-    if (arrMaxDiff(batched_matVec([[M, x]]), [matVec(M, x)]) > 1e-15) bad++;
-    var X2 = [[1, 2,3], [0.1, 0.2, 0.3]];
-    if (arrMaxDiff(batched_softmax(X2), X2.map(softmax)) > 1e-15) bad++;
-    var T3 = [[0, 0, 1], [1, 0, 2], [2, 1, 1]];
-    if (arrMaxDiff(batched_gaussPDF(T3), T3.map(function (t) { return gaussPDF(t[0], t[1], t[2]); })) > 1e-15) bad++;
-    var P2 = [[0.5, 0.5], [0.2, 0.8]];
-    if (arrMaxDiff(batched_entropy(P2), P2.map(entropy)) > 1e-15) bad++;
-    var V2 = [[3, 4], [1, 2, 2]];
-    if (arrMaxDiff(batched_normalizeL2(V2), V2.map(normalizeL2)) > 1e-15) bad++;
-    var W = [[1, 0], [0, 1]], b = [0, 0];
-    var X1 = [[1, 2], [3, 4]], X2 = [[5, 6]];
-    if (arrMaxDiff(batched_linear([X1, X2], W, b), [linear(X1, W, b), linear(X2, W, b)]) > 1e-15) bad++;
-    var G2 = [[-1, 2, 0], [3, -4, 5]];
-    if (arrMaxDiff(batched_gradRelu(G2), G2.map(gradRelu)) > 1e-15) bad++;
-    if (arrMaxDiff(batched_mse([[[1, 2], [1, 2]], [[0, 0], [0, 0]]]), [0, 0]) > 1e-15) bad++;
-    var q = [[1, 0], [0, 1]], k = [[1, 0], [0, 1]], v = [[1, 2], [3, 4]];
-    var bs = batched_selfAttention([[q, k, v]])[0];
-    var s = selfAttention(q, k, v, false);
-    if (arrMaxDiff(bs, [s.weights, s.output]) > 1e-15) bad++;
-    var J = [[0.2, 0.3], [0.25, 0.25]];
-    if (arrMaxDiff(batched_marginal([J]), [marginal(J)]) > 1e-15) bad++;
-    if (arrMaxDiff(batched_epsilonGreedy([[1, 5, 2], [4, 1, 0]], 0, mulberry32(99)), [1, 0]) > 0) bad++;
-    if (arrMaxDiff(batched_gradClip([[3, 4], [1, 1]], 1), [gradClip([3, 4], 1), gradClip([1, 1], 1)]) > 1e-15) bad++;
-    var oh = batched_oneHot([[0, 1, 2]]);
-    if (arrMaxDiff(oh.matrix[0], oneHot([0, 1, 2]).matrix) > 0 || oh.classes.join(',') !== '0,1,2') bad++;
-    if (arrMaxDiff(batched_reduceAll([[1, 2, 3], [4, 5, 6]]), [6, 15]) > 1e-15) bad++;
-    var cat = batched_categorical([[[0.2, 0.3, 0.5], 7]])[0];
-    var refcat = categoricalSample([0.2, 0.3, 0.5], 7);
-    if (cat.length !== refcat.length || arrMaxDiff(cat, refcat) > 0) bad++;
-    return bad;
+  /* 执行变体：batched / inplace 逐位一致性（v1.1.4 通用引擎） */
+  function cloneVal(o) { // 深拷贝样本，避免参照路径与 batched 路径共享可变输入（如 lstsq 原地归一化 X）
+    if (typeof o !== 'object' || o === null) return o;
+    if (Array.isArray(o)) return o.map(cloneVal);
+    var r = {}; for (var k in o) r[k] = cloneVal(o[k]); return r;
+  }
+  check('variant.batched：通用批处理引擎 — batched 路径 ≡ 逐样本朴素路径（全族批兼容算子，逐位一致）', 1e-15, function () {
+    var bad = 0, n = 0;
+    for (var code in BATCH_SIG) {
+      if (!BATCH_SIG.hasOwnProperty(code)) continue;
+      var s = BATCH_SIG[code]; n++;
+      var got = batched(code, cloneVal(s.sample));
+      var sc = cloneVal(s.sample), ref;
+      if (s.cls === 'special') ref = s.ref(sc);
+      else if (s.cls === 'vec') ref = sc.map(function (x) { return s.fn(x); });
+      else if (s.cls === 'elem') ref = sc.map(function (v) { return v.map(function (e) { return s.fn(e); }); });
+      else if (s.cls === 'pair') ref = sc.map(function (p) { return s.fn(p[0], p[1]); });
+      else if (s.cls === 'triple') ref = sc.map(function (p) { return s.fn(p[0], p[1], p[2]); });
+      else if (s.cls === 'shared') ref = sc.map(function (x) { return s.fn.apply(null, [x].concat(s.shared)); });
+      else { bad++; continue; }
+      if (arrMaxDiff(got, ref) > 1e-15) bad++;
+    }
+    return bad + (n < 60 ? 1e6 : 0); // 守卫：至少覆盖 60 个批兼容算子
   });
   check('variant.inplace：原地执行与 out-of-place 逐位一致', 1e-15, function () {
     var bad = 0;
@@ -4287,14 +4389,10 @@
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
-    /* 执行变体内核（v1.1.2） */
+    /* 执行变体内核（v1.1.2–v1.1.4） */
     arrMaxDiff: arrMaxDiff,
-    batched_transpose: batched_transpose, batched_matVec: batched_matVec, batched_softmax: batched_softmax,
-    batched_gaussPDF: batched_gaussPDF, batched_entropy: batched_entropy, batched_normalizeL2: batched_normalizeL2,
-    batched_linear: batched_linear, batched_gradRelu: batched_gradRelu, batched_mse: batched_mse,
-    batched_selfAttention: batched_selfAttention, batched_marginal: batched_marginal, batched_epsilonGreedy: batched_epsilonGreedy,
-    batched_gradClip: batched_gradClip, batched_oneHot: batched_oneHot, batched_reduceAll: batched_reduceAll,
-    batched_categorical: batched_categorical,
+    batched: batched, BATCH_SIG: BATCH_SIG,                 // 通用批处理引擎（v1.1.4）
+    batched_selfAttention: batched_selfAttention, batched_oneHot: batched_oneHot,
     inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
     /* 融合变体内核（v1.1.3） */
     fused_transpose_flatten: fused_transpose_flatten, fused_matvec_relu: fused_matvec_relu,

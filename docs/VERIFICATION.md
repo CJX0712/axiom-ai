@@ -185,7 +185,7 @@
 | ✅ | graph.gibbs：平稳分布 = 解析解 [0.6, 0.4]（n=4e4） | 2.05e-4 | 2.00e-2 |
 | ✅ | graph.mcmc：Metropolis 经验分布 ≈ 目标分布（n=4e4） | 3.95e-3 | 2.00e-2 |
 | ✅ | info.rate_distortion：R(D) = ½log₂(σ²/D)；已知值；单调不增 | 0 | 1.00e-12 |
-| ✅ | variant.batched：沿 batch 维独立执行，与逐样本调用逐位一致（16 族代表算子） | 0 | 1.00e-15 |
+| ✅ | variant.batched：通用批处理引擎 — batched 路径 ≡ 逐样本朴素路径（全族批兼容算子，逐位一致） | 0 | 1.00e-15 |
 | ✅ | variant.inplace：原地执行与 out-of-place 逐位一致 | 0 | 1.00e-15 |
 | ✅ | variant.fused：与相邻算子融合，输出等于顺序组合（参照实现 vs 主实现，16 族代表算子） | 0 | 1.00e-15 |
 
@@ -202,29 +202,29 @@
 | 全部含数学不变量 | ✅ |
 | verified 项 impl 均为 core.js 真实导出 | ✅ |
 | 仅 base 变体可为 verified | ❌ |
-| verified 数 > 0（当前 290） | ✅ |
+| verified 数 > 0（当前 339） | ✅ |
 
 ## 3. 微指令内核化覆盖（verified = 有 core.js 实现且通过不变量自检）
 
 | 指令族 | verified / 16 |
 |---|---|
 | ATTEN | 18 / 16 |
-| BWD | 18 / 16 |
+| BWD | 19 / 16 |
 | DATA | 18 / 16 |
-| FWD | 18 / 16 |
+| FWD | 23 / 16 |
 | GRAPH | 18 / 16 |
-| INFO | 18 / 16 |
-| LINALG | 18 / 16 |
-| METRIC | 18 / 16 |
-| NORM | 19 / 16 |
-| NUMER | 18 / 16 |
-| OPTIM | 18 / 16 |
-| PROB | 18 / 16 |
+| INFO | 25 / 16 |
+| LINALG | 25 / 16 |
+| METRIC | 24 / 16 |
+| NORM | 24 / 16 |
+| NUMER | 25 / 16 |
+| OPTIM | 19 / 16 |
+| PROB | 23 / 16 |
 | RL | 18 / 16 |
-| SAMPLE | 18 / 16 |
-| SYS | 17 / 16 |
-| TENSOR | 20 / 16 |
-| **合计** | **290 / 1024** |
+| SAMPLE | 20 / 16 |
+| SYS | 18 / 16 |
+| TENSOR | 22 / 16 |
+| **合计** | **339 / 1024** |
 
 ## 4. 残差分级说明
 

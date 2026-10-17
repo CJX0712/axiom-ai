@@ -13,6 +13,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const AXIOM = require(path.join(__dirname, '..', 'src', 'core.js'));
+const BATCH_SIG = AXIOM.BATCH_SIG || {}; // 通用批处理引擎签名表（v1.1.4）
 
 const VARIANTS = [
   { key: 'base', note: '标量/单样本语义' },
@@ -394,15 +396,7 @@ const IMPL = {
   'SYS.ref_count': 'RefCounter', 'SYS.stream': 'TaskStream', 'SYS.checkpoint': 'checkpoint',
   'SYS.profile': 'Profiler', 'SYS.trace': 'Tracer', 'SYS.dispatch': 'Dispatcher',
   'SYS.barrier': 'Barrier', 'SYS.event': 'EventLog',   'SYS.prefetch': 'prefetch',
-  /* 执行变体内核（v1.1.2）—— batched / inplace 变体 */
-  'TENSOR.transpose.batched': 'batched_transpose', 'LINALG.matvec.batched': 'batched_matVec',
-  'NUMER.softmax.batched': 'batched_softmax', 'PROB.gauss_pdf.batched': 'batched_gaussPDF',
-  'INFO.entropy.batched': 'batched_entropy', 'NORM.normalize_l2.batched': 'batched_normalizeL2',
-  'FWD.linear.batched': 'batched_linear', 'BWD.grad_relu.batched': 'batched_gradRelu',
-  'METRIC.mse.batched': 'batched_mse', 'ATTEN.self_attn.batched': 'batched_selfAttention',
-  'GRAPH.marginal.batched': 'batched_marginal', 'RL.epsilon_greedy.batched': 'batched_epsilonGreedy',
-  'OPTIM.grad_clip.batched': 'batched_gradClip', 'DATA.onehot.batched': 'batched_oneHot',
-  'SYS.reduce_all.batched': 'batched_reduceAll', 'SAMPLE.categorical.batched': 'batched_categorical',
+  /* 执行变体内核（v1.1.2）—— inplace 变体；batched 由通用引擎 BATCH_SIG 驱动（v1.1.4） */
   'TENSOR.fill.inplace': 'inplace_tensorFill', 'TENSOR.copy.inplace': 'inplace_tensorCopy',
   'NORM.normalize_l2.inplace': 'inplace_normalizeL2',
   /* 融合变体内核（v1.1.3）—— fused 变体：与相邻算子融合，数学语义不变 */
@@ -426,9 +420,11 @@ for (const g of GROUPS) {
       n++;
       const key = g.code + '.' + op[0];
       const baseImpl = IMPL[key] !== undefined ? IMPL[key] : op[3];
-      const impl = v.key === 'base'
-        ? baseImpl
-        : (IMPL[key + '.' + v.key] !== undefined ? IMPL[key + '.' + v.key] : null);
+      let impl = null;
+      if (v.key === 'base') impl = baseImpl;
+      else if (v.key === 'batched') impl = (IMPL[key + '.batched'] !== undefined) ? IMPL[key + '.batched'] : ((BATCH_SIG[key] !== undefined) ? 'batched' : null);
+      else if (v.key === 'fused') impl = (IMPL[key + '.fused'] !== undefined) ? IMPL[key + '.fused'] : null;
+      else if (v.key === 'inplace') impl = (IMPL[key + '.inplace'] !== undefined) ? IMPL[key + '.inplace'] : null;
       registry.push({
         id: 'L10.' + String(n).padStart(4, '0'),
         layer: 10,
