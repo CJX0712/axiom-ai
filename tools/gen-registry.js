@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const AXIOM = require(path.join(__dirname, '..', 'src', 'core.js'));
 const BATCH_SIG = AXIOM.BATCH_SIG || {}; // 通用批处理引擎签名表（v1.1.4）
+const INPLACE_SIG = AXIOM.INPLACE_SIG || {}; // 通用原地引擎签名表（v1.1.5）
 
 const VARIANTS = [
   { key: 'base', note: '标量/单样本语义' },
@@ -424,7 +425,7 @@ for (const g of GROUPS) {
       if (v.key === 'base') impl = baseImpl;
       else if (v.key === 'batched') impl = (IMPL[key + '.batched'] !== undefined) ? IMPL[key + '.batched'] : ((BATCH_SIG[key] !== undefined) ? 'batched' : null);
       else if (v.key === 'fused') impl = (IMPL[key + '.fused'] !== undefined) ? IMPL[key + '.fused'] : null;
-      else if (v.key === 'inplace') impl = (IMPL[key + '.inplace'] !== undefined) ? IMPL[key + '.inplace'] : null;
+      else if (v.key === 'inplace') impl = (IMPL[key + '.inplace'] !== undefined) ? IMPL[key + '.inplace'] : ((INPLACE_SIG[key] !== undefined) ? 'inplace' : null);
       registry.push({
         id: 'L10.' + String(n).padStart(4, '0'),
         layer: 10,

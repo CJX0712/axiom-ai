@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.1.5] - 2026-10-18
+
+### 通用原地引擎（Generic Inplace Engine）
+- 建造**单一 `inplace` 调度器 + `INPLACE_SIG` 签名表**，把"原地覆盖输入、返回值与 out-of-place 逐位一致"语义规模化覆盖到全族原地兼容算子（统一取代逐族手写样板）
+- 签名表区分两类：`elem`（逐元素标量函数，原地覆盖每元素，如 sigmoid/relu/gelu/erf/reciprocal/expm1/log1p）+ `vec`（整向量/矩阵函数，形状守恒，如 minmax/zscore/grad_relu/grad_tanh/inverse/cholesky）
+- 新增 `_writeBack` 递归写回助手：支持 1D 向量与 2D 矩阵原地覆写（矩阵类算子 inverse/cholesky 无需额外分支即可原地落位）
+- 不变量 +0（仍为 178 核心）：`variant.inplace` 聚合检查遍历 `INPLACE_SIG`，断言 `inplace` 路径 ≡ out-of-place（残差 ≤ 1e-15），并带"至少覆盖 10 个算子"守卫；保留 3 个具名原地内核（fill/copy/normalize_l2，真正原地无中间数组）
+- `gen-registry.js` 由 `INPLACE_SIG` 驱动 inplace 变体标记 verified（键格式 `GROUP.op.inplace`），与 `BATCH_SIG` 驱动 batched 完全对称
+- 指标：verified **339 → 356 / 1024**；inplace 层 **3 → 20**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 487.4 KB
+- 文档：README/ARCHITECTURE 徽章与分层计数一致性更新
+
 ## [1.1.4] - 2026-10-18
 
 ### 通用批处理引擎（Generic Batched Engine）

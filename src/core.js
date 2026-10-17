@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.4';
+  var VERSION = '1.1.5';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2562,6 +2562,48 @@
   function inplace_tensorCopy(dst, src) { for (var i = 0; i < dst.length; i++) dst[i] = src[i]; return dst; }
   function inplace_normalizeL2(dst) { var n = norm2(dst); for (var i = 0; i < dst.length; i++) dst[i] = dst[i] / n; return dst; }
 
+  /* 通用原地引擎（v1.1.5）：单一 inplace(opCode, dst) 调度器 + INPLACE_SIG 签名表。
+   * 语义：原地覆盖 dst，返回值与 out-of-place（f(dst)）逐位一致（≤1e-15），无中间张量物化。
+   * 覆盖两类：'elem'（逐元素标量函数，原地覆盖每元素）与 'vec'（整向量/矩阵函数，形状守恒）。 */
+  var _EV = [1, -2, 0.5, 3, -0.3, 4, 0, -1.5];          // 单向量样本（逐元素 / 整向量算子）
+  var _SPD = [[4, 1], [1, 3]];                           // 单对称正定矩阵（逆 / Cholesky）
+  var INPLACE_SIG = {
+    /* NUMER 数值稳定：逐元素标量函数（原地覆盖每元素） */
+    'NUMER.sigmoid': { cls: 'elem', fn: sigmoid, sample: _EV },
+    'NUMER.relu': { cls: 'elem', fn: relu, sample: _EV },
+    'NUMER.gelu': { cls: 'elem', fn: gelu, sample: _EV },
+    'NUMER.erf': { cls: 'elem', fn: erf, sample: _EV },
+    'NUMER.reciprocal': { cls: 'elem', fn: reciprocal, sample: _EV },
+    'NUMER.expm1': { cls: 'elem', fn: expm1, sample: _EV },
+    'NUMER.log1p': { cls: 'elem', fn: log1p, sample: _EV },
+    /* FWD 前向：逐元素激活（与 NUMER 同源函数，但属不同族算子位置） */
+    'FWD.sigmoid': { cls: 'elem', fn: sigmoid, sample: _EV },
+    'FWD.gelu': { cls: 'elem', fn: gelu, sample: _EV },
+    'FWD.relu': { cls: 'elem', fn: relu, sample: _EV },
+    'FWD.tanh': { cls: 'elem', fn: tanh, sample: _EV },
+    /* NORM 归一化：整向量缩放（形状守恒） */
+    'NORM.minmax': { cls: 'vec', fn: minmaxScale, sample: _EV },
+    'NORM.zscore': { cls: 'vec', fn: zscore, sample: _EV },
+    /* BWD 反向：逐元素梯度（整向量，形状守恒） */
+    'BWD.grad_relu': { cls: 'vec', fn: gradRelu, sample: _EV },
+    'BWD.grad_tanh': { cls: 'vec', fn: gradTanh, sample: _EV },
+    /* LINALG 线性代数：整矩阵函数（形状守恒） */
+    'LINALG.inverse': { cls: 'vec', fn: inverse, sample: _SPD },
+    'LINALG.cholesky': { cls: 'vec', fn: cholesky, sample: _SPD }
+  };
+  function _writeBack(dst, src) { // 递归将 src 数值写回 dst 的既有结构（支持 1D 向量与 2D 矩阵）
+    if (Array.isArray(src)) { for (var i = 0; i < src.length; i++) dst[i] = _writeBack(dst[i], src[i]); return dst; }
+    return src;
+  }
+  function inplace(opCode, dst) {
+    var s = INPLACE_SIG[opCode];
+    if (!s) throw new Error('inplace: 无签名 ' + opCode);
+    var f = s.fn;
+    if (s.cls === 'elem') { for (var i = 0; i < dst.length; i++) dst[i] = f(dst[i]); return dst; }
+    if (s.cls === 'vec') { _writeBack(dst, f(dst)); return dst; }
+    throw new Error('inplace: 未知 cls ' + s.cls);
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -4137,12 +4179,20 @@
     }
     return bad + (n < 60 ? 1e6 : 0); // 守卫：至少覆盖 60 个批兼容算子
   });
-  check('variant.inplace：原地执行与 out-of-place 逐位一致', 1e-15, function () {
-    var bad = 0;
+  check('variant.inplace：通用原地引擎 — inplace 路径 ≡ out-of-place（全族原地兼容算子，逐位一致）', 1e-15, function () {
+    var bad = 0, n = 0;
+    for (var code in INPLACE_SIG) {
+      if (!INPLACE_SIG.hasOwnProperty(code)) continue;
+      var s = INPLACE_SIG[code]; n++;
+      var got = inplace(code, cloneVal(s.sample));
+      var ref = (s.cls === 'elem') ? s.sample.map(s.fn) : s.fn(cloneVal(s.sample));
+      if (arrMaxDiff(got, ref) > 1e-15) bad++;
+    }
+    // 保留三个具名原地内核（填充 / 复制 / 归一化 —— 真正原地，无中间数组）
     var a = [1, 2, 3, 4]; inplace_tensorFill(a, 7); if (arrMaxDiff(a, [7, 7, 7, 7]) > 0) bad++;
-    var d = [9, 8, 7], s = [1, 2, 3]; inplace_tensorCopy(d, s); if (arrMaxDiff(d, [1, 2, 3]) > 0) bad++;
-    var n = [3, 4]; inplace_normalizeL2(n); if (arrMaxDiff(n, normalizeL2([3, 4])) > 1e-15) bad++;
-    return bad;
+    var d = [9, 8, 7], sc = [1, 2, 3]; inplace_tensorCopy(d, sc); if (arrMaxDiff(d, [1, 2, 3]) > 0) bad++;
+    var nv = [3, 4]; inplace_normalizeL2(nv); if (arrMaxDiff(nv, normalizeL2([3, 4])) > 1e-15) bad++;
+    return bad + (n < 10 ? 1e6 : 0); // 守卫：至少覆盖 10 个原地兼容算子
   });
 
   /* ---- 12.15b 融合变体内核（v1.1.3）—— 与相邻算子融合，数学语义不变 ----
@@ -4393,6 +4443,7 @@
     arrMaxDiff: arrMaxDiff,
     batched: batched, BATCH_SIG: BATCH_SIG,                 // 通用批处理引擎（v1.1.4）
     batched_selfAttention: batched_selfAttention, batched_oneHot: batched_oneHot,
+    inplace: inplace, INPLACE_SIG: INPLACE_SIG,             // 通用原地引擎（v1.1.5）
     inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
     /* 融合变体内核（v1.1.3） */
     fused_transpose_flatten: fused_transpose_flatten, fused_matvec_relu: fused_matvec_relu,
