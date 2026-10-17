@@ -1,5 +1,20 @@
 # 更新日志
 
+## [1.1.3] - 2026-10-18
+
+### 融合变体内核化（fused variant layer）
+- 注册表生成器支持 `fused` 变体标记 verified（键格式 `GROUP.op.fused`）
+- 新增 **fused 变体内核**（与相邻算子融合，消除中间张量物化，输出等于顺序组合）：覆盖 16 族代表算子
+  TENSOR.transpose∘flatten · LINALG.matvec∘relu · NUMER.softmax∘log(稳定 log-softmax) ·
+  PROB.gauss_pdf∘log(稳定 log-PDF) · INFO.cross_entropy∘softmax(稳定 softmax+CE) ·
+  OPTIM.grad_clip∘grad_norm · FWD.linear∘relu · BWD.grad_tanh∘上游梯度 ·
+  NORM.normalize_l2∘仿射缩放 · ATTEN.qk_dot∘scale∘因果掩码∘softmax(因果注意力权重) ·
+  SAMPLE.topk∘temperature · GRAPH.marginal∘normalize · RL.value_iter∘greedy ·
+  METRIC.mse∘sqrt(RMSE) · DATA.label_encode∘one_hot · SYS.reduce_all∘broadcast
+- 不变量 +1：`variant.fused`（16 族代表算子融合一致性，参照实现 vs 主实现）
+- 指标：verified **274 → 290 / 1024**；核心不变量 **177 → 178**；axiom.html 479.3 KB
+- 文档：README / ARCHITECTURE 徽章与分层计数一致性更新；路线图标记执行变体层 16 族全覆盖
+
 ## [1.1.2] - 2026-10-18
 
 ### 执行变体内核化（variant layer）

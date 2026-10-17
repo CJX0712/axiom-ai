@@ -404,7 +404,16 @@ const IMPL = {
   'OPTIM.grad_clip.batched': 'batched_gradClip', 'DATA.onehot.batched': 'batched_oneHot',
   'SYS.reduce_all.batched': 'batched_reduceAll', 'SAMPLE.categorical.batched': 'batched_categorical',
   'TENSOR.fill.inplace': 'inplace_tensorFill', 'TENSOR.copy.inplace': 'inplace_tensorCopy',
-  'NORM.normalize_l2.inplace': 'inplace_normalizeL2'
+  'NORM.normalize_l2.inplace': 'inplace_normalizeL2',
+  /* 融合变体内核（v1.1.3）—— fused 变体：与相邻算子融合，数学语义不变 */
+  'TENSOR.transpose.fused': 'fused_transpose_flatten', 'LINALG.matvec.fused': 'fused_matvec_relu',
+  'NUMER.softmax.fused': 'fused_softmax_log', 'PROB.gauss_pdf.fused': 'fused_gauss_pdf_log',
+  'INFO.cross_entropy.fused': 'fused_softmax_ce', 'OPTIM.grad_clip.fused': 'fused_gradclip_norm',
+  'FWD.linear.fused': 'fused_linear_relu', 'BWD.grad_tanh.fused': 'fused_gradtanh_chain',
+  'NORM.normalize_l2.fused': 'fused_norm_affine', 'ATTEN.qk_dot.fused': 'fused_attn_weights',
+  'SAMPLE.topk.fused': 'fused_topk_temp', 'GRAPH.marginal.fused': 'fused_marginal_norm',
+  'RL.value_iter.fused': 'fused_value_greedy', 'METRIC.mse.fused': 'fused_rmse',
+  'DATA.label_encode.fused': 'fused_label_onehot', 'SYS.reduce_all.fused': 'fused_allreduce'
 };
 
 /* ---------- 生成 ---------- */

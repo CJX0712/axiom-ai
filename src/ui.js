@@ -345,7 +345,7 @@
           ['每族恰 64 条', groupCounts().every(function (c) { return c === 64; })],
           ['每算子恰 4 变体', opCounts().every(function (c) { return c === 4; })],
           ['verified 项 impl 均为 core.js 真实导出', REG.filter(function (e) { return e.status === 'verified'; }).every(function (e) { return typeof AXIOM[e.impl] !== 'undefined'; })],
-          ['verified 变体限于 base/batched/inplace（fused 仍 spec）', REG.filter(function (e) { return e.status === 'verified'; }).every(function (e) { return ['base', 'batched', 'inplace'].includes(e.variant); })]
+          ['verified 变体限于 base/batched/fused/inplace', REG.filter(function (e) { return e.status === 'verified'; }).every(function (e) { return ['base', 'batched', 'fused', 'inplace'].includes(e.variant); })]
         ];
         var regOk = regChecks.every(function (c) { return c[1]; });
         var sum2 = el('div', 'summary' + (regOk ? ' ok' : ' bad'));

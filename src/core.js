@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.2';
+  var VERSION = '1.1.3';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4043,6 +4043,137 @@
     return bad;
   });
 
+  /* ---- 12.15b 融合变体内核（v1.1.3）—— 与相邻算子融合，数学语义不变 ----
+   * 硬不变量：fused 内核输出 = 顺序组合（op₁ ∘ op₂）逐位一致（参照实现 vs 主实现） */
+  function fused_transpose_flatten(A) { // TENSOR: transpose ∘ flatten（消除中间 2D 张量）
+    var m = A.length, n = A[0].length, out = new Array(m * n);
+    for (var i = 0; i < m; i++) for (var j = 0; j < n; j++) out[j * m + i] = A[i][j];
+    return out;
+  }
+  function fused_matvec_relu(A, x) { // LINALG: matVec ∘ relu（仿射+激活融合）
+    return matVec(A, x).map(function (v) { return relu(v); });
+  }
+  function fused_softmax_log(xs) { // NUMER: softmax ∘ log（log-softmax，稳定单趟）
+    var m = -Infinity; for (var i = 0; i < xs.length; i++) if (xs[i] > m) m = xs[i];
+    var s = 0; for (var i2 = 0; i2 < xs.length; i2++) s += Math.exp(xs[i2] - m);
+    return xs.map(function (x) { return (x - m) - Math.log(s); });
+  }
+  function fused_gauss_pdf_log(xs, mu, sigma) { // PROB: gaussPDF ∘ log（log-PDF，稳定单趟）
+    var c = sigma * Math.sqrt(2 * Math.PI), inv = 1 / (sigma * sigma);
+    return xs.map(function (x) { var z = x - mu; return -0.5 * z * z * inv - Math.log(c); });
+  }
+  function fused_softmax_ce(logits, y) { // INFO: softmax ∘ crossEntropy（稳定 softmax+CE，base-2）
+    var m = -Infinity; for (var i = 0; i < logits.length; i++) if (logits[i] > m) m = logits[i];
+    var s = 0; for (var i2 = 0; i2 < logits.length; i2++) s += Math.exp(logits[i2] - m);
+    var cls = -1; for (var k = 0; k < y.length; k++) if (y[k] === 1) { cls = k; break; }
+    return -(((logits[cls] - m) * Math.LOG2E) - Math.log2(s));
+  }
+  function fused_gradclip_norm(g, maxNorm) { // OPTIM: gradClip ∘ gradNorm（单趟计算裁剪梯度与范数）
+    var c = gradClip(g, maxNorm);
+    return { clipped: c, norm: gradNorm(c) };
+  }
+  function fused_linear_relu(X, W, b) { // FWD: linear ∘ relu（线性层+激活融合）
+    return X.map(function (row) {
+      return W.map(function (w, j) { return relu(dot(row, w) + (b ? b[j] : 0)); });
+    });
+  }
+  function fused_gradtanh_chain(dy, x) { // BWD: gradTanh ∘ 上游梯度（激活梯度融合反向传播）
+    return dy.map(function (d, i) { var t = Math.tanh(x[i]); return d * (1 - t * t); });
+  }
+  function fused_norm_affine(x, g) { // NORM: normalizeL2 ∘ 仿射缩放（权重范数式归一后乘缩放）
+    var n = norm2(x); return x.map(function (v, i) { return g[i] * (v / n); });
+  }
+  function fused_attn_weights(Q, K, causal) { // ATTEN: qkDot ∘ scale ∘ 因果掩码 ∘ softmax（单趟因果注意力权重）
+    var d = Q[0].length;
+    return Q.map(function (q, i) {
+      var row = K.map(function (k, j) {
+        var s = dot(q, k) / Math.sqrt(d);
+        return (causal && j > i) ? -Infinity : s;
+      });
+      return softmax(row);
+    });
+  }
+  function fused_topk_temp(logits, T, k) { // SAMPLE: temperatureSoftmax ∘ topK（温度缩放后取 Top-K）
+    return topK(temperatureSoftmax(logits, T), k);
+  }
+  function fused_marginal_norm(joint) { // GRAPH: marginal ∘ normalizeDist（边缘化后归一）
+    return normalizeDist(marginal(joint));
+  }
+  function fused_value_greedy(opts) { // RL: valueIteration ∘ greedy（从价值函数抽取贪心策略）
+    var r = valueIteration(opts);
+    var n = opts.n, gamma = opts.gamma, mdp = chainSetup(n, gamma, opts.stochastic);
+    var pol = new Array(n);
+    for (var s = 0; s < n; s++) {
+      var best = -Infinity, ba = 0;
+      for (var ai = 0; ai < mdp.actions.length; ai++) {
+        var a = mdp.actions[ai], v = 0, tr = mdp.trans(s, a);
+        for (var t = 0; t < tr.length; t++) v += tr[t][1] * (mdp.reward(s, tr[t][0]) + gamma * r.V[tr[t][0]]);
+        if (v > best) { best = v; ba = ai; }
+      }
+      pol[s] = ba;
+    }
+    return pol;
+  }
+  function fused_rmse(y, yhat) { // METRIC: mse ∘ sqrt（RMSE）
+    return Math.sqrt(mse(y, yhat));
+  }
+  function fused_label_onehot(labels) { // DATA: labelEncode ∘ oneHot（标签编码后独热）
+    var le = labelEncode(labels), K = le.classes.length;
+    return le.codes.map(function (code) {
+      return Array.from({ length: K }, function (_, i) { return i === code ? 1 : 0; });
+    });
+  }
+  function fused_allreduce(xs) { // SYS: reduceAll ∘ broadcast（all-reduce：归约广播副本 = 全局和）
+    return reduceAll(broadcast(xs));
+  }
+
+  /* 执行变体：fused 融合一致性（v1.1.3） */
+  check('variant.fused：与相邻算子融合，输出等于顺序组合（参照实现 vs 主实现，16 族代表算子）', 1e-15, function () {
+    var bad = 0;
+    var A = [[1, 2, 3], [4, 5, 6]];
+    if (arrMaxDiff(fused_transpose_flatten(A), flatten(transpose(A))) > 1e-15) bad++;
+    var M = [[1, 2], [3, 4]], xv = [1, 1];
+    if (arrMaxDiff(fused_matvec_relu(M, xv), matVec(M, xv).map(relu)) > 1e-15) bad++;
+    var xs = [1, 2, 3, -1];
+    if (arrMaxDiff(fused_softmax_log(xs), softmax(xs).map(Math.log)) > 1e-15) bad++;
+    if (arrMaxDiff(fused_gauss_pdf_log([0, 1, 2], 0, 1), [0, 1, 2].map(function (v) { return Math.log(gaussPDF(v, 0, 1)); })) > 1e-15) bad++;
+    var logits = [2, 1, 0.5], y = [0, 1, 0];
+    if (Math.abs(fused_softmax_ce(logits, y) - crossEntropy(y, softmax(logits))) > 1e-15) bad++;
+    var gn = fused_gradclip_norm([3, 4], 1);
+    if (arrMaxDiff(gn.clipped, gradClip([3, 4], 1)) > 1e-15 || Math.abs(gn.norm - gradNorm(gradClip([3, 4], 1))) > 1e-15) bad++;
+    var W = [[1, 0], [0, 1]], b = [0, 0], X1 = [[1, 2], [3, 4]];
+    if (arrMaxDiff(fused_linear_relu(X1, W, b), linear(X1, W, b).map(function (row) { return row.map(relu); })) > 1e-15) bad++;
+    var dy = [1, -1, 2], gx = [0.1, 0.2, 0.3];
+    if (arrMaxDiff(fused_gradtanh_chain(dy, gx), dy.map(function (d, i) { var t = Math.tanh(gx[i]); return d * (1 - t * t); })) > 1e-15) bad++;
+    var vv = [3, 4], gg = [2, 2];
+    if (arrMaxDiff(fused_norm_affine(vv, gg), normalizeL2(vv).map(function (val, i) { return val * gg[i]; })) > 1e-15) bad++;
+    var q2 = [[1, 0], [0, 1]], k2 = [[1, 0], [0, 1]];
+    if (arrMaxDiff(fused_attn_weights(q2, k2, true), selfAttention(q2, k2, q2, true).weights) > 1e-15) bad++;
+    var tk = fused_topk_temp([1, 2, 3], 1, 2), tkr = topK(temperatureSoftmax([1, 2, 3], 1), 2);
+    if (JSON.stringify(tk) !== JSON.stringify(tkr)) bad++;
+    var J = [[0.2, 0.3], [0.25, 0.25]];
+    if (arrMaxDiff(fused_marginal_norm(J), normalizeDist(marginal(J))) > 1e-15) bad++;
+    var opts = { n: 5, gamma: 0.9, stochastic: false, maxIter: 20000, tol: 1e-13 };
+    var rpol = fused_value_greedy(opts);
+    var Vr = valueIteration(opts).V, mdp = chainSetup(opts.n, opts.gamma, opts.stochastic), refpol = new Array(opts.n);
+    for (var s2 = 0; s2 < opts.n; s2++) {
+      var best2 = -Infinity, ba2 = 0;
+      for (var ai2 = 0; ai2 < mdp.actions.length; ai2++) {
+        var a2 = mdp.actions[ai2], v2 = 0, tr2 = mdp.trans(s2, a2);
+        for (var t2 = 0; t2 < tr2.length; t2++) v2 += tr2[t2][1] * (mdp.reward(s2, tr2[t2][0]) + opts.gamma * Vr[tr2[t2][0]]);
+        if (v2 > best2) { best2 = v2; ba2 = ai2; }
+      }
+      refpol[s2] = ba2;
+    }
+    if (arrMaxDiff(rpol, refpol) > 0) bad++;
+    var rmseRef = (function () { var dd = [1, 2], pp = [3, 0], s = 0; for (var i = 0; i < 2; i++) { var e = dd[i] - pp[i]; s += e * e; } return Math.sqrt(s / 2); })();
+    if (Math.abs(fused_rmse([1, 2], [3, 0]) - rmseRef) > 1e-15) bad++;
+    var labels = ['a', 'b', 'a', 'c'];
+    if (arrMaxDiff(fused_label_onehot(labels), oneHot(labelEncode(labels).codes).matrix) > 0) bad++;
+    if (Math.abs(fused_allreduce([1, 2, 3, 4]) - reduceAll(broadcast([1, 2, 3, 4]))) > 0) bad++;
+    return bad;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -4165,6 +4296,15 @@
     batched_gradClip: batched_gradClip, batched_oneHot: batched_oneHot, batched_reduceAll: batched_reduceAll,
     batched_categorical: batched_categorical,
     inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
+    /* 融合变体内核（v1.1.3） */
+    fused_transpose_flatten: fused_transpose_flatten, fused_matvec_relu: fused_matvec_relu,
+    fused_softmax_log: fused_softmax_log, fused_gauss_pdf_log: fused_gauss_pdf_log,
+    fused_softmax_ce: fused_softmax_ce, fused_gradclip_norm: fused_gradclip_norm,
+    fused_linear_relu: fused_linear_relu, fused_gradtanh_chain: fused_gradtanh_chain,
+    fused_norm_affine: fused_norm_affine, fused_attn_weights: fused_attn_weights,
+    fused_topk_temp: fused_topk_temp, fused_marginal_norm: fused_marginal_norm,
+    fused_value_greedy: fused_value_greedy, fused_rmse: fused_rmse,
+    fused_label_onehot: fused_label_onehot, fused_allreduce: fused_allreduce,
     /* 自检 */
     checks: checks, runChecks: runChecks
   };

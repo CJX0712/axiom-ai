@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-177%2F177-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-274%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-178%2F178-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-290%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
-> **十层架构 × 1024 微指令 × 177 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
+> **十层架构 × 1024 微指令 × 178 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
 >
 > 作者：**晨星** · License: MIT · [github.com/CJX0712/axiom-ai](https://github.com/CJX0712/axiom-ai)
 
@@ -23,7 +23,7 @@ AXIOM 是一套**指令集架构（ISA）级别的 AI 系统**：把"世界顶�
 **核心主张：AI 的每一层都必须可被独立复算验证。** 不是"训练出来了就看效果"，而是每个算法携带一条可被第三方用完全不同的方法（解析解、暴力枚举、参照实现）交叉验证的硬不变量。
 
 ```
-npm test          # → 187/187：177 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
+npm test          # → 188/188：178 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
 open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / L9 管线编排 / 三个训练演示 / 导出
 ```
 
@@ -62,7 +62,7 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 | L7 | 评估与数据 | 32/128 | METRIC · DATA |
 | L8 | 系统运行时 | 15/64 | SYS |
 | L9 | 组合应用层 | — | 由 L1–L8 微指令组合而成的推理/训练编排层（管线编排视图） |
-| L10 | **微指令层** | **274/1024** | 全部 16 族（本指令集主体） |
+| L10 | **微指令层** | **290/1024** | 全部 16 族（本指令集主体） |
 
 每条指令的 4 个执行变体：`base`（标量语义）· `batched`（批处理，逐位一致）· `fused`（融合，消除中间物化）· `inplace`（原地执行）。
 
@@ -133,14 +133,14 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - **恒等式**：(AB)ᵀ=BᵀAᵀ 逐位一致；KL≥0 且 p=q 取等；I(X;Y)=I(Y;X)；D-分离 = 道德图判据 = 暴力条件独立
 - **梯度检验**：MLP 与 BPTT 解析梯度 vs 中心差分 ≤ 1e-6；vjp/jvp 对偶恒等式
 
-全部 177 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
+全部 178 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
 
 ## 7. 设计决策
 
 - **为什么纯 JS 数组不用 Float64Array/BLAS**：单文件零依赖 + 简单数组作为 API 边界（与 @tangent.to/lina 同思路），规模定位在 n≤数百的教学/验证负载；算法选型偏向无条件稳定（Jacobi/Householder）而非速度。
 - **为什么确定性随机（mulberry32）**：一切蒙特卡洛类验证必须可复现——同种子同序列是检查项之一。
 - **为什么 1024 = 16×16×4**：指令集需要完备且可枚举；4 变体覆盖执行语义的三个正交维度（批/融合/原地），全部携带"与 base 逐位一致"的降级契约。
-- **为什么 verified 是 274 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 750 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base + batched/inplace 变体**（batched：沿 batch 维逐位一致；inplace：原地执行逐位一致）。剩余 spec 主要是未内核化的 fused 变体，以及 JS 单线程下无可验证语义的 fence（内存屏障在单线程运行时是恒等操作，无残差可测）。
+- **为什么 verified 是 290 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 734 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base + batched + fused + inplace 全变体**（batched：沿 batch 维逐位一致；fused：与相邻算子融合输出等于顺序组合；inplace：原地执行逐位一致）。剩余 spec 主要是未内核化的 fused 变体（非代表算子），以及 JS 单线程下无可验证语义的 fence（内存屏障在单线程运行时是恒等操作，无残差可测）。
 
 ## 8. 路线图
 
@@ -151,6 +151,7 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - [x] L2：L-BFGS / BFGS 拟牛顿（两循环递归 + 强 Wolfe 线搜索，≤30 步收敛、H ≈ A⁻¹）
 - [x] L3：层归一化解析梯度（链式法则复合，数值 Jacobian 验证）
 - [x] L5：Gibbs/MCMC 平稳分布收敛（解析平稳分布验证）
+- [x] L10 执行变体层：16 族代表算子的 base/batched/fused/inplace 全覆盖（fused=顺序组合、batched/inplace 逐位一致）
 - [ ] WASM 内核加速（保持 JS 回退，API 不变）
 
 ## 9. 致谢

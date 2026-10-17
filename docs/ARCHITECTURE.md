@@ -24,7 +24,7 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 ├────────────────────────────────────────────────────────┤
 │ L1  数学基础      tensor / linalg / numer / prob / info │ 87/320 verified
 ├────────────────────────────────────────────────────────┤
-│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 274/1024 verified
+│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 290/1024 verified
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
  --- --- 
   `id`   `L10.NNNN`，N ∈ [1,1024]，连续唯一  
   `variant`   ∈ {`base`, `batched`, `fused`, `inplace`}  
-  `status`   `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；base / batched / inplace 变体均可 verified（batched：沿 batch 维逐位一致；inplace：原地执行逐位一致）  
+  `status`   `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；base / batched / fused / inplace 变体均可 verified（batched：沿 batch 维逐位一致；fused：与相邻算子融合输出等于顺序组合；inplace：原地执行逐位一致）  
   `impl`   `core.js` 导出函数名；verified 项必须真实存在（注册表断言校验）  
 
 ### 执行变体契约
