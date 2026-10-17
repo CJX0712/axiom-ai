@@ -1,5 +1,23 @@
 # 更新日志
 
+## [1.1.1] - 2026-10-18
+
+**路线图攻坚：15/16 指令族满核化（16/16），verified 249 → 255/1024，核心不变量 169 → 175 项，185/185 + 26/26 全绿。**
+
+### 新增内核（+6 条 verified 微指令）
+
+- **OPTIM.bfgs**：BFGS 拟牛顿（Broyden–Fletcher–Goldfarb–Shanno 1970）—— 共享强 Wolfe 线搜索（Nocedal–Wright 算法 3.5/3.6 含 zoom），凸二次 7 步收敛至 2e-11，H 近似 SPD 且 H ≈ A⁻¹（相对 Frobenius ≤1e-2）
+- **OPTIM.lbfgs**：L-BFGS 两循环递归（Liu–Nocedal 1989）—— 限定内存 m=5 下 13 步收敛至 6e-13
+- **BWD.grad_layernorm**：层归一化解析梯度（链式法则复合）—— 数值 Jacobian 交叉验证 ≤1e-6
+- **GRAPH.gibbs**：Gibbs 采样平稳分布 —— 2 状态链经验频率 = 解析平稳分布 [0.6, 0.4]（n=4e4）
+- **GRAPH.mcmc**：Metropolis 对称提议采样 —— 经验分布 ≈ 目标分布（n=4e4）
+- **INFO.rate_distortion**：高斯信源率失真函数 R(D) = ½log₂(σ²/D) —— 已知值精确 + 单调不增
+
+### 修复
+
+- `core.js` VERSION 从 1.0.0 同步至 1.1.1（v1.1.0 时包版本与核心版本不一致）
+- ARCHITECTURE.md 层计数与族表同步至 255 实测值
+
 ## [1.1.0] - 2026-10-18
 
 **L10 微指令层大规模细化**：verified 93 → 249/1024，核心不变量 64 → 169 项，全部测试全绿（179/179 无头 + 26/26 UI 冒烟）。

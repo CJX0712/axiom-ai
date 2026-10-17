@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-169%2F169-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-249%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-175%2F175-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-255%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
-> **十层架构 × 1024 微指令 × 169 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
+> **十层架构 × 1024 微指令 × 175 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
 >
 > 作者：**晨星** · License: MIT · [github.com/CJX0712/axiom-ai](https://github.com/CJX0712/axiom-ai)
 
@@ -23,7 +23,7 @@ AXIOM 是一套**指令集架构（ISA）级别的 AI 系统**：把"世界顶�
 **核心主张：AI 的每一层都必须可被独立复算验证。** 不是"训练出来了就看效果"，而是每个算法携带一条可被第三方用完全不同的方法（解析解、暴力枚举、参照实现）交叉验证的硬不变量。
 
 ```
-npm test          # → 179/179：169 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
+npm test          # → 185/185：175 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
 open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / L9 管线编排 / 三个训练演示 / 导出
 ```
 
@@ -36,14 +36,14 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 | QR 分解 | Householder (1958)；scipy.linalg | Householder 反射 | QᵀQ=I、‖QR−A‖≤1e-10 |
 | 对称特征分解 | Jacobi (1846) | 循环 Jacobi 旋转 | ‖Sv−λv‖≤1e-12、V 正交归一 |
 | 融合乘加 | Dekker (1971) / Knuth TwoSum | Dekker 分裂模拟 fma | 朴素双舍入失败案例精确复原 |
-| 概率图推断 | Rabiner (1989)；Koller–Friedman (2009) | 前向-后向 / Viterbi / 变量消去 / 链式 BP | P(O) 与 2⁸ 路径全枚举一致 |
+| 概率图推断 | Rabiner (1989)；Koller–Friedman (2009)；Metropolis (1953) | 前向-后向 / Viterbi / 变量消去 / 链式 BP / Gibbs / Metropolis | P(O) 与 2⁸ 路径全枚举一致、平稳分布 = 解析解 |
 | D-分离 | Pearl (1988)；Lauritzen (1990) | 路径枚举 + 祖先道德图 | 与联合分布暴力条件独立检验一致 |
 | EM / GMM | Dempster–Laird–Rubin (1977) | 全协方差 EM + logsumexp | 对数似然单调不减 |
-| 优化 | Cauchy (1847)、Polyak (1964)、Nesterov (1983)、Duchi (2011)、Kingma–Ba (2015)、Loshchilov–Hutter (2019) | GD / 动量 / CG / Adam / RMSProp / AdaGrad / AdamW | 凸二次收敛至解析最优 |
+| 优化 | Cauchy (1847) 至 Loshchilov–Hutter (2019)；Broyden–Fletcher–Goldfarb–Shanno (1970)；Liu–Nocedal (1989)；Nocedal–Wright (2006) 强 Wolfe | GD / 动量 / CG / Adam / RMSProp / AdaGrad / AdamW / BFGS / L-BFGS | 凸二次 ≤30 步收敛至解析最优、H ≈ A⁻¹ |
 | 信道容量 | Arimoto–Blahut (1972) | AB 迭代 | BSC(0.1) 容量 = 1−H(ε) = 0.531 bits |
 | 注意力 | Vaswani (2017)、Dao (2022)、Press (2021)、Su (2021)、Ainslie (2023) | SDPA / Flash 在线 softmax / ALiBi / RoPE / MQA-GQA | 分块=全量、RoPE 相对性、权重行和=1 |
 | 策略优化 | Watkins–Dayan (1992)、Schulman (2016/2017) | VI / TD(0) / Q-Learning / SARSA / GAE / PPO | Bellman 残差、解析解、贪心成功率 |
-| 反向传播 | Rumelhart–Hinton–Williams (1986)、Werbos (1990) | MLP 解析梯度 / BPTT | 中心差分梯度检验 ≤1e-6 |
+| 反向传播 | Rumelhart–Hinton–Williams (1986)、Werbos (1990) | MLP 解析梯度 / BPTT / 层归一化梯度 | 中心差分梯度检验 ≤1e-6 |
 | 数值稳定 | Kahan (1965)、Box–Muller (1958)、A&S 7.1.26 | Kahan/TwoSum、logsumexp | 病态求和精确、±1e300 不溢出 |
 | K-Means | Lloyd (1982) + Arthur–Vassilvitskii (2007) | Lloyd + D² 初始化 | SSE 逐轮单调不增 |
 
@@ -53,16 +53,16 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 
 | 层 | 名称 | verified 数 | 指令族 |
 |---|---|---|---|
-| L1 | 数学基础 | 79/320 | TENSOR · LINALG · NUMER · PROB · INFO |
-| L2 | 监督学习 | 14/64 | OPTIM |
-| L3 | 表示学习 | 47/192 | FWD · BWD · NORM |
+| L1 | 数学基础 | 80/320 | TENSOR · LINALG · NUMER · PROB · INFO |
+| L2 | 监督学习 | 16/64 | OPTIM |
+| L3 | 表示学习 | 48/192 | FWD · BWD · NORM |
 | L4 | 序列与生成 | 32/128 | ATTEN · SAMPLE |
-| L5 | 概率图模型 | 14/64 | GRAPH |
+| L5 | 概率图模型 | 16/64 | GRAPH |
 | L6 | 强化学习 | 16/64 | RL |
 | L7 | 评估与数据 | 32/128 | METRIC · DATA |
 | L8 | 系统运行时 | 15/64 | SYS |
 | L9 | 组合应用层 | — | 由 L1–L8 微指令组合而成的推理/训练编排层（管线编排视图） |
-| L10 | **微指令层** | **249/1024** | 全部 16 族（本指令集主体） |
+| L10 | **微指令层** | **255/1024** | 全部 16 族（本指令集主体） |
 
 每条指令的 4 个执行变体：`base`（标量语义）· `batched`（批处理，逐位一致）· `fused`（融合，消除中间物化）· `inplace`（原地执行）。
 
@@ -98,7 +98,7 @@ axiom-ai/
 
 ```bash
 # 无头自检（Node ≥ 14，零依赖）
-node test/run.js        # 179 项：169 不变量 + 10 注册表完整性
+node test/run.js        # 185 项：175 不变量 + 10 注册表完整性
 node test/ui-smoke.js   # 26 项：UI 渲染/交互/管线/演示计算路径
 # 或 npm test（两者串联）
 
@@ -133,14 +133,14 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - **恒等式**：(AB)ᵀ=BᵀAᵀ 逐位一致；KL≥0 且 p=q 取等；I(X;Y)=I(Y;X)；D-分离 = 道德图判据 = 暴力条件独立
 - **梯度检验**：MLP 与 BPTT 解析梯度 vs 中心差分 ≤ 1e-6；vjp/jvp 对偶恒等式
 
-全部 169 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
+全部 175 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
 
 ## 7. 设计决策
 
 - **为什么纯 JS 数组不用 Float64Array/BLAS**：单文件零依赖 + 简单数组作为 API 边界（与 @tangent.to/lina 同思路），规模定位在 n≤数百的教学/验证负载；算法选型偏向无条件稳定（Jacobi/Householder）而非速度。
 - **为什么确定性随机（mulberry32）**：一切蒙特卡洛类验证必须可复现——同种子同序列是检查项之一。
 - **为什么 1024 = 16×16×4**：指令集需要完备且可枚举；4 变体覆盖执行语义的三个正交维度（批/融合/原地），全部携带"与 base 逐位一致"的降级契约。
-- **为什么 verified 是 249 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 775 条规格已定义（语义+不变量+世界最优参考），作为路线图。剩余 spec 集中在：L-BFGS/BFGS、层归一化解析梯度、Gibbs/MCMC、JS 单线程下无语义可验的 fence。
+- **为什么 verified 是 255 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 769 条规格已定义（语义+不变量+世界最优参考），作为路线图。剩余 spec 集中在：JS 单线程下无可验证语义的 fence（内存屏障在单线程运行时是恒等操作，无残差可测）。
 
 ## 8. 路线图
 
@@ -148,9 +148,9 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - [x] L4：FlashAttention 分块、RoPE 相对性、MQA/GQA、KV-cache 增量一致性
 - [x] L5：变量消去 vs 暴力枚举、链式 BP = 前向-后向、D-分离 vs 条件独立、联合树 RIP、粒子滤波
 - [x] L9：L9 管线编排视图（微指令组合执行，3 预设 + 自定义）
-- [ ] L2：L-BFGS / BFGS 拟牛顿（两循环递归）
-- [ ] L3：层归一化解析梯度（链式法则复合）
-- [ ] L5：Gibbs/MCMC 平稳分布收敛
+- [x] L2：L-BFGS / BFGS 拟牛顿（两循环递归 + 强 Wolfe 线搜索，≤30 步收敛、H ≈ A⁻¹）
+- [x] L3：层归一化解析梯度（链式法则复合，数值 Jacobian 验证）
+- [x] L5：Gibbs/MCMC 平稳分布收敛（解析平稳分布验证）
 - [ ] WASM 内核加速（保持 JS 回退，API 不变）
 
 ## 9. 致谢

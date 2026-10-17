@@ -338,12 +338,13 @@ const IMPL = {
   /* INFO 信息论 */
   'INFO.perplexity': 'perplexity', 'INFO.surprisal': 'surprisal', 'INFO.bits': 'bits',
   'INFO.kl_reverse': 'klReverse', 'INFO.max_entropy': 'maxEntropyDist', 'INFO.normalize_dist': 'normalizeDist',
-  'INFO.channel_capacity': 'channelCapacity',
+  'INFO.channel_capacity': 'channelCapacity', 'INFO.rate_distortion': 'rateDistortion',
   /* OPTIM 优化 */
   'OPTIM.momentum': 'momentum', 'OPTIM.nesterov': 'nesterov', 'OPTIM.adagrad': 'adagrad',
   'OPTIM.rmsprop': 'rmsprop', 'OPTIM.adamw': 'adamw', 'OPTIM.grad_clip': 'gradClip',
   'OPTIM.grad_norm': 'gradNorm', 'OPTIM.lr_decay': 'lrDecay', 'OPTIM.weight_decay': 'weightDecay',
   'OPTIM.polyak': 'polyakAvg', 'OPTIM.line_search': 'lineSearch',
+  'OPTIM.bfgs': 'bfgs', 'OPTIM.lbfgs': 'lbfgs',
   /* FWD 前向传播 */
   'FWD.tanh': 'tanh', 'FWD.embedding_lookup': 'embeddingLookup', 'FWD.flatten': 'flatten',
   'FWD.residual_add': 'residualAdd', 'FWD.concat_heads': 'concatHeads', 'FWD.pool_max': 'poolMax',
@@ -353,6 +354,7 @@ const IMPL = {
   'BWD.grad_matmul': 'gradMatmul', 'BWD.chain_rule': 'chainRule', 'BWD.grad_clip': 'gradClip',
   'BWD.grad_accum': 'gradAccum', 'BWD.stop_grad': 'stopGrad', 'BWD.detach': 'detach',
   'BWD.jacobian': 'jacobian', 'BWD.vjp': 'vjp', 'BWD.jvp': 'jvp', 'BWD.bptt': 'rnnBPTT',
+  'BWD.grad_layernorm': 'gradLayerNorm',
   /* NORM 归一化正则 */
   'NORM.l1_reg': 'l1Reg', 'NORM.weight_norm': 'weightNorm', 'NORM.spectral_norm': 'spectralNorm',
   'NORM.group_norm': 'groupNorm', 'NORM.batch_norm': 'batchNorm', 'NORM.label_smooth': 'labelSmooth',
@@ -373,6 +375,7 @@ const IMPL = {
   'GRAPH.kalman': 'kalmanFilter1d', 'GRAPH.factor_product': 'factorProduct',
   'GRAPH.junction_tree': 'junctionTree', 'GRAPH.clique_tree': 'cliqueTreeCalibrate',
   'GRAPH.particle': 'particleFilter', 'GRAPH.dsep': 'dSeparated', 'GRAPH.m_sep': 'mSeparated',
+  'GRAPH.gibbs': 'gibbsSampler', 'GRAPH.mcmc': 'metropolisSample',
   /* RL 强化学习 */
   'RL.bellman_backup': 'bellmanBackup', 'RL.policy_iter': 'policyIteration', 'RL.sarsa': 'sarsa',
   'RL.td_lambda': 'eligibilityTrace', 'RL.monte_carlo': 'monteCarloReturn', 'RL.greedy': 'greedyPolicy',

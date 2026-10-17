@@ -14,17 +14,17 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 ├────────────────────────────────────────────────────────┤
 │ L6  强化学习      Bellman / VI / TD / Q-Learning / GAE  │ 16/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L5  概率图模型    前向-后向 / Viterbi / BP / VE / D-分离 │ 14/64 verified
+│ L5  概率图模型    前向-后向 / Viterbi / BP / VE / D-分离 │ 16/64 verified
 ├────────────────────────────────────────────────────────┤
 │ L4  序列与生成    attention / flash / rope / sampling   │ 32/128 verified
 ├────────────────────────────────────────────────────────┤
-│ L3  表示学习      forward / backward / normalize        │ 47/192 verified
+│ L3  表示学习      forward / backward / normalize        │ 48/192 verified
 ├────────────────────────────────────────────────────────┤
-│ L2  监督学习      optimizers（10 种，全部收敛验证）      │ 14/64 verified
+│ L2  监督学习      optimizers（10 种，全部收敛验证）      │ 16/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L1  数学基础      tensor / linalg / numer / prob / info │ 79/320 verified
+│ L1  数学基础      tensor / linalg / numer / prob / info │ 80/320 verified
 ├────────────────────────────────────────────────────────┤
-│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 249/1024 verified
+│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 255/1024 verified
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -49,42 +49,42 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 }
 ```
 
-| 字段 | 约束 |
-|---|---|
-| `id` | `L10.NNNN`，N ∈ [1,1024]，连续唯一 |
-| `variant` | ∈ {`base`, `batched`, `fused`, `inplace`} |
-| `status` | `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；仅 `base` 变体可 verified |
-| `impl` | `core.js` 导出函数名；verified 项必须真实存在（注册表断言校验） |
+  字段   约束  
+ --- --- 
+  `id`   `L10.NNNN`，N ∈ [1,1024]，连续唯一  
+  `variant`   ∈ {`base`, `batched`, `fused`, `inplace`}  
+  `status`   `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；仅 `base` 变体可 verified  
+  `impl`   `core.js` 导出函数名；verified 项必须真实存在（注册表断言校验）  
 
 ### 执行变体契约
 
-| 变体 | 语义 | 降级契约 |
-|---|---|---|
-| `base` | 标量 / 单样本 | — |
-| `batched` | 沿 batch 维独立执行 | 与逐样本调用**逐位一致** |
-| `fused` | 与相邻算子融合，消除中间张量物化 | 数学语义不变 |
-| `inplace` | 原地执行，输入被覆盖 | 返回值与 out-of-place **逐位一致** |
+  变体   语义   降级契约  
+ --- --- --- 
+  `base`   标量 / 单样本   —  
+  `batched`   沿 batch 维独立执行   与逐样本调用**逐位一致**  
+  `fused`   与相邻算子融合，消除中间张量物化   数学语义不变  
+  `inplace`   原地执行，输入被覆盖   返回值与 out-of-place **逐位一致**  
 
 ## 3. 指令族目录（16 族 × 16 算子）
 
-| 族 | 名称 | 层 | verified | 代表算子 |
-|---|---|---|---|---|
-| TENSOR | 张量指令 | L1 | 16/16 | create/reshape/transpose/slice/gather |
-| LINALG | 线性代数指令 | L1 | 16/16 | matmul/cholesky/qr/eigen/pca/rank/nullspace/cond |
-| NUMER | 数值稳定指令 | L1 | 16/16 | logsumexp/softmax/kahan/fma(Dekker)/gelu |
-| PROB | 概率运算指令 | L1 | 16/16 | gauss_pdf/mv_gauss/bayes/sample_stats |
-| INFO | 信息论指令 | L1 | 15/16 | entropy/kl/channel_capacity(AB)/max_entropy |
-| OPTIM | 优化算子指令 | L2 | 14/16 | gd/adam/cg/momentum/nesterov/adamw/line_search |
-| FWD | 前向传播指令 | L3 | 16/16 | linear/layernorm/self_attn/batchnorm/conv1d |
-| BWD | 反向传播指令 | L3 | 15/16 | grad_check/grad_matmul/vjp/jvp/bptt |
-| NORM | 归一化正则指令 | L3 | 16/16 | l1/l2/zscore/spectral_norm/group_norm/mixup |
-| ATTEN | 注意力指令 | L4 | 16/16 | flash/rope/alibi/mqa/gqa/kv_cache |
-| SAMPLE | 采样生成指令 | L4 | 16/16 | box_muller/topp/rejection/antithetic/stratified |
-| GRAPH | 图推断指令 | L5 | 14/16 | forward_backward/viterbi/variable_elim/dsep/particle |
-| RL | 强化学习指令 | L6 | 16/16 | value_iter/q_learn/sarsa/gae/ppo/thompson |
-| METRIC | 评估度量指令 | L7 | 16/16 | accuracy/auc/bleu/map/confusion |
-| DATA | 数据管线指令 | L7 | 16/16 | shuffle/kfold/onehot/normalize_fit/tokenize |
-| SYS | 系统级微指令 | L8 | 15/16 | arena/reduce/broadcast/checkpoint/dispatch |
+  族   名称   层   verified   代表算子  
+ --- --- --- --- --- 
+  TENSOR   张量指令   L1   16/16   create/reshape/transpose/slice/gather  
+  LINALG   线性代数指令   L1   16/16   matmul/cholesky/qr/eigen/pca/rank/nullspace/cond  
+  NUMER   数值稳定指令   L1   16/16   logsumexp/softmax/kahan/fma(Dekker)/gelu  
+  PROB   概率运算指令   L1   16/16   gauss_pdf/mv_gauss/bayes/sample_stats  
+  INFO   信息论指令   L1   16/16   entropy/kl/channel_capacity(AB)/max_entropy  
+  OPTIM   优化算子指令   L2   16/16   gd/adam/cg/momentum/nesterov/adamw/line_search  
+  FWD   前向传播指令   L3   16/16   linear/layernorm/self_attn/batchnorm/conv1d  
+  BWD   反向传播指令   L3   16/16   grad_check/grad_matmul/vjp/jvp/bptt  
+  NORM   归一化正则指令   L3   16/16   l1/l2/zscore/spectral_norm/group_norm/mixup  
+  ATTEN   注意力指令   L4   16/16   flash/rope/alibi/mqa/gqa/kv_cache  
+  SAMPLE   采样生成指令   L4   16/16   box_muller/topp/rejection/antithetic/stratified  
+  GRAPH   图推断指令   L5   16/16   forward_backward/viterbi/variable_elim/dsep/particle  
+  RL   强化学习指令   L6   16/16   value_iter/q_learn/sarsa/gae/ppo/thompson  
+  METRIC   评估度量指令   L7   16/16   accuracy/auc/bleu/map/confusion  
+  DATA   数据管线指令   L7   16/16   shuffle/kfold/onehot/normalize_fit/tokenize  
+  SYS   系统级微指令   L8   15/16   arena/reduce/broadcast/checkpoint/dispatch  
 
 完整 1024 条规格见 [ISA-1024.md](ISA-1024.md) 或运行 `node -e "console.table(require('./src/registry.js'))"`。
 
@@ -98,9 +98,9 @@ numer     logsumexp softmax sigmoid gelu erf normalCDF kahanSum exactSum fma cli
 prob      gaussPDF mvGaussPDF expectation variance covariance normalSample categoricalSample
           bayesUpdate uniformSample bernoulliSample binomialSample sampleStats marginal conditionalRow
 info      entropy crossEntropy klDivergence jsDivergence mutualInfo conditionalEntropy gini infoGain
-          perplexity surprisal bits klReverse maxEntropyDist normalizeDist channelCapacity
+          perplexity surprisal bits klReverse maxEntropyDist normalizeDist channelCapacity rateDistortion
 optim     gradientDescent adam conjugateGradient momentum nesterov rmsprop adagrad adamw
-          gradClip gradNorm lrDecay weightDecay polyakAvg lineSearch
+          gradClip gradNorm lrDecay weightDecay polyakAvg lineSearch wolfeLineSearch bfgs lbfgs
 models    linearRegression logisticRegression kmeans gmmEM knn decisionTree
           mlpTrain gradientCheck
 dl        linear layerNorm selfAttention embeddingLookup batchNorm groupNorm dropout conv1d
@@ -108,9 +108,10 @@ dl        linear layerNorm selfAttention embeddingLookup batchNorm groupNorm dro
 attn      qkDot crossAttention multiHead ropeApply attnRow mqa gqa flashAttention
           relPosBias alibiScores attnEntropy
 autodiff  numericJacobian jacobian vjp jvp chainRule gradRelu gradTanh gradSoftmaxCE
-          gradMatmul gradAccum rnnForward rnnBPTT
+          gradMatmul gradAccum rnnForward rnnBPTT gradLayerNorm
 graph     hmmForwardBackward hmmViterbi chainBeliefProp variableElim factorProduct sumOut
           junctionTree cliqueTreeCalibrate kalmanFilter1d dSeparated mSeparated particleFilter
+          gibbsSampler metropolisSample
 rl        valueIteration td0Sweep qLearning epsilonGreedy bellmanBackup policyIteration sarsa
           eligibilityTrace monteCarloReturn greedyPolicy ucb advantage gae reinforceGradient
           ppoClip thompsonSample

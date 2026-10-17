@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.1';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2263,6 +2263,147 @@
     return { alpha: 0, x: x, f: f0, iterations: maxIter };
   }
 
+  /* ---- 12.14 拟牛顿 / 层归一化梯度 / MCMC / 率失真（v1.1.1）---- */
+  function eye2(n) {
+    return Array.from({ length: n }, function (_, i) {
+      return Array.from({ length: n }, function (_, j) { return i === j ? 1 : 0; });
+    });
+  }
+  function wolfeLineSearch(f, g, x, p, gx, opts) { // 强 Wolfe 线搜索（Nocedal–Wright 算法 3.5/3.6）
+    opts = opts || {};
+    var c1 = opts.c1 || 1e-4, c2 = opts.c2 || 0.9, alphaMax = opts.alphaMax || 1e3;
+    var phi0 = f(x), dPhi0 = dot(gx, p);
+    if (!(dPhi0 < 0)) return { alpha: 0, x: x, f: phi0, iterations: 0 };
+    function step(a) {
+      return { x: x.map(function (v, t) { return v + a * p[t]; }), phi: 0 };
+    }
+    var alphaPrev = 0, phiPrev = phi0, dPhiPrev = dPhi0, alpha = 1, i;
+    for (i = 1; i <= 60; i++) {
+      var s = step(alpha);
+      s.phi = f(s.x);
+      if (s.phi > phi0 + c1 * alpha * dPhi0 || (s.phi >= phiPrev && i > 1)) return zoom(alphaPrev, alpha);
+      var gn = g(s.x), dPhi = dot(gn, p);
+      if (Math.abs(dPhi) <= -c2 * dPhi0) return { alpha: alpha, x: s.x, f: s.phi, iterations: i };
+      if (dPhi >= 0) return zoom(alpha, alphaPrev);
+      alphaPrev = alpha; phiPrev = s.phi; dPhiPrev = dPhi;
+      alpha = Math.min(2 * alpha, alphaMax);
+    }
+    return { alpha: 0, x: x, f: phi0, iterations: i };
+    function zoom(lo, hi) {
+      var j;
+      for (j = 1; j <= 60; j++) {
+        var aj = 0.5 * (lo + hi);
+        var sj = step(aj);
+        sj.phi = f(sj.x);
+        if (sj.phi > phi0 + c1 * aj * dPhi0 || sj.phi >= phiPrev) { hi = aj; continue; }
+        var gj = g(sj.x), dPhij = dot(gj, p);
+        if (Math.abs(dPhij) <= -c2 * dPhi0) return { alpha: aj, x: sj.x, f: sj.phi, iterations: j };
+        if (dPhij * (hi - lo) >= 0) hi = lo;
+        lo = aj; phiPrev = sj.phi; dPhiPrev = dPhij;
+      }
+      return { alpha: 0, x: x, f: phi0, iterations: j };
+    }
+  }
+  function bfgs(f, grad, x0, opts) { // BFGS 拟牛顿（Broyden 1970 / Fletcher / Goldfarb / Shanno）
+    opts = opts || {};
+    var maxIter = opts.maxIter || 200, tol = opts.tol || 1e-10;
+    var n = x0.length;
+    var x = x0.slice(), H = eye2(n), g = grad(x), fx = f(x), k = 0;
+    for (k = 0; k < maxIter; k++) {
+      if (norm2(g) < tol) break;
+      var p = matVec(H, g).map(function (v) { return -v; });
+      var ls = wolfeLineSearch(f, grad, x, p, g);
+      if (ls.alpha === 0) break;
+      var xNew = ls.x, gNew = grad(xNew), s = xNew.map(function (v, t) { return v - x[t]; });
+      var y = gNew.map(function (v, t) { return v - g[t]; });
+      var sy = dot(s, y);
+      if (sy > 1e-12) {
+        var rho = 1 / sy;
+        // H ← (I − ρsyᵀ)H(I − ρysᵀ) + ρssᵀ
+        var Hy = matVec(H, y);
+        var yHy = dot(y, Hy);
+        var coef = rho * (1 + rho * yHy);
+        for (var a = 0; a < n; a++) for (var b = 0; b < n; b++) {
+          H[a][b] += -rho * (s[a] * Hy[b] + Hy[a] * s[b]) + coef * s[a] * s[b];
+        }
+      }
+      x = xNew; g = gNew; fx = ls.f;
+    }
+    return { x: x, iterations: k, f: fx, g: g, H: H };
+  }
+  function lbfgs(f, grad, x0, opts) { // L-BFGS 两循环递归（Liu–Nocedal 1989）
+    opts = opts || {};
+    var m = opts.m || 10, maxIter = opts.maxIter || 500, tol = opts.tol || 1e-10;
+    var x = x0.slice(), g = grad(x), s = [], y = [], rho = [], k = 0;
+    for (k = 0; k < maxIter; k++) {
+      if (norm2(g) < tol) break;
+      var q = g.slice(), alphas = [];
+      for (var i = s.length - 1; i >= 0; i--) {
+        var a = rho[i] * dot(s[i], q);
+        alphas[i] = a;
+        q = q.map(function (v, t) { return v - a * y[i][t]; });
+      }
+      var gamma = s.length ? dot(s[s.length - 1], y[y.length - 1]) / dot(y[y.length - 1], y[y.length - 1]) : 1;
+      var r = q.map(function (v) { return gamma * v; });
+      for (var j = 0; j < s.length; j++) {
+        var b = rho[j] * dot(y[j], r);
+        r = r.map(function (v, t) { return v + (alphas[j] - b) * s[j][t]; });
+      }
+      var p = r.map(function (v) { return -v; });
+      var ls = wolfeLineSearch(f, grad, x, p, g);
+      if (ls.alpha === 0) break;
+      var xNew = ls.x, gNew = grad(xNew);
+      var sv = xNew.map(function (v, t) { return v - x[t]; });
+      var yv = gNew.map(function (v, t) { return v - g[t]; });
+      var sy = dot(sv, yv);
+      if (sy > 1e-12) {
+        s.push(sv); y.push(yv); rho.push(1 / sy);
+        if (s.length > m) { s.shift(); y.shift(); rho.shift(); }
+      }
+      x = xNew; g = gNew;
+    }
+    return { x: x, iterations: k, g: g, memory: s.length };
+  }
+  function gradLayerNorm(x, dOut, eps) { // 层归一化解析梯度（链式法则复合）
+    if (eps === undefined) eps = 1e-5;
+    var n = x.length, mu = expectation(x);
+    var xc = x.map(function (v) { return v - mu; });
+    var v = variance(x) + eps;
+    var invStd = 1 / Math.sqrt(v);
+    var sumD = 0, sumDXc = 0;
+    for (var i = 0; i < n; i++) { sumD += dOut[i]; sumDXc += dOut[i] * xc[i]; }
+    var coef2 = invStd * sumD / n, coef3 = invStd * sumDXc / (n * v);
+    return x.map(function (_, i) { return invStd * dOut[i] - coef2 - coef3 * xc[i]; });
+  }
+  function gibbsSampler(P, iters, burn, seed) { // Gibbs 采样：单状态链的转移核扫描
+    var rng = mulberry32(seed === undefined ? 31 : seed);
+    var s = rng() < 0.5 ? 0 : 1, counts = [0, 0];
+    for (var t = 0; t < iters; t++) {
+      s = rng() < P[s][1] ? 1 : 0;
+      if (t >= burn) counts[s]++;
+    }
+    var total = counts[0] + counts[1];
+    return { stationary: [counts[0] / total, counts[1] / total], counts: counts };
+  }
+  function metropolisSample(target, iters, burn, seed) { // Metropolis 对称提议
+    var rng = mulberry32(seed === undefined ? 32 : seed);
+    var k = target.length;
+    var cur = Math.floor(rng() * k), counts = new Array(k).fill(0);
+    for (var t = 0; t < iters; t++) {
+      var prop = Math.floor(rng() * k);
+      if (prop === cur) { if (t >= burn) counts[cur]++; continue; }
+      var ratio = target[prop] / target[cur];
+      if (rng() < Math.min(1, ratio)) cur = prop;
+      if (t >= burn) counts[cur]++;
+    }
+    var total = counts.reduce(function (a, b) { return a + b; }, 0);
+    return { empirical: counts.map(function (c) { return c / total; }), counts: counts };
+  }
+  function rateDistortion(sigma, D) { // 高斯信源率失真函数 R(D) = ½log₂(σ²/D)，D < σ²
+    var v = sigma * sigma;
+    return D >= v ? 0 : 0.5 * Math.log2(v / D);
+  }
+
   /* ========================================================================
    * 13. 不变量检查表（可独立复算的硬金标准）
    * ======================================================================*/
@@ -3758,6 +3899,65 @@
     return armijoOk ? norm2(x.map(function (v, i) { return v - xs[i]; })) : 1;
   });
 
+  /* ---- 13.14 拟牛顿 / MCMC / 率失真不变量（v1.1.1）---- */
+  check('optim.bfgs：凸二次 ≤30 步收敛 ≤1e-8；H 近似 SPD；H ≈ A⁻¹（相对 Frobenius）', 1e-2, function () {
+    var q = quadProblem();
+    var r = bfgs(q.f, q.g, [0, 0, 0], { maxIter: 200 });
+    var err = norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+    var eig = jacobiEigen(r.H);
+    var minEig = Math.min.apply(null, eig.values);
+    // A = diag(1,10,100) → A⁻¹ = diag(1, 0.1, 0.01)
+    var Ai = [[1, 0, 0], [0, 0.1, 0], [0, 0, 0.01]];
+    var diff = 0, ref = 0;
+    for (var a = 0; a < 3; a++) for (var b = 0; b < 3; b++) {
+      diff += (r.H[a][b] - Ai[a][b]) * (r.H[a][b] - Ai[a][b]);
+      ref += Ai[a][b] * Ai[a][b];
+    }
+    var hErr = Math.sqrt(diff / ref);
+    return Math.max(err, r.iterations > 30 ? 1 : 0, minEig <= 0 ? 1 : 0, hErr);
+  });
+  check('optim.lbfgs：两循环递归凸二次 ≤30 步收敛 ≤1e-8；内存 ≤ m', 1e-2, function () {
+    var q = quadProblem();
+    var r = lbfgs(q.f, q.g, [0, 0, 0], { m: 5, maxIter: 200 });
+    var err = norm2(r.x.map(function (v, i) { return v - q.xs[i]; }));
+    return Math.max(err, r.iterations > 30 ? 1 : 0, r.memory > 5 ? 1 : 0);
+  });
+  check('bwd.grad_layernorm：解析梯度 = 数值 Jacobian ≤ 1e-6', 1e-6, function () {
+    var rng = mulberry32(121);
+    var x = Array.from({ length: 6 }, function () { return rng() * 4 - 2; });
+    var dOut = Array.from({ length: 6 }, function () { return rng() * 2 - 1; });
+    var L = function (xx) { return dot(layerNorm([xx])[0], dOut); };
+    var J = numericJacobian(function (xx) { return [L(xx)]; }, x, 1e-6)[0];
+    var ana = gradLayerNorm(x, dOut);
+    var worst = 0;
+    for (var i = 0; i < 6; i++) worst = Math.max(worst, Math.abs(J[i] - ana[i]));
+    return worst;
+  });
+  check('graph.gibbs：平稳分布 = 解析解 [0.6, 0.4]（n=4e4）', 0.02, function () {
+    var P = [[0.8, 0.2], [0.3, 0.7]]; // 平稳分布 π = [0.6, 0.4]
+    var r = gibbsSampler(P, 40000, 1000, 122);
+    return Math.max(Math.abs(r.stationary[0] - 0.6), Math.abs(r.stationary[1] - 0.4));
+  });
+  check('graph.mcmc：Metropolis 经验分布 ≈ 目标分布（n=4e4）', 0.02, function () {
+    var target = [0.1, 0.2, 0.3, 0.4];
+    var r = metropolisSample(target, 40000, 1000, 123);
+    var worst = 0;
+    for (var i = 0; i < 4; i++) worst = Math.max(worst, Math.abs(r.empirical[i] - target[i]));
+    return worst;
+  });
+  check('info.rate_distortion：R(D) = ½log₂(σ²/D)；已知值；单调不增', 1e-12, function () {
+    var bad = 0;
+    if (Math.abs(rateDistortion(1, 0.5) - 0.5) > 1e-12) bad++;
+    if (rateDistortion(1, 1) !== 0 || rateDistortion(1, 2) !== 0) bad++;
+    var prev = Infinity;
+    for (var d = 0.05; d < 1; d += 0.05) {
+      var r = rateDistortion(2, d);
+      if (r > prev + 1e-15) bad++;
+      prev = r;
+    }
+    return bad;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -3868,6 +4068,9 @@
     checkpoint: checkpoint, Profiler: Profiler, Tracer: Tracer, Dispatcher: Dispatcher, Barrier: Barrier,
     EventLog: EventLog, prefetch: prefetch,
     matrixRank: matrixRank, nullspace: nullspace, orthonormalize: orthonormalize, condEstimate: condEstimate,
+    /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
+    eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
+    gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
     /* 自检 */
     checks: checks, runChecks: runChecks
   };
