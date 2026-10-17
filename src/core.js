@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.1';
+  var VERSION = '1.1.2';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2407,6 +2407,46 @@
   /* ========================================================================
    * 13. 不变量检查表（可独立复算的硬金标准）
    * ======================================================================*/
+  /* ========================================================================
+   * 12.15 执行变体内核（v1.1.2）—— batched：沿 batch 维独立执行，与逐样本调用逐位一致
+   *        inplace：原地执行，返回值与 out-of-place 逐位一致
+   * ======================================================================*/
+  function arrMaxDiff(a, b) { // 递归逐位最大绝对差（数值数组）
+    if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b);
+    if (Array.isArray(a) && Array.isArray(b)) {
+      var mx = 0;
+      for (var i = 0; i < a.length; i++) mx = Math.max(mx, arrMaxDiff(a[i], b[i]));
+      return mx;
+    }
+    return (a === b) ? 0 : 1; // 非数值/数组（如 classes 数组、字符串）
+  }
+  function batched_transpose(Abatch) { return Abatch.map(function (M) { return transpose(M); }); }
+  function batched_matVec(pairs) { return pairs.map(function (p) { return matVec(p[0], p[1]); }); }
+  function batched_softmax(Xbatch) { return Xbatch.map(function (r) { return softmax(r); }); }
+  function batched_gaussPDF(triples) { return triples.map(function (t) { return gaussPDF(t[0], t[1], t[2]); }); }
+  function batched_entropy(Pbatch) { return Pbatch.map(function (p) { return entropy(p); }); }
+  function batched_normalizeL2(Xbatch) { return Xbatch.map(function (x) { return normalizeL2(x); }); }
+  function batched_linear(Xbatch, W, b) { return Xbatch.map(function (X) { return linear(X, W, b); }); }
+  function batched_gradRelu(Xbatch) { return Xbatch.map(function (x) { return gradRelu(x); }); }
+  function batched_mse(pairs) { return pairs.map(function (p) { return mse(p[0], p[1]); }); }
+  function batched_selfAttention(pairs) {
+    return pairs.map(function (p) { var r = selfAttention(p[0], p[1], p[2], false); return [r.weights, r.output]; });
+  }
+  function batched_marginal(Jbatch) { return Jbatch.map(function (J) { return marginal(J); }); }
+  function batched_epsilonGreedy(qrows, eps, rng) { return qrows.map(function (q) { return epsilonGreedy(q, eps, rng); }); }
+  function batched_gradClip(Gbatch, maxNorm) { return Gbatch.map(function (g) { return gradClip(g, maxNorm); }); }
+  function batched_oneHot(labelsBatch) {
+    var single = oneHot(labelsBatch[0]);
+    var matrix = labelsBatch.map(function (lbls) { return oneHot(lbls).matrix; });
+    return { classes: single.classes, matrix: matrix };
+  }
+  function batched_reduceAll(Xbatch) { return Xbatch.map(function (xs) { return reduceAll(xs); }); }
+  function batched_categorical(Pbatch) { return Pbatch.map(function (p) { return categoricalSample(p[0], p[1]); }); }
+  /* inplace 变体（原地覆盖输入，返回值与 out-of-place 逐位一致） */
+  function inplace_tensorFill(dst, val) { for (var i = 0; i < dst.length; i++) dst[i] = val; return dst; }
+  function inplace_tensorCopy(dst, src) { for (var i = 0; i < dst.length; i++) dst[i] = src[i]; return dst; }
+  function inplace_normalizeL2(dst) { var n = norm2(dst); for (var i = 0; i < dst.length; i++) dst[i] = dst[i] / n; return dst; }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -3958,6 +3998,51 @@
     return bad;
   });
 
+  /* 执行变体：batched / inplace 逐位一致性（v1.1.2） */
+  check('variant.batched：沿 batch 维独立执行，与逐样本调用逐位一致（16 族代表算子）', 1e-15, function () {
+    var bad = 0;
+    var A3 = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];
+    if (arrMaxDiff(batched_transpose(A3), A3.map(transpose)) > 1e-15) bad++;
+    var M = [[1, 2], [3, 4]], x = [1, 1];
+    if (arrMaxDiff(batched_matVec([[M, x]]), [matVec(M, x)]) > 1e-15) bad++;
+    var X2 = [[1, 2,3], [0.1, 0.2, 0.3]];
+    if (arrMaxDiff(batched_softmax(X2), X2.map(softmax)) > 1e-15) bad++;
+    var T3 = [[0, 0, 1], [1, 0, 2], [2, 1, 1]];
+    if (arrMaxDiff(batched_gaussPDF(T3), T3.map(function (t) { return gaussPDF(t[0], t[1], t[2]); })) > 1e-15) bad++;
+    var P2 = [[0.5, 0.5], [0.2, 0.8]];
+    if (arrMaxDiff(batched_entropy(P2), P2.map(entropy)) > 1e-15) bad++;
+    var V2 = [[3, 4], [1, 2, 2]];
+    if (arrMaxDiff(batched_normalizeL2(V2), V2.map(normalizeL2)) > 1e-15) bad++;
+    var W = [[1, 0], [0, 1]], b = [0, 0];
+    var X1 = [[1, 2], [3, 4]], X2 = [[5, 6]];
+    if (arrMaxDiff(batched_linear([X1, X2], W, b), [linear(X1, W, b), linear(X2, W, b)]) > 1e-15) bad++;
+    var G2 = [[-1, 2, 0], [3, -4, 5]];
+    if (arrMaxDiff(batched_gradRelu(G2), G2.map(gradRelu)) > 1e-15) bad++;
+    if (arrMaxDiff(batched_mse([[[1, 2], [1, 2]], [[0, 0], [0, 0]]]), [0, 0]) > 1e-15) bad++;
+    var q = [[1, 0], [0, 1]], k = [[1, 0], [0, 1]], v = [[1, 2], [3, 4]];
+    var bs = batched_selfAttention([[q, k, v]])[0];
+    var s = selfAttention(q, k, v, false);
+    if (arrMaxDiff(bs, [s.weights, s.output]) > 1e-15) bad++;
+    var J = [[0.2, 0.3], [0.25, 0.25]];
+    if (arrMaxDiff(batched_marginal([J]), [marginal(J)]) > 1e-15) bad++;
+    if (arrMaxDiff(batched_epsilonGreedy([[1, 5, 2], [4, 1, 0]], 0, mulberry32(99)), [1, 0]) > 0) bad++;
+    if (arrMaxDiff(batched_gradClip([[3, 4], [1, 1]], 1), [gradClip([3, 4], 1), gradClip([1, 1], 1)]) > 1e-15) bad++;
+    var oh = batched_oneHot([[0, 1, 2]]);
+    if (arrMaxDiff(oh.matrix[0], oneHot([0, 1, 2]).matrix) > 0 || oh.classes.join(',') !== '0,1,2') bad++;
+    if (arrMaxDiff(batched_reduceAll([[1, 2, 3], [4, 5, 6]]), [6, 15]) > 1e-15) bad++;
+    var cat = batched_categorical([[[0.2, 0.3, 0.5], 7]])[0];
+    var refcat = categoricalSample([0.2, 0.3, 0.5], 7);
+    if (cat.length !== refcat.length || arrMaxDiff(cat, refcat) > 0) bad++;
+    return bad;
+  });
+  check('variant.inplace：原地执行与 out-of-place 逐位一致', 1e-15, function () {
+    var bad = 0;
+    var a = [1, 2, 3, 4]; inplace_tensorFill(a, 7); if (arrMaxDiff(a, [7, 7, 7, 7]) > 0) bad++;
+    var d = [9, 8, 7], s = [1, 2, 3]; inplace_tensorCopy(d, s); if (arrMaxDiff(d, [1, 2, 3]) > 0) bad++;
+    var n = [3, 4]; inplace_normalizeL2(n); if (arrMaxDiff(n, normalizeL2([3, 4])) > 1e-15) bad++;
+    return bad;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -4071,6 +4156,15 @@
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
+    /* 执行变体内核（v1.1.2） */
+    arrMaxDiff: arrMaxDiff,
+    batched_transpose: batched_transpose, batched_matVec: batched_matVec, batched_softmax: batched_softmax,
+    batched_gaussPDF: batched_gaussPDF, batched_entropy: batched_entropy, batched_normalizeL2: batched_normalizeL2,
+    batched_linear: batched_linear, batched_gradRelu: batched_gradRelu, batched_mse: batched_mse,
+    batched_selfAttention: batched_selfAttention, batched_marginal: batched_marginal, batched_epsilonGreedy: batched_epsilonGreedy,
+    batched_gradClip: batched_gradClip, batched_oneHot: batched_oneHot, batched_reduceAll: batched_reduceAll,
+    batched_categorical: batched_categorical,
+    inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
     /* 自检 */
     checks: checks, runChecks: runChecks
   };

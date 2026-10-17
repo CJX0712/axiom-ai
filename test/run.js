@@ -43,7 +43,7 @@ regChecks.push(['每算子恰 4 变体', [...new Set(REGISTRY.map(e => e.group +
 regChecks.push(['变体 ∈ {base,batched,fused,inplace}', REGISTRY.every(e => ['base', 'batched', 'fused', 'inplace'].includes(e.variant))]);
 regChecks.push(['全部含数学不变量', REGISTRY.every(e => e.invariant && e.invariant.length > 0)]);
 regChecks.push(['verified 项 impl 均为 core.js 真实导出', REGISTRY.filter(e => e.status === 'verified').every(e => typeof AXIOM[e.impl] !== 'undefined')]);
-regChecks.push(['仅 base 变体可为 verified', REGISTRY.filter(e => e.status === 'verified').every(e => e.variant === 'base')]);
+regChecks.push(['verified 变体限于 base/batched/inplace（fused 仍 spec）', REGISTRY.filter(e => e.status === 'verified').every(e => ['base', 'batched', 'inplace'].includes(e.variant))]);
 const verifiedCount = REGISTRY.filter(e => e.status === 'verified').length;
 regChecks.push(['verified 数 > 0（当前 ' + verifiedCount + '）', verifiedCount > 0]);
 

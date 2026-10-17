@@ -393,7 +393,18 @@ const IMPL = {
   'SYS.gather_all': 'gatherAll', 'SYS.scatter_all': 'scatterAll', 'SYS.cache': 'Cache',
   'SYS.ref_count': 'RefCounter', 'SYS.stream': 'TaskStream', 'SYS.checkpoint': 'checkpoint',
   'SYS.profile': 'Profiler', 'SYS.trace': 'Tracer', 'SYS.dispatch': 'Dispatcher',
-  'SYS.barrier': 'Barrier', 'SYS.event': 'EventLog', 'SYS.prefetch': 'prefetch'
+  'SYS.barrier': 'Barrier', 'SYS.event': 'EventLog',   'SYS.prefetch': 'prefetch',
+  /* 执行变体内核（v1.1.2）—— batched / inplace 变体 */
+  'TENSOR.transpose.batched': 'batched_transpose', 'LINALG.matvec.batched': 'batched_matVec',
+  'NUMER.softmax.batched': 'batched_softmax', 'PROB.gauss_pdf.batched': 'batched_gaussPDF',
+  'INFO.entropy.batched': 'batched_entropy', 'NORM.normalize_l2.batched': 'batched_normalizeL2',
+  'FWD.linear.batched': 'batched_linear', 'BWD.grad_relu.batched': 'batched_gradRelu',
+  'METRIC.mse.batched': 'batched_mse', 'ATTEN.self_attn.batched': 'batched_selfAttention',
+  'GRAPH.marginal.batched': 'batched_marginal', 'RL.epsilon_greedy.batched': 'batched_epsilonGreedy',
+  'OPTIM.grad_clip.batched': 'batched_gradClip', 'DATA.onehot.batched': 'batched_oneHot',
+  'SYS.reduce_all.batched': 'batched_reduceAll', 'SAMPLE.categorical.batched': 'batched_categorical',
+  'TENSOR.fill.inplace': 'inplace_tensorFill', 'TENSOR.copy.inplace': 'inplace_tensorCopy',
+  'NORM.normalize_l2.inplace': 'inplace_normalizeL2'
 };
 
 /* ---------- 生成 ---------- */
@@ -405,7 +416,10 @@ for (const g of GROUPS) {
     for (const v of VARIANTS) {
       n++;
       const key = g.code + '.' + op[0];
-      const impl = IMPL[key] !== undefined ? IMPL[key] : op[3];
+      const baseImpl = IMPL[key] !== undefined ? IMPL[key] : op[3];
+      const impl = v.key === 'base'
+        ? baseImpl
+        : (IMPL[key + '.' + v.key] !== undefined ? IMPL[key + '.' + v.key] : null);
       registry.push({
         id: 'L10.' + String(n).padStart(4, '0'),
         layer: 10,
@@ -417,7 +431,7 @@ for (const g of GROUPS) {
         name: op[0] + '.' + v.key,
         semantics: op[1] + '（' + v.note + '）',
         invariant: op[2],
-        status: (v.key === 'base' && impl) ? 'verified' : 'spec',
+        status: impl ? 'verified' : 'spec',
         impl: impl || null
       });
     }

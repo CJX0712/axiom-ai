@@ -8,23 +8,23 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
 ┌────────────────────────────────────────────────────────┐
 │ L9  组合应用层    推理编排 / 训练编排（由 L1–L8 组合）  │
 ├────────────────────────────────────────────────────────┤
-│ L8  系统运行时    arena / reduce / broadcast / 同步原语 │ 15/64 verified
+│ L8  系统运行时    arena / reduce / broadcast / 同步原语 │ 16/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L7  评估与数据    metrics / split / fold / encode       │ 32/128 verified
+│ L7  评估与数据    metrics / split / fold / encode       │ 34/128 verified
 ├────────────────────────────────────────────────────────┤
-│ L6  强化学习      Bellman / VI / TD / Q-Learning / GAE  │ 16/64 verified
+│ L6  强化学习      Bellman / VI / TD / Q-Learning / GAE  │ 17/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L5  概率图模型    前向-后向 / Viterbi / BP / VE / D-分离 │ 16/64 verified
+│ L5  概率图模型    前向-后向 / Viterbi / BP / VE / D-分离 │ 17/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L4  序列与生成    attention / flash / rope / sampling   │ 32/128 verified
+│ L4  序列与生成    attention / flash / rope / sampling   │ 34/128 verified
 ├────────────────────────────────────────────────────────┤
-│ L3  表示学习      forward / backward / normalize        │ 48/192 verified
+│ L3  表示学习      forward / backward / normalize        │ 52/192 verified
 ├────────────────────────────────────────────────────────┤
-│ L2  监督学习      optimizers（10 种，全部收敛验证）      │ 16/64 verified
+│ L2  监督学习      optimizers（10 种，全部收敛验证）      │ 17/64 verified
 ├────────────────────────────────────────────────────────┤
-│ L1  数学基础      tensor / linalg / numer / prob / info │ 80/320 verified
+│ L1  数学基础      tensor / linalg / numer / prob / info │ 87/320 verified
 ├────────────────────────────────────────────────────────┤
-│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 255/1024 verified
+│ L10 微指令层      16 族 × 16 算子 × 4 变体 = 1024 条    │ 274/1024 verified
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -53,7 +53,7 @@ AXIOM 将"世界顶级 AI"分解为 10 个系统层。下层为上层提供**可
  --- --- 
   `id`   `L10.NNNN`，N ∈ [1,1024]，连续唯一  
   `variant`   ∈ {`base`, `batched`, `fused`, `inplace`}  
-  `status`   `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；仅 `base` 变体可 verified  
+  `status`   `verified` ⟺ 存在 `core.js` 参考实现且通过不变量自检；base / batched / inplace 变体均可 verified（batched：沿 batch 维逐位一致；inplace：原地执行逐位一致）  
   `impl`   `core.js` 导出函数名；verified 项必须真实存在（注册表断言校验）  
 
 ### 执行变体契约

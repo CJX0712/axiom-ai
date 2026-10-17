@@ -1,5 +1,19 @@
 # 更新日志
 
+## [1.1.2] - 2026-10-18
+
+### 执行变体内核化（variant layer）
+- 注册表生成器支持 `batched` / `inplace` 变体标记 verified（键格式 `GROUP.op.variant`）
+- 新增 **batched 变体内核**（沿 batch 维独立执行，结果与逐样本调用逐位一致）：覆盖 16 族代表算子
+  TENSOR.transpose · LINALG.matvec · NUMER.softmax · PROB.gauss_pdf · INFO.entropy ·
+  NORM.normalize_l2 · FWD.linear · BWD.grad_relu · METRIC.mse · ATTEN.self_attn ·
+  GRAPH.marginal · RL.epsilon_greedy · OPTIM.grad_clip · DATA.onehot · SYS.reduce_all · SAMPLE.categorical
+- 新增 **inplace 变体内核**（原地执行，返回值与 out-of-place 逐位一致）：
+  TENSOR.fill · TENSOR.copy · NORM.normalize_l2
+- 不变量 +2：`variant.batched`（16 族代表算子逐位一致性）· `variant.inplace`
+- 指标：verified **255 → 274 / 1024**；核心不变量 **175 → 177**；16 族代表算子 variant 层落地
+- 文档：README / ARCHITECTURE 分层计数与徽章一致性更新；补充变体层说明
+
 ## [1.1.1] - 2026-10-18
 
 **路线图攻坚：15/16 指令族满核化（16/16），verified 249 → 255/1024，核心不变量 169 → 175 项，185/185 + 26/26 全绿。**
