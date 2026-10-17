@@ -2464,15 +2464,14 @@
     /* NUMER 数值稳定：激活类为逐元素标量，其余为整向量 */
     'NUMER.softmax': { cls: 'vec', fn: softmax, sample: _V },
     'NUMER.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V },
-    'NUMER.tanh': { cls: 'elem', fn: tanh, sample: _V },
     'NUMER.relu': { cls: 'elem', fn: relu, sample: _V },
     'NUMER.gelu': { cls: 'elem', fn: gelu, sample: _V },
     'NUMER.erf': { cls: 'elem', fn: erf, sample: _V },
     'NUMER.reciprocal': { cls: 'elem', fn: reciprocal, sample: _V },
     'NUMER.expm1': { cls: 'elem', fn: expm1, sample: _V },
     'NUMER.log1p': { cls: 'elem', fn: log1p, sample: _V },
-    'NUMER.kahanSum': { cls: 'vec', fn: kahanSum, sample: _V },
-    'NUMER.exactSum': { cls: 'vec', fn: exactSum, sample: _V },
+    'NUMER.kahan': { cls: 'vec', fn: kahanSum, sample: _V },
+    'NUMER.exactsum': { cls: 'vec', fn: exactSum, sample: _V },
     /* NORM 归一化（整向量） */
     'NORM.l1': { cls: 'vec', fn: l1Norm, sample: _V },
     'NORM.l2': { cls: 'vec', fn: l2Norm, sample: _V },
@@ -2506,7 +2505,6 @@
     'PROB.expectation': { cls: 'vec', fn: expectation, sample: _V },
     'PROB.variance': { cls: 'vec', fn: variance, sample: _V },
     'PROB.marginal': { cls: 'vec', fn: marginal, sample: _M },
-    'PROB.normalize_dist': { cls: 'vec', fn: normalizeDist, sample: _V },
     /* METRIC 评估（成对） */
     'METRIC.accuracy': { cls: 'pair', fn: accuracy, sample: _P },
     'METRIC.precision': { cls: 'pair', fn: precision, sample: _P },

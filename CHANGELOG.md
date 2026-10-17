@@ -8,7 +8,7 @@
 - 新增 `_writeBack` 递归写回助手：支持 1D 向量与 2D 矩阵原地覆写（矩阵类算子 inverse/cholesky 无需额外分支即可原地落位）
 - 不变量 +0（仍为 178 核心）：`variant.inplace` 聚合检查遍历 `INPLACE_SIG`，断言 `inplace` 路径 ≡ out-of-place（残差 ≤ 1e-15），并带"至少覆盖 10 个算子"守卫；保留 3 个具名原地内核（fill/copy/normalize_l2，真正原地无中间数组）
 - `gen-registry.js` 由 `INPLACE_SIG` 驱动 inplace 变体标记 verified（键格式 `GROUP.op.inplace`），与 `BATCH_SIG` 驱动 batched 完全对称
-- 指标：verified **339 → 356 / 1024**；inplace 层 **3 → 20**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 487.4 KB
+- 指标：verified **339 → 358 / 1024**；batched 层 **65 → 67**（附加清理 BATCH_SIG 幽灵键：kahan/exactsum 算子名对齐 + 移除重复的 PROB.normalize_dist）；inplace 层 **3 → 20**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 487.3 KB
 - 文档：README/ARCHITECTURE 徽章与分层计数一致性更新
 
 ## [1.1.4] - 2026-10-18
