@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.1.9] - 2026-10-19
+
+### 融合对齐扩面（FUSE_SIG 全谱对齐 BATCH_SIG）
+- **目标**：`FUSE_SIG` 与 `BATCH_SIG` 键集完全对齐——任何可批处理的算子即可融合，两表语义互补
+- `FUSE_SIG` **140 → 156 条**（新增 16 条：softmax/linear/grad_tanh/cross_entropy/gauss_pdf/mse/matvec/lstsq/grad_clip/reduce_all/marginal/epsilon_greedy/categorical/topk/transpose/normalize_l2；尾算子统一 `Math.abs`）
+- 甄别与剔除：`ATTEN.self_attn`/`DATA.onehot` 为 special 多返回类（无逐 item 融合语义）、`DATA.label_encode` 输出含字符串——诚实排除；16 条候选沙盒 45 个 item 全部通过 `fused ≡ Math.abs ∘ op`（≤1e-15）
+- **注册表标记诚实说明**：13 条的 fused 变体按"具名优先"由 v1.1.3 强不变量具名内核接管（如 softmax→`fused_softmax_log`、linear→`fused_linear_relu`、topk→`fused_topk_temp`），净增 verified **+3**（lstsq/epsilon_greedy/categorical）；`FUSE_SIG` 条目仍全部参与 `variant.fused` 通用引擎聚合测试——通用引擎与具名内核双轨覆盖
+- 修复：`RL.epsilon_greedy` 的随机源闭包不可跨作用域序列化，改用与 BATCH_SIG 一致的 `mulberry32(99)` 工厂调用（签名表值必须为字面量或作用域内标识符——新增注入铁律）
+- 指标：verified **615 → 618 / 1024**；fused 层 **155 → 158**（142 引擎 + 16 具名）；`FUSE_SIG`/`BATCH_SIG` 键集差 = 3（2 special + 1 字符串，全部为诚实排除）；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 516.9 KB
+
 ## [1.1.8] - 2026-10-19
 
 ### 通用原地引擎规模化扩面（Generic Inplace Engine Scale-Out）

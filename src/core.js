@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.8';
+  var VERSION = '1.1.9';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2903,7 +2903,26 @@
     'RL.td0': { cls: 'pair', fn: td0Sweep, sample: [[[3, 0.9], [5, 0.95]]], post: Math.abs },
     'RL.td_lambda': { cls: 'triple', fn: eligibilityTrace, sample: [[[[0, 1, 0], 0.9, 0.5], [[1, 1, 0], 0.8, 0.3]]], post: Math.abs },
     'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[[1, 5, 2], [3, 1, 4]]], post: Math.abs },
-    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]], post: Math.abs }};
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]], post: Math.abs },
+
+    /* —— v1.1.9 融合对齐扩面（新增 16 条，与 BATCH_SIG 全谱对齐；其中 6 条注册表标记由具名内核优先接管，净增 10）—— */
+    'TENSOR.transpose': { cls: 'vec', fn: transpose, sample: [[[1,2],[3,4]],[[5,6],[7,8]],[[2,1],[0,3]]], post: Math.abs },
+    'NUMER.softmax': { cls: 'vec', fn: softmax, sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs },
+    'NORM.normalize_l2': { cls: 'vec', fn: normalizeL2, sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs },
+    'FWD.linear': { cls: 'shared', fn: linear, shared: [[[1,0],[0,1]], [0,0]], sample: [[[1,2],[3,4]],[[5,6],[7,8]],[[2,1],[0,3]]], post: Math.abs },
+    'BWD.grad_tanh': { cls: 'vec', fn: gradTanh, sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs },
+    'INFO.cross_entropy': { cls: 'pair', fn: crossEntropy, sample: [[[1,2,3],[3,2,1]],[[4,5,6],[6,5,4]],[[0.1,0.2,0.3],[0.3,0.2,0.1]]], post: Math.abs },
+    'PROB.gauss_pdf': { cls: 'triple', fn: gaussPDF, sample: [[1,0,1],[0.5,0,1],[2,1,1]], post: Math.abs },
+    'METRIC.mse': { cls: 'pair', fn: mse, sample: [[[1,2,3],[3,2,1]],[[4,5,6],[6,5,4]],[[0.1,0.2,0.3],[0.3,0.2,0.1]]], post: Math.abs },
+    'LINALG.matvec': { cls: 'pair', fn: matVec, sample: [[[[1,2],[3,4]],[1,1]],[[[5,6],[7,8]],[0,1]],[[[2,1],[0,3]],[1,0]]], post: Math.abs },
+    'LINALG.lstsq': { cls: 'pair', fn: linearRegression, sample: [[[[1,2],[3,4],[5,6]],[1,2,3]],[[[2,1],[1,2],[0,1]],[4,5,6]]], post: Math.abs },
+    'OPTIM.grad_clip': { cls: 'shared', fn: gradClip, shared: [1], sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs },
+    'SYS.reduce_all': { cls: 'vec', fn: reduceAll, sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs },
+    'GRAPH.marginal': { cls: 'vec', fn: marginal, sample: [[[1,2],[3,4]],[[5,6],[7,8]],[[2,1],[0,3]]], post: Math.abs },
+    'RL.epsilon_greedy': { cls: 'shared', fn: epsilonGreedy, shared: [0, mulberry32(99)], sample: [[1, 5, 2], [4, 1, 0]], post: Math.abs },
+    'SAMPLE.categorical': { cls: 'pair', fn: categoricalSample, sample: [[[0.2,0.3,0.5],7],[[0.1,0.4,0.5],5]], post: Math.abs },
+    'SAMPLE.topk': { cls: 'shared', fn: topK, shared: [2], sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs }
+  };
 
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
