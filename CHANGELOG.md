@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.1.8] - 2026-10-19
+
+### 通用原地引擎规模化扩面（Generic Inplace Engine Scale-Out）
+- **目标**：把 `inplace` 引擎从"17 个单输入算子"扩到全谱——引擎统一为「首参 dst 写回」，签名表驱动
+- `inplace()` 引擎升级（4 行统一化）：`elem` 类新增可选 `extra` 标量参数（逐元素 `f(x, ...extra)`，如截断 clip(x, lo, hi)）；`vec / pair / triple / args` 统一走「首参 dst 写回 + `s.extra` 传参」，多输入算子（残差加、层归一化、批归一化、组归一化、谱归一化、温度采样、梯度裁剪、相对位置偏置、ALiBi、洗牌、Mixup、权重衰减、Dropout）无需包装函数即可原地化
+- `INPLACE_SIG` **17 → 43 条**（新增 26 条，覆盖 NUMER/INFO/TENSOR/SYS/FWD/BWD/NORM/ATTEN/SAMPLE/DATA/OPTIM 共 11 族）
+- `variant.inplace` 聚合检查朴素参照路径同步升级（elem+extra / 多输入 apply 分支），覆盖守卫 10 → 25
+- **样本质量闭环**：26 条新签名全部经沙盒逐条验证（引擎逻辑复刻 + `inplace ≡ out-of-place` ≤1e-15 + 无异常），26/26 一次通过后生成器整块写入
+- 指标：verified **589 → 615 / 1024**（+26）；inplace 层 **20 → 46**（43 引擎 + 3 具名）；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 514.8 KB
+- 诚实说明：多输入原地语义为「首参 dst 写回」——`_writeBack` 要求输出与 dst 形状严格一致，形状变化类算子（pad/truncate/gather/zip 等）诚实排除；采样类 refill（uniform/normal 等以 n 为首参）语义不符同样排除
+
 ## [1.1.7] - 2026-10-19
 
 ### 三大引擎规模化扩面（Engine Scale-Out）

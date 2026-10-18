@@ -1,6 +1,6 @@
 {
   "name": "axiom-ai",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "AXIOM · 自验证 AI 微指令操作系统 —— 十层架构 × 1024 微指令 × 178 项不变量，零依赖单文件，可运行 / 可复现 / 可验证",
   "main": "src/core.js",
   "scripts": {
