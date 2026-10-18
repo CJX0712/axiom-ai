@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.1';
+  var VERSION = '1.2.2';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2458,6 +2458,7 @@
   var _LSTSQ = [[[[1, 2], [3, 4], [5, 6]], [1, 2, 3]], [[[2, 1], [1, 2], [0, 1]], [4, 5, 6]]];
   /* v1.2.1 签名表自包含函数字面量（无自由变量，可安全序列化） */
   var FQ = function (x) { return x[0] * x[0]; };
+  var GQ = function (x) { return [2 * x[0], 2 * x[1]]; };
   var FV = function (x) { return [x[0] * x[0], 2 * x[1]]; };
   var GAUSS = function (x) { return Math.exp(-x * x / 2); };
   var UNIF = function (x) { return 1 / 2; };
@@ -2696,6 +2697,35 @@
     'ATTEN.flash': { cls: 'args', fn: flashAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 1], [[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2]] },
     'DATA.normalize_fit': { cls: 'pair', fn: normalizeFit, sample: [[[1, 2, 3, 4], [5, 6]], [[2, 3], [4, 5]]] },
     'LINALG.pca': { cls: 'pair', fn: pca, sample: [[[[4, 1], [1, 3]], 1], [[[2, 0], [0, 2]], 1]] }
+  ,
+
+    /* —— v1.2.2 图推断+优化器批次（新增 26 条 batched，样本经沙盒逐条验证）—— */
+    'OPTIM.gd': { cls: 'args', fn: gradientDescent, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.adam': { cls: 'args', fn: adam, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.momentum': { cls: 'args', fn: momentum, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.nesterov': { cls: 'args', fn: nesterov, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.adagrad': { cls: 'args', fn: adagrad, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.rmsprop': { cls: 'args', fn: rmsprop, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.adamw': { cls: 'args', fn: adamw, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.lbfgs': { cls: 'args', fn: lbfgs, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.bfgs': { cls: 'args', fn: bfgs, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]] },
+    'OPTIM.cg': { cls: 'args', fn: conjugateGradient, sample: [[[[4, 1], [1, 3]], [1, 2], {  }], [[[3, 0], [0, 2]], [1, 1], {  }]] },
+    'OPTIM.line_search': { cls: 'args', fn: lineSearch, sample: [[FQ, GQ, [1, 2], [-2, -4], {  }], [FQ, GQ, [2, 1], [-4, -2], {  }]] },
+    'GRAPH.forward_backward': { cls: 'args', fn: hmmForwardBackward, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]] },
+    'GRAPH.viterbi': { cls: 'args', fn: hmmViterbi, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]] },
+    'GRAPH.belief_prop': { cls: 'args', fn: chainBeliefProp, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]] },
+    'GRAPH.variable_elim': { cls: 'args', fn: variableElim, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]] },
+    'GRAPH.map_query': { cls: 'args', fn: hmmViterbi, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]] },
+    'GRAPH.junction_tree': { cls: 'pair', fn: junctionTree, sample: [[[[0, 1], [1, 2]], [[0, 1]]], [[[0, 1], [1, 2], [2, 3]], [[0, 1], [1, 2]]]] },
+    'GRAPH.condition': { cls: 'pair', fn: conditionalRow, sample: [[[[0.1, 0.9], [0.8, 0.2]], 0], [[[0.1, 0.9], [0.8, 0.2]], 1]] },
+    'GRAPH.gibbs': { cls: 'args', fn: gibbsSampler, sample: [[[[0, 1], [1, 0]], 100, 20, 1], [[[0.2, 0.8], [0.6, 0.4]], 100, 20, 2]] },
+    'GRAPH.mcmc': { cls: 'args', fn: metropolisSample, sample: [[[0.3, 0.7], 100, 20, 1], [[0.1, 0.5, 0.4], 100, 20, 2]] },
+    'GRAPH.particle': { cls: 'args', fn: particleFilter, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0], 50, 1], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0], 50, 2]] },
+    'GRAPH.kalman': { cls: 'args', fn: kalmanFilter1d, sample: [[[1, 2, 3], 1, 1, 0.1, 0.1, 0, 1], [[2, 4], 0.9, 1, 0.2, 0.3, 1, 1]] },
+    'GRAPH.dsep': { cls: 'args', fn: dSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]] },
+    'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]] },
+    'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]] },
+    'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
@@ -3053,6 +3083,35 @@
     'ATTEN.flash': { cls: 'args', fn: flashAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 1], [[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2]], post: Math.abs },
     'DATA.normalize_fit': { cls: 'pair', fn: normalizeFit, sample: [[[1, 2, 3, 4], [5, 6]], [[2, 3], [4, 5]]], post: Math.abs },
     'LINALG.pca': { cls: 'pair', fn: pca, sample: [[[[4, 1], [1, 3]], 1], [[[2, 0], [0, 2]], 1]], post: Math.abs }
+  ,
+
+    /* —— v1.2.2 图推断+优化器批次（新增 26 条 fused，样本经沙盒逐条验证）—— */
+    'OPTIM.gd': { cls: 'args', fn: gradientDescent, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.adam': { cls: 'args', fn: adam, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.momentum': { cls: 'args', fn: momentum, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.nesterov': { cls: 'args', fn: nesterov, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.adagrad': { cls: 'args', fn: adagrad, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.rmsprop': { cls: 'args', fn: rmsprop, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.adamw': { cls: 'args', fn: adamw, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.lbfgs': { cls: 'args', fn: lbfgs, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.bfgs': { cls: 'args', fn: bfgs, sample: [[FQ, GQ, [1, 2], {  }], [FQ, GQ, [0.5, 1], {  }]], post: Math.abs },
+    'OPTIM.cg': { cls: 'args', fn: conjugateGradient, sample: [[[[4, 1], [1, 3]], [1, 2], {  }], [[[3, 0], [0, 2]], [1, 1], {  }]], post: Math.abs },
+    'OPTIM.line_search': { cls: 'args', fn: lineSearch, sample: [[FQ, GQ, [1, 2], [-2, -4], {  }], [FQ, GQ, [2, 1], [-4, -2], {  }]], post: Math.abs },
+    'GRAPH.forward_backward': { cls: 'args', fn: hmmForwardBackward, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]], post: Math.abs },
+    'GRAPH.viterbi': { cls: 'args', fn: hmmViterbi, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]], post: Math.abs },
+    'GRAPH.belief_prop': { cls: 'args', fn: chainBeliefProp, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]], post: Math.abs },
+    'GRAPH.variable_elim': { cls: 'args', fn: variableElim, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]], post: Math.abs },
+    'GRAPH.map_query': { cls: 'args', fn: hmmViterbi, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0, 1]]], post: Math.abs },
+    'GRAPH.junction_tree': { cls: 'pair', fn: junctionTree, sample: [[[[0, 1], [1, 2]], [[0, 1]]], [[[0, 1], [1, 2], [2, 3]], [[0, 1], [1, 2]]]], post: Math.abs },
+    'GRAPH.condition': { cls: 'pair', fn: conditionalRow, sample: [[[[0.1, 0.9], [0.8, 0.2]], 0], [[[0.1, 0.9], [0.8, 0.2]], 1]], post: Math.abs },
+    'GRAPH.gibbs': { cls: 'args', fn: gibbsSampler, sample: [[[[0, 1], [1, 0]], 100, 20, 1], [[[0.2, 0.8], [0.6, 0.4]], 100, 20, 2]], post: Math.abs },
+    'GRAPH.mcmc': { cls: 'args', fn: metropolisSample, sample: [[[0.3, 0.7], 100, 20, 1], [[0.1, 0.5, 0.4], 100, 20, 2]], post: Math.abs },
+    'GRAPH.particle': { cls: 'args', fn: particleFilter, sample: [[[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0], 50, 1], [[0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [1, 0], 50, 2]], post: Math.abs },
+    'GRAPH.kalman': { cls: 'args', fn: kalmanFilter1d, sample: [[[1, 2, 3], 1, 1, 0.1, 0.1, 0, 1], [[2, 4], 0.9, 1, 0.2, 0.3, 1, 1]], post: Math.abs },
+    'GRAPH.dsep': { cls: 'args', fn: dSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]], post: Math.abs },
+    'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]], post: Math.abs },
+    'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]], post: Math.abs },
+    'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]], post: Math.abs }
   };
 
   var checks = [];

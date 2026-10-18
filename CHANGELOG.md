@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.2.2] - 2026-10-19
+
+### 图推断 + 优化器批次（GRAPH & OPTIM Batch）
+- **目标**：攻克最后两大族的批处理覆盖——GRAPH 15 条全部 + OPTIM 优化器系 11 条
+- **GRAPH 15 条**（HMM 系样本重构）：`forward_backward`/`viterbi`/`belief_prop`/`variable_elim`/`map_query`（统一 pi/A/B/obs 四参结构，v1.1.7 的 E.fb 维度错误根源修复）、`junction_tree`（团树+RIP）、`condition`（条件查询）、`gibbs`/`mcmc`（平稳分布采样）、`particle`（自举滤波）、`kalman`（一维滤波）、`dsep`/`m_sep`（D/M-分离判定，dag 邻接对象）、`clique_tree`（团树校准，因子对象）、`factor_product`（因子乘积）
+- **OPTIM 11 条**（修正参数顺序认知）：优化器签名实为 `(f, grad, x0, opts)`——f/grad 在前，v1.1.7 误将 `[fq,gq,{}]` 作 shared 追加至 x0 后导致 x0=函数而 `x0.slice` 炸；改为 args 类 `[FQ, GQ, x0, opts]`。覆盖 gd/adam/momentum/nesterov/adagrad/rmsprop/adamw/lbfgs/bfgs/cg/line_search
+- **fused 对齐 +26**（FUSE_SIG 201→227）：新键全部补齐融合条目，通用引擎测试覆盖随之扩展
+- 新增常量 `GQ`（凸二次梯度 `[2x₀, 2x₁]`）至签名表字面量区，与 FQ 配对服务优化器系样本
+- 指标：verified **718 → 770 / 1024**（+52：batched 204→230 / fused 203→229）；spec **306 → 254**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 540.3 KB；三表幽灵键 0
+
 ## [1.2.1] - 2026-10-19
 
 ### 修复批次 · 样本设计误杀修复（Fix Batch）
