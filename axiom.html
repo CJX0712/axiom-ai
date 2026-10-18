@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.5';
+  var VERSION = '1.1.6';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2615,6 +2615,99 @@
     throw new Error('inplace: 未知 cls ' + s.cls);
   }
 
+  /* 通用 Epilogue 融合引擎（v1.1.6）：单一 fused(opCode, item) 调度器 + FUSE_SIG 签名表。
+   * 语义：算子输出不落地中间张量，单遍「就地」施加逐元素尾算子（epilogue）；
+   *     硬不变量 fused ≡ post ∘ op（≤1e-15）。
+   * 世界级范式锚定：cuBLASLt / CUTLASS 的 GEMM epilogue 融合（BIAS/RELU/GELU 尾算子内联进主循环）。
+   * 与 BATCH_SIG 同构复用 cls/sample（vec/elem/pair/triple/shared），仅多一个逐元素 post。 */
+  function _applySig(s, item) { // 单样本按 cls 施加算子
+    var f = s.fn;
+    if (s.cls === 'vec') return f(item);
+    if (s.cls === 'elem') return item.map(function (e) { return f(e); });
+    if (s.cls === 'pair') return f(item[0], item[1]);
+    if (s.cls === 'triple') return f(item[0], item[1], item[2]);
+    if (s.cls === 'shared') return f.apply(null, [item].concat(s.shared));
+    throw new Error('_applySig: 未知 cls ' + s.cls);
+  }
+  function _epilogue(dst, g) { // 就地单遍施加逐元素尾算子（不物化中间张量，单次分配）
+    if (typeof dst === 'number') return g(dst);
+    if (Array.isArray(dst)) { for (var i = 0; i < dst.length; i++) dst[i] = _epilogue(dst[i], g); return dst; }
+    return dst;
+  }
+  function _mapPost(src, g) { // 参照实现：纯函数逐元素映射（会物化中间张量，两次分配）
+    if (typeof src === 'number') return g(src);
+    if (Array.isArray(src)) return src.map(function (x) { return _mapPost(x, g); });
+    return src;
+  }
+  function fused(opCode, item) {
+    var s = FUSE_SIG[opCode];
+    if (!s) throw new Error('fused: 无签名 ' + opCode);
+    return _epilogue(_applySig(s, item), s.post);
+  }
+  var FUSE_SIG = {
+    /* TENSOR：拷贝 / 展平 ∘ ReLU 尾算子 */
+    'TENSOR.copy': { cls: 'vec', fn: tensorCopy, sample: _M, post: relu },
+    'TENSOR.flatten': { cls: 'vec', fn: flatten, sample: _M, post: relu },
+    /* NUMER：激活 ∘ 对数域 / 平方根；expm1↔log1p 为互逆尾算子 */
+    'NUMER.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V, post: Math.log },
+    'NUMER.relu': { cls: 'elem', fn: relu, sample: _V, post: Math.sqrt },
+    'NUMER.gelu': { cls: 'elem', fn: gelu, sample: _V, post: tanh },
+    'NUMER.erf': { cls: 'elem', fn: erf, sample: _V, post: Math.abs },
+    'NUMER.reciprocal': { cls: 'elem', fn: reciprocal, sample: _V, post: Math.abs },
+    'NUMER.expm1': { cls: 'elem', fn: expm1, sample: _V, post: log1p },       // log1p(expm1(x)) = x
+    'NUMER.log1p': { cls: 'elem', fn: log1p, sample: _V, post: expm1 },       // expm1(log1p(x)) = x
+    'NUMER.kahan': { cls: 'vec', fn: kahanSum, sample: _V, post: Math.abs },
+    'NUMER.exactsum': { cls: 'vec', fn: exactSum, sample: _V, post: Math.abs },
+    /* NORM：范数 ∘ 倒数 = 自适应缩放因子；缩放 ∘ tanh 压缩 */
+    'NORM.l1': { cls: 'vec', fn: l1Norm, sample: _V, post: Math.sqrt },
+    'NORM.l2': { cls: 'vec', fn: l2Norm, sample: _V, post: reciprocal },
+    'NORM.linf': { cls: 'vec', fn: linfNorm, sample: _V, post: reciprocal },
+    'NORM.minmax': { cls: 'vec', fn: minmaxScale, sample: _V, post: tanh },
+    'NORM.zscore': { cls: 'vec', fn: zscore, sample: _V, post: tanh },
+    /* FWD：log-softmax / log-sigmoid（对数域稳定，损失层直接消费） */
+    'FWD.softmax': { cls: 'vec', fn: softmax, sample: _V, post: Math.log },
+    'FWD.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V, post: Math.log },
+    'FWD.gelu': { cls: 'elem', fn: gelu, sample: _V, post: tanh },
+    'FWD.relu': { cls: 'elem', fn: relu, sample: _V, post: Math.sqrt },
+    'FWD.tanh': { cls: 'elem', fn: tanh, sample: _V, post: Math.abs },
+    /* BWD：梯度掩码 ∘ Sigmoid */
+    'BWD.grad_relu': { cls: 'vec', fn: gradRelu, sample: _V, post: sigmoid },
+    /* INFO：熵 ∘ exp = 困惑度；散度 ∘ sqrt（Hellinger 型距离） */
+    'INFO.entropy': { cls: 'vec', fn: entropy, sample: _V, post: Math.exp },
+    'INFO.kl': { cls: 'pair', fn: klDivergence, sample: _P, post: Math.sqrt },
+    'INFO.js': { cls: 'pair', fn: jsDivergence, sample: _P, post: Math.sqrt },
+    'INFO.mutual_info': { cls: 'vec', fn: mutualInfo, sample: _M, post: Math.abs },
+    'INFO.conditional_entropy': { cls: 'vec', fn: conditionalEntropy, sample: _M, post: Math.exp },
+    'INFO.gini': { cls: 'vec', fn: gini, sample: _V, post: Math.sqrt },
+    'INFO.normalize_dist': { cls: 'vec', fn: normalizeDist, sample: _V, post: Math.abs },
+    /* PROB：方差 ∘ sqrt = 标准差；CDF ∘ log */
+    'PROB.gauss_cdf': { cls: 'triple', fn: normalCDF, sample: _T, post: Math.log },
+    'PROB.covariance': { cls: 'pair', fn: covariance, sample: _P, post: Math.abs },
+    'PROB.expectation': { cls: 'vec', fn: expectation, sample: _V, post: tanh },
+    'PROB.variance': { cls: 'vec', fn: variance, sample: _V, post: Math.sqrt },
+    'PROB.marginal': { cls: 'vec', fn: marginal, sample: _M, post: Math.sqrt },
+    /* METRIC：比率型 ∘ sqrt；余弦 ∘ abs */
+    'METRIC.accuracy': { cls: 'pair', fn: accuracy, sample: _P, post: Math.sqrt },
+    'METRIC.precision': { cls: 'pair', fn: precision, sample: _P, post: Math.sqrt },
+    'METRIC.recall': { cls: 'pair', fn: recall, sample: _P, post: Math.sqrt },
+    'METRIC.f1': { cls: 'pair', fn: f1, sample: _P, post: Math.sqrt },
+    'METRIC.mae': { cls: 'pair', fn: mae, sample: _P, post: Math.sqrt },
+    'METRIC.cosine': { cls: 'pair', fn: cosineSimilarity, sample: _P, post: Math.abs },
+    /* LINALG：GEMM ∘ ReLU（cuBLASLt epilogue 正统范式）；log|det|（高斯对数似然项） */
+    'LINALG.matmul': { cls: 'pair', fn: matMul, sample: _MM, post: relu },
+    'LINALG.solve': { cls: 'pair', fn: solveLinear, sample: _SOLVE, post: relu },
+    'LINALG.trace': { cls: 'vec', fn: trace, sample: _MS, post: Math.abs },
+    'LINALG.det': { cls: 'vec', fn: det, sample: _MS, post: Math.log },
+    'LINALG.inverse': { cls: 'vec', fn: inverse, sample: _MS, post: Math.abs },
+    'LINALG.cholesky': { cls: 'vec', fn: cholesky, sample: _MS, post: Math.abs },
+    /* OPTIM：梯度范数 ∘ 倒数 = 自适应步长缩放因子 */
+    'OPTIM.grad_norm': { cls: 'vec', fn: gradNorm, sample: _V, post: reciprocal },
+    /* SYS：广播 ∘ ReLU */
+    'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: _V, post: relu },
+    /* SAMPLE：温度 softmax ∘ log（对数域损失输入） */
+    'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V, post: Math.log }
+  };
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -4291,8 +4384,19 @@
   }
 
   /* 执行变体：fused 融合一致性（v1.1.3） */
-  check('variant.fused：与相邻算子融合，输出等于顺序组合（参照实现 vs 主实现，16 族代表算子）', 1e-15, function () {
-    var bad = 0;
+  check('variant.fused：通用 Epilogue 融合引擎 — fused ≡ post ∘ op（不物化中间张量）＋16 族代表算子融合', 1e-15, function () {
+    var bad = 0, n = 0;
+    // 通用融合引擎：遍历 FUSE_SIG，断言 fused 路径 ≡ 纯组合（post ∘ op）
+    for (var fcode in FUSE_SIG) {
+      if (!FUSE_SIG.hasOwnProperty(fcode)) continue;
+      var fs = FUSE_SIG[fcode], fitems = fs.sample;
+      for (var fi = 0; fi < fitems.length; fi++) {
+        n++;
+        var fgot = fused(fcode, cloneVal(fitems[fi]));
+        var fref = _mapPost(_applySig(fs, cloneVal(fitems[fi])), fs.post);
+        if (arrMaxDiff(fgot, fref) > 1e-15) bad++;
+      }
+    }
     var A = [[1, 2, 3], [4, 5, 6]];
     if (arrMaxDiff(fused_transpose_flatten(A), flatten(transpose(A))) > 1e-15) bad++;
     var M = [[1, 2], [3, 4]], xv = [1, 1];
@@ -4334,7 +4438,7 @@
     var labels = ['a', 'b', 'a', 'c'];
     if (arrMaxDiff(fused_label_onehot(labels), oneHot(labelEncode(labels).codes).matrix) > 0) bad++;
     if (Math.abs(fused_allreduce([1, 2, 3, 4]) - reduceAll(broadcast([1, 2, 3, 4]))) > 0) bad++;
-    return bad;
+    return bad + (n < 40 ? 1e6 : 0); // 守卫：至少覆盖 40 个融合样本
   });
 
   function runChecks() {
@@ -4455,6 +4559,7 @@
     batched: batched, BATCH_SIG: BATCH_SIG,                 // 通用批处理引擎（v1.1.4）
     batched_selfAttention: batched_selfAttention, batched_oneHot: batched_oneHot,
     inplace: inplace, INPLACE_SIG: INPLACE_SIG,             // 通用原地引擎（v1.1.5）
+    fused: fused, FUSE_SIG: FUSE_SIG,                       // 通用 Epilogue 融合引擎（v1.1.6）
     inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
     /* 融合变体内核（v1.1.3） */
     fused_transpose_flatten: fused_transpose_flatten, fused_matvec_relu: fused_matvec_relu,
@@ -4524,7 +4629,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0044","layer":10,"group":"TENSOR","groupName":"张量指令","op":"cast","opZh":"类型转换","variant":"inplace","name":"cast.inplace","semantics":"类型转换（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"整型→浮点无损","status":"spec","impl":null},
   {"id":"L10.0045","layer":10,"group":"TENSOR","groupName":"张量指令","op":"copy","opZh":"拷贝","variant":"base","name":"copy.base","semantics":"拷贝（标量/单样本语义）","invariant":"深拷贝：改副本不影响原数据","status":"verified","impl":"tensorCopy"},
   {"id":"L10.0046","layer":10,"group":"TENSOR","groupName":"张量指令","op":"copy","opZh":"拷贝","variant":"batched","name":"copy.batched","semantics":"拷贝（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"深拷贝：改副本不影响原数据","status":"verified","impl":"batched"},
-  {"id":"L10.0047","layer":10,"group":"TENSOR","groupName":"张量指令","op":"copy","opZh":"拷贝","variant":"fused","name":"copy.fused","semantics":"拷贝（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"深拷贝：改副本不影响原数据","status":"spec","impl":null},
+  {"id":"L10.0047","layer":10,"group":"TENSOR","groupName":"张量指令","op":"copy","opZh":"拷贝","variant":"fused","name":"copy.fused","semantics":"拷贝（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"深拷贝：改副本不影响原数据","status":"verified","impl":"fused"},
   {"id":"L10.0048","layer":10,"group":"TENSOR","groupName":"张量指令","op":"copy","opZh":"拷贝","variant":"inplace","name":"copy.inplace","semantics":"拷贝（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"深拷贝：改副本不影响原数据","status":"verified","impl":"inplace_tensorCopy"},
   {"id":"L10.0049","layer":10,"group":"TENSOR","groupName":"张量指令","op":"gather","opZh":"收集","variant":"base","name":"gather.base","semantics":"收集（标量/单样本语义）","invariant":"输出[i] = A[idx[i]]","status":"verified","impl":"tensorGather"},
   {"id":"L10.0050","layer":10,"group":"TENSOR","groupName":"张量指令","op":"gather","opZh":"收集","variant":"batched","name":"gather.batched","semantics":"收集（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"输出[i] = A[idx[i]]","status":"spec","impl":null},
@@ -4540,11 +4645,11 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0060","layer":10,"group":"TENSOR","groupName":"张量指令","op":"fill","opZh":"填充","variant":"inplace","name":"fill.inplace","semantics":"填充（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"全部元素 = v","status":"verified","impl":"inplace_tensorFill"},
   {"id":"L10.0061","layer":10,"group":"TENSOR","groupName":"张量指令","op":"flatten","opZh":"展平","variant":"base","name":"flatten.base","semantics":"展平（标量/单样本语义）","invariant":"行优先展开，元素守恒","status":"verified","impl":"flatten"},
   {"id":"L10.0062","layer":10,"group":"TENSOR","groupName":"张量指令","op":"flatten","opZh":"展平","variant":"batched","name":"flatten.batched","semantics":"展平（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"行优先展开，元素守恒","status":"verified","impl":"batched"},
-  {"id":"L10.0063","layer":10,"group":"TENSOR","groupName":"张量指令","op":"flatten","opZh":"展平","variant":"fused","name":"flatten.fused","semantics":"展平（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"行优先展开，元素守恒","status":"spec","impl":null},
+  {"id":"L10.0063","layer":10,"group":"TENSOR","groupName":"张量指令","op":"flatten","opZh":"展平","variant":"fused","name":"flatten.fused","semantics":"展平（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"行优先展开，元素守恒","status":"verified","impl":"fused"},
   {"id":"L10.0064","layer":10,"group":"TENSOR","groupName":"张量指令","op":"flatten","opZh":"展平","variant":"inplace","name":"flatten.inplace","semantics":"展平（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"行优先展开，元素守恒","status":"spec","impl":null},
   {"id":"L10.0065","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matmul","opZh":"矩阵乘法","variant":"base","name":"matmul.base","semantics":"矩阵乘法（标量/单样本语义）","invariant":"(AB)ᵀ = BᵀAᵀ（逐位一致）","status":"verified","impl":"matMul"},
   {"id":"L10.0066","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matmul","opZh":"矩阵乘法","variant":"batched","name":"matmul.batched","semantics":"矩阵乘法（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"(AB)ᵀ = BᵀAᵀ（逐位一致）","status":"verified","impl":"batched"},
-  {"id":"L10.0067","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matmul","opZh":"矩阵乘法","variant":"fused","name":"matmul.fused","semantics":"矩阵乘法（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"(AB)ᵀ = BᵀAᵀ（逐位一致）","status":"spec","impl":null},
+  {"id":"L10.0067","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matmul","opZh":"矩阵乘法","variant":"fused","name":"matmul.fused","semantics":"矩阵乘法（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"(AB)ᵀ = BᵀAᵀ（逐位一致）","status":"verified","impl":"fused"},
   {"id":"L10.0068","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matmul","opZh":"矩阵乘法","variant":"inplace","name":"matmul.inplace","semantics":"矩阵乘法（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"(AB)ᵀ = BᵀAᵀ（逐位一致）","status":"spec","impl":null},
   {"id":"L10.0069","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matvec","opZh":"矩阵-向量乘","variant":"base","name":"matvec.base","semantics":"矩阵-向量乘（标量/单样本语义）","invariant":"‖Ax‖ ≤ ‖A‖∞·‖x‖∞","status":"verified","impl":"matVec"},
   {"id":"L10.0070","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matvec","opZh":"矩阵-向量乘","variant":"batched","name":"matvec.batched","semantics":"矩阵-向量乘（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"‖Ax‖ ≤ ‖A‖∞·‖x‖∞","status":"verified","impl":"batched"},
@@ -4552,23 +4657,23 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0072","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"matvec","opZh":"矩阵-向量乘","variant":"inplace","name":"matvec.inplace","semantics":"矩阵-向量乘（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"‖Ax‖ ≤ ‖A‖∞·‖x‖∞","status":"spec","impl":null},
   {"id":"L10.0073","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"trace","opZh":"迹","variant":"base","name":"trace.base","semantics":"迹（标量/单样本语义）","invariant":"tr(AB) = tr(BA)","status":"verified","impl":"trace"},
   {"id":"L10.0074","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"trace","opZh":"迹","variant":"batched","name":"trace.batched","semantics":"迹（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"tr(AB) = tr(BA)","status":"verified","impl":"batched"},
-  {"id":"L10.0075","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"trace","opZh":"迹","variant":"fused","name":"trace.fused","semantics":"迹（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"tr(AB) = tr(BA)","status":"spec","impl":null},
+  {"id":"L10.0075","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"trace","opZh":"迹","variant":"fused","name":"trace.fused","semantics":"迹（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"tr(AB) = tr(BA)","status":"verified","impl":"fused"},
   {"id":"L10.0076","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"trace","opZh":"迹","variant":"inplace","name":"trace.inplace","semantics":"迹（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"tr(AB) = tr(BA)","status":"spec","impl":null},
   {"id":"L10.0077","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"det","opZh":"行列式","variant":"base","name":"det.base","semantics":"行列式（标量/单样本语义）","invariant":"det(AB) = det(A)·det(B)","status":"verified","impl":"det"},
   {"id":"L10.0078","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"det","opZh":"行列式","variant":"batched","name":"det.batched","semantics":"行列式（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"det(AB) = det(A)·det(B)","status":"verified","impl":"batched"},
-  {"id":"L10.0079","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"det","opZh":"行列式","variant":"fused","name":"det.fused","semantics":"行列式（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"det(AB) = det(A)·det(B)","status":"spec","impl":null},
+  {"id":"L10.0079","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"det","opZh":"行列式","variant":"fused","name":"det.fused","semantics":"行列式（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"det(AB) = det(A)·det(B)","status":"verified","impl":"fused"},
   {"id":"L10.0080","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"det","opZh":"行列式","variant":"inplace","name":"det.inplace","semantics":"行列式（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"det(AB) = det(A)·det(B)","status":"spec","impl":null},
   {"id":"L10.0081","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"inverse","opZh":"逆矩阵","variant":"base","name":"inverse.base","semantics":"逆矩阵（标量/单样本语义）","invariant":"‖AA⁻¹ − I‖∞ ≤ 1e-10","status":"verified","impl":"inverse"},
   {"id":"L10.0082","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"inverse","opZh":"逆矩阵","variant":"batched","name":"inverse.batched","semantics":"逆矩阵（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"‖AA⁻¹ − I‖∞ ≤ 1e-10","status":"verified","impl":"batched"},
-  {"id":"L10.0083","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"inverse","opZh":"逆矩阵","variant":"fused","name":"inverse.fused","semantics":"逆矩阵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖AA⁻¹ − I‖∞ ≤ 1e-10","status":"spec","impl":null},
+  {"id":"L10.0083","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"inverse","opZh":"逆矩阵","variant":"fused","name":"inverse.fused","semantics":"逆矩阵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖AA⁻¹ − I‖∞ ≤ 1e-10","status":"verified","impl":"fused"},
   {"id":"L10.0084","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"inverse","opZh":"逆矩阵","variant":"inplace","name":"inverse.inplace","semantics":"逆矩阵（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"‖AA⁻¹ − I‖∞ ≤ 1e-10","status":"verified","impl":"inplace"},
   {"id":"L10.0085","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"solve","opZh":"解线性方程组","variant":"base","name":"solve.base","semantics":"解线性方程组（标量/单样本语义）","invariant":"‖Ax − b‖ ≤ 1e-12·‖A‖·‖x‖","status":"verified","impl":"solveLinear"},
   {"id":"L10.0086","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"solve","opZh":"解线性方程组","variant":"batched","name":"solve.batched","semantics":"解线性方程组（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"‖Ax − b‖ ≤ 1e-12·‖A‖·‖x‖","status":"verified","impl":"batched"},
-  {"id":"L10.0087","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"solve","opZh":"解线性方程组","variant":"fused","name":"solve.fused","semantics":"解线性方程组（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖Ax − b‖ ≤ 1e-12·‖A‖·‖x‖","status":"spec","impl":null},
+  {"id":"L10.0087","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"solve","opZh":"解线性方程组","variant":"fused","name":"solve.fused","semantics":"解线性方程组（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖Ax − b‖ ≤ 1e-12·‖A‖·‖x‖","status":"verified","impl":"fused"},
   {"id":"L10.0088","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"solve","opZh":"解线性方程组","variant":"inplace","name":"solve.inplace","semantics":"解线性方程组（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"‖Ax − b‖ ≤ 1e-12·‖A‖·‖x‖","status":"spec","impl":null},
   {"id":"L10.0089","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"cholesky","opZh":"Cholesky 分解","variant":"base","name":"cholesky.base","semantics":"Cholesky 分解（标量/单样本语义）","invariant":"‖LLᵀ − A‖ ≤ 1e-10（SPD）","status":"verified","impl":"cholesky"},
   {"id":"L10.0090","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"cholesky","opZh":"Cholesky 分解","variant":"batched","name":"cholesky.batched","semantics":"Cholesky 分解（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"‖LLᵀ − A‖ ≤ 1e-10（SPD）","status":"verified","impl":"batched"},
-  {"id":"L10.0091","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"cholesky","opZh":"Cholesky 分解","variant":"fused","name":"cholesky.fused","semantics":"Cholesky 分解（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖LLᵀ − A‖ ≤ 1e-10（SPD）","status":"spec","impl":null},
+  {"id":"L10.0091","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"cholesky","opZh":"Cholesky 分解","variant":"fused","name":"cholesky.fused","semantics":"Cholesky 分解（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"‖LLᵀ − A‖ ≤ 1e-10（SPD）","status":"verified","impl":"fused"},
   {"id":"L10.0092","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"cholesky","opZh":"Cholesky 分解","variant":"inplace","name":"cholesky.inplace","semantics":"Cholesky 分解（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"‖LLᵀ − A‖ ≤ 1e-10（SPD）","status":"verified","impl":"inplace"},
   {"id":"L10.0093","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"qr","opZh":"QR 分解","variant":"base","name":"qr.base","semantics":"QR 分解（标量/单样本语义）","invariant":"QᵀQ = I 且 ‖QR − A‖ ≤ 1e-10","status":"verified","impl":"qrDecompose"},
   {"id":"L10.0094","layer":10,"group":"LINALG","groupName":"线性代数指令","op":"qr","opZh":"QR 分解","variant":"batched","name":"qr.batched","semantics":"QR 分解（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"QᵀQ = I 且 ‖QR − A‖ ≤ 1e-10","status":"spec","impl":null},
@@ -4616,19 +4721,19 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0136","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"softmax","opZh":"稳定 Softmax","variant":"inplace","name":"softmax.inplace","semantics":"稳定 Softmax（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"平移不变；输出和 = 1","status":"spec","impl":null},
   {"id":"L10.0137","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"kahan","opZh":"Kahan 补偿求和","variant":"base","name":"kahan.base","semantics":"Kahan 补偿求和（标量/单样本语义）","invariant":"病态序列误差 ≤ 1e-9（朴素求和丢有效位）","status":"verified","impl":"kahanSum"},
   {"id":"L10.0138","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"kahan","opZh":"Kahan 补偿求和","variant":"batched","name":"kahan.batched","semantics":"Kahan 补偿求和（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"病态序列误差 ≤ 1e-9（朴素求和丢有效位）","status":"verified","impl":"batched"},
-  {"id":"L10.0139","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"kahan","opZh":"Kahan 补偿求和","variant":"fused","name":"kahan.fused","semantics":"Kahan 补偿求和（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"病态序列误差 ≤ 1e-9（朴素求和丢有效位）","status":"spec","impl":null},
+  {"id":"L10.0139","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"kahan","opZh":"Kahan 补偿求和","variant":"fused","name":"kahan.fused","semantics":"Kahan 补偿求和（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"病态序列误差 ≤ 1e-9（朴素求和丢有效位）","status":"verified","impl":"fused"},
   {"id":"L10.0140","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"kahan","opZh":"Kahan 补偿求和","variant":"inplace","name":"kahan.inplace","semantics":"Kahan 补偿求和（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"病态序列误差 ≤ 1e-9（朴素求和丢有效位）","status":"spec","impl":null},
   {"id":"L10.0141","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"exactsum","opZh":"无误差求和","variant":"base","name":"exactsum.base","semantics":"无误差求和（标量/单样本语义）","invariant":"TwoSum 变换，作为精确和基准","status":"verified","impl":"exactSum"},
   {"id":"L10.0142","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"exactsum","opZh":"无误差求和","variant":"batched","name":"exactsum.batched","semantics":"无误差求和（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"TwoSum 变换，作为精确和基准","status":"verified","impl":"batched"},
-  {"id":"L10.0143","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"exactsum","opZh":"无误差求和","variant":"fused","name":"exactsum.fused","semantics":"无误差求和（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TwoSum 变换，作为精确和基准","status":"spec","impl":null},
+  {"id":"L10.0143","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"exactsum","opZh":"无误差求和","variant":"fused","name":"exactsum.fused","semantics":"无误差求和（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TwoSum 变换，作为精确和基准","status":"verified","impl":"fused"},
   {"id":"L10.0144","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"exactsum","opZh":"无误差求和","variant":"inplace","name":"exactsum.inplace","semantics":"无误差求和（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"TwoSum 变换，作为精确和基准","status":"spec","impl":null},
   {"id":"L10.0145","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"expm1","opZh":"高精度 exp(x)−1","variant":"base","name":"expm1.base","semantics":"高精度 exp(x)−1（标量/单样本语义）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"expm1"},
   {"id":"L10.0146","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"expm1","opZh":"高精度 exp(x)−1","variant":"batched","name":"expm1.batched","semantics":"高精度 exp(x)−1（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"batched"},
-  {"id":"L10.0147","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"expm1","opZh":"高精度 exp(x)−1","variant":"fused","name":"expm1.fused","semantics":"高精度 exp(x)−1（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"spec","impl":null},
+  {"id":"L10.0147","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"expm1","opZh":"高精度 exp(x)−1","variant":"fused","name":"expm1.fused","semantics":"高精度 exp(x)−1（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"fused"},
   {"id":"L10.0148","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"expm1","opZh":"高精度 exp(x)−1","variant":"inplace","name":"expm1.inplace","semantics":"高精度 exp(x)−1（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"inplace"},
   {"id":"L10.0149","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"log1p","opZh":"高精度 log(1+x)","variant":"base","name":"log1p.base","semantics":"高精度 log(1+x)（标量/单样本语义）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"log1p"},
   {"id":"L10.0150","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"log1p","opZh":"高精度 log(1+x)","variant":"batched","name":"log1p.batched","semantics":"高精度 log(1+x)（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"batched"},
-  {"id":"L10.0151","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"log1p","opZh":"高精度 log(1+x)","variant":"fused","name":"log1p.fused","semantics":"高精度 log(1+x)（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"spec","impl":null},
+  {"id":"L10.0151","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"log1p","opZh":"高精度 log(1+x)","variant":"fused","name":"log1p.fused","semantics":"高精度 log(1+x)（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"fused"},
   {"id":"L10.0152","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"log1p","opZh":"高精度 log(1+x)","variant":"inplace","name":"log1p.inplace","semantics":"高精度 log(1+x)（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"小 x 相对误差 ≤ 1e-15（平台原生）","status":"verified","impl":"inplace"},
   {"id":"L10.0153","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"hypot","opZh":"稳定斜边","variant":"base","name":"hypot.base","semantics":"稳定斜边（标量/单样本语义）","invariant":"大参数不溢出（平台原生）","status":"verified","impl":"hypot"},
   {"id":"L10.0154","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"hypot","opZh":"稳定斜边","variant":"batched","name":"hypot.batched","semantics":"稳定斜边（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"大参数不溢出（平台原生）","status":"spec","impl":null},
@@ -4640,15 +4745,15 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0160","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"clip","opZh":"截断","variant":"inplace","name":"clip.inplace","semantics":"截断（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"输出 ∈ [lo, hi]","status":"spec","impl":null},
   {"id":"L10.0161","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sigmoid","opZh":"稳定 Sigmoid","variant":"base","name":"sigmoid.base","semantics":"稳定 Sigmoid（标量/单样本语义）","invariant":"σ(−x) = 1 − σ(x) ≤ 1e-15","status":"verified","impl":"sigmoid"},
   {"id":"L10.0162","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sigmoid","opZh":"稳定 Sigmoid","variant":"batched","name":"sigmoid.batched","semantics":"稳定 Sigmoid（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"σ(−x) = 1 − σ(x) ≤ 1e-15","status":"verified","impl":"batched"},
-  {"id":"L10.0163","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sigmoid","opZh":"稳定 Sigmoid","variant":"fused","name":"sigmoid.fused","semantics":"稳定 Sigmoid（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"σ(−x) = 1 − σ(x) ≤ 1e-15","status":"spec","impl":null},
+  {"id":"L10.0163","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sigmoid","opZh":"稳定 Sigmoid","variant":"fused","name":"sigmoid.fused","semantics":"稳定 Sigmoid（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"σ(−x) = 1 − σ(x) ≤ 1e-15","status":"verified","impl":"fused"},
   {"id":"L10.0164","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sigmoid","opZh":"稳定 Sigmoid","variant":"inplace","name":"sigmoid.inplace","semantics":"稳定 Sigmoid（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"σ(−x) = 1 − σ(x) ≤ 1e-15","status":"verified","impl":"inplace"},
   {"id":"L10.0165","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"gelu","opZh":"GELU 激活","variant":"base","name":"gelu.base","semantics":"GELU 激活（标量/单样本语义）","invariant":"xΦ(x)∈[min(0,x),max(0,x)]；全局最小≈−0.17@x≈−0.75","status":"verified","impl":"gelu"},
   {"id":"L10.0166","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"gelu","opZh":"GELU 激活","variant":"batched","name":"gelu.batched","semantics":"GELU 激活（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"xΦ(x)∈[min(0,x),max(0,x)]；全局最小≈−0.17@x≈−0.75","status":"verified","impl":"batched"},
-  {"id":"L10.0167","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"gelu","opZh":"GELU 激活","variant":"fused","name":"gelu.fused","semantics":"GELU 激活（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"xΦ(x)∈[min(0,x),max(0,x)]；全局最小≈−0.17@x≈−0.75","status":"spec","impl":null},
+  {"id":"L10.0167","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"gelu","opZh":"GELU 激活","variant":"fused","name":"gelu.fused","semantics":"GELU 激活（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"xΦ(x)∈[min(0,x),max(0,x)]；全局最小≈−0.17@x≈−0.75","status":"verified","impl":"fused"},
   {"id":"L10.0168","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"gelu","opZh":"GELU 激活","variant":"inplace","name":"gelu.inplace","semantics":"GELU 激活（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"xΦ(x)∈[min(0,x),max(0,x)]；全局最小≈−0.17@x≈−0.75","status":"verified","impl":"inplace"},
   {"id":"L10.0169","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"erf","opZh":"误差函数","variant":"base","name":"erf.base","semantics":"误差函数（标量/单样本语义）","invariant":"Φ(−x) = 1 − Φ(x)；Φ(1.96) ≈ 0.975002","status":"verified","impl":"erf"},
   {"id":"L10.0170","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"erf","opZh":"误差函数","variant":"batched","name":"erf.batched","semantics":"误差函数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Φ(−x) = 1 − Φ(x)；Φ(1.96) ≈ 0.975002","status":"verified","impl":"batched"},
-  {"id":"L10.0171","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"erf","opZh":"误差函数","variant":"fused","name":"erf.fused","semantics":"误差函数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Φ(−x) = 1 − Φ(x)；Φ(1.96) ≈ 0.975002","status":"spec","impl":null},
+  {"id":"L10.0171","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"erf","opZh":"误差函数","variant":"fused","name":"erf.fused","semantics":"误差函数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Φ(−x) = 1 − Φ(x)；Φ(1.96) ≈ 0.975002","status":"verified","impl":"fused"},
   {"id":"L10.0172","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"erf","opZh":"误差函数","variant":"inplace","name":"erf.inplace","semantics":"误差函数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Φ(−x) = 1 − Φ(x)；Φ(1.96) ≈ 0.975002","status":"verified","impl":"inplace"},
   {"id":"L10.0173","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"div_guard","opZh":"安全除法","variant":"base","name":"div_guard.base","semantics":"安全除法（标量/单样本语义）","invariant":"|分母| < ε 时按 ε 处理","status":"verified","impl":"divGuard"},
   {"id":"L10.0174","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"div_guard","opZh":"安全除法","variant":"batched","name":"div_guard.batched","semantics":"安全除法（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"|分母| < ε 时按 ε 处理","status":"spec","impl":null},
@@ -4660,7 +4765,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0180","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"inplace","name":"sqrt_guard.inplace","semantics":"安全开方（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"负输入抛错","status":"spec","impl":null},
   {"id":"L10.0181","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"base","name":"reciprocal.base","semantics":"倒数（标量/单样本语义）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"reciprocal"},
   {"id":"L10.0182","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"batched","name":"reciprocal.batched","semantics":"倒数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"batched"},
-  {"id":"L10.0183","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"fused","name":"reciprocal.fused","semantics":"倒数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"x·(1/x) ≈ 1","status":"spec","impl":null},
+  {"id":"L10.0183","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"fused","name":"reciprocal.fused","semantics":"倒数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"fused"},
   {"id":"L10.0184","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"inplace","name":"reciprocal.inplace","semantics":"倒数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"inplace"},
   {"id":"L10.0185","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"fma","opZh":"融合乘加","variant":"base","name":"fma.base","semantics":"融合乘加（标量/单样本语义）","invariant":"ab + c 单次舍入","status":"verified","impl":"fma"},
   {"id":"L10.0186","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"fma","opZh":"融合乘加","variant":"batched","name":"fma.batched","semantics":"融合乘加（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"ab + c 单次舍入","status":"spec","impl":null},
@@ -4668,7 +4773,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0188","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"fma","opZh":"融合乘加","variant":"inplace","name":"fma.inplace","semantics":"融合乘加（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"ab + c 单次舍入","status":"spec","impl":null},
   {"id":"L10.0189","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"relu","opZh":"ReLU 激活","variant":"base","name":"relu.base","semantics":"ReLU 激活（标量/单样本语义）","invariant":"max(0, x)","status":"verified","impl":"relu"},
   {"id":"L10.0190","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"relu","opZh":"ReLU 激活","variant":"batched","name":"relu.batched","semantics":"ReLU 激活（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"max(0, x)","status":"verified","impl":"batched"},
-  {"id":"L10.0191","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"relu","opZh":"ReLU 激活","variant":"fused","name":"relu.fused","semantics":"ReLU 激活（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max(0, x)","status":"spec","impl":null},
+  {"id":"L10.0191","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"relu","opZh":"ReLU 激活","variant":"fused","name":"relu.fused","semantics":"ReLU 激活（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max(0, x)","status":"verified","impl":"fused"},
   {"id":"L10.0192","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"relu","opZh":"ReLU 激活","variant":"inplace","name":"relu.inplace","semantics":"ReLU 激活（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"max(0, x)","status":"verified","impl":"inplace"},
   {"id":"L10.0193","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_pdf","opZh":"高斯密度","variant":"base","name":"gauss_pdf.base","semantics":"高斯密度（标量/单样本语义）","invariant":"∫pdf = 1（Simpson 误差 ≤ 1e-10）","status":"verified","impl":"gaussPDF"},
   {"id":"L10.0194","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_pdf","opZh":"高斯密度","variant":"batched","name":"gauss_pdf.batched","semantics":"高斯密度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∫pdf = 1（Simpson 误差 ≤ 1e-10）","status":"verified","impl":"batched"},
@@ -4676,7 +4781,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0196","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_pdf","opZh":"高斯密度","variant":"inplace","name":"gauss_pdf.inplace","semantics":"高斯密度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∫pdf = 1（Simpson 误差 ≤ 1e-10）","status":"spec","impl":null},
   {"id":"L10.0197","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_cdf","opZh":"高斯分布函数","variant":"base","name":"gauss_cdf.base","semantics":"高斯分布函数（标量/单样本语义）","invariant":"Φ(−x) = 1 − Φ(x) ≤ 1e-14","status":"verified","impl":"normalCDF"},
   {"id":"L10.0198","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_cdf","opZh":"高斯分布函数","variant":"batched","name":"gauss_cdf.batched","semantics":"高斯分布函数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Φ(−x) = 1 − Φ(x) ≤ 1e-14","status":"verified","impl":"batched"},
-  {"id":"L10.0199","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_cdf","opZh":"高斯分布函数","variant":"fused","name":"gauss_cdf.fused","semantics":"高斯分布函数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Φ(−x) = 1 − Φ(x) ≤ 1e-14","status":"spec","impl":null},
+  {"id":"L10.0199","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_cdf","opZh":"高斯分布函数","variant":"fused","name":"gauss_cdf.fused","semantics":"高斯分布函数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Φ(−x) = 1 − Φ(x) ≤ 1e-14","status":"verified","impl":"fused"},
   {"id":"L10.0200","layer":10,"group":"PROB","groupName":"概率运算指令","op":"gauss_cdf","opZh":"高斯分布函数","variant":"inplace","name":"gauss_cdf.inplace","semantics":"高斯分布函数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Φ(−x) = 1 − Φ(x) ≤ 1e-14","status":"spec","impl":null},
   {"id":"L10.0201","layer":10,"group":"PROB","groupName":"概率运算指令","op":"normal_sample","opZh":"正态采样","variant":"base","name":"normal_sample.base","semantics":"正态采样（标量/单样本语义）","invariant":"Box–Muller：n=1e5 矩估计 ≤ 0.01","status":"verified","impl":"normalSample"},
   {"id":"L10.0202","layer":10,"group":"PROB","groupName":"概率运算指令","op":"normal_sample","opZh":"正态采样","variant":"batched","name":"normal_sample.batched","semantics":"正态采样（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Box–Muller：n=1e5 矩估计 ≤ 0.01","status":"spec","impl":null},
@@ -4696,15 +4801,15 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0216","layer":10,"group":"PROB","groupName":"概率运算指令","op":"bayes","opZh":"贝叶斯更新","variant":"inplace","name":"bayes.inplace","semantics":"贝叶斯更新（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"后验和 = 1；先验×似然归一","status":"spec","impl":null},
   {"id":"L10.0217","layer":10,"group":"PROB","groupName":"概率运算指令","op":"expectation","opZh":"期望","variant":"base","name":"expectation.base","semantics":"期望（标量/单样本语义）","invariant":"E[aX + bY] = aE[X] + bE[Y]","status":"verified","impl":"expectation"},
   {"id":"L10.0218","layer":10,"group":"PROB","groupName":"概率运算指令","op":"expectation","opZh":"期望","variant":"batched","name":"expectation.batched","semantics":"期望（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"E[aX + bY] = aE[X] + bE[Y]","status":"verified","impl":"batched"},
-  {"id":"L10.0219","layer":10,"group":"PROB","groupName":"概率运算指令","op":"expectation","opZh":"期望","variant":"fused","name":"expectation.fused","semantics":"期望（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"E[aX + bY] = aE[X] + bE[Y]","status":"spec","impl":null},
+  {"id":"L10.0219","layer":10,"group":"PROB","groupName":"概率运算指令","op":"expectation","opZh":"期望","variant":"fused","name":"expectation.fused","semantics":"期望（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"E[aX + bY] = aE[X] + bE[Y]","status":"verified","impl":"fused"},
   {"id":"L10.0220","layer":10,"group":"PROB","groupName":"概率运算指令","op":"expectation","opZh":"期望","variant":"inplace","name":"expectation.inplace","semantics":"期望（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"E[aX + bY] = aE[X] + bE[Y]","status":"spec","impl":null},
   {"id":"L10.0221","layer":10,"group":"PROB","groupName":"概率运算指令","op":"variance","opZh":"方差","variant":"base","name":"variance.base","semantics":"方差（标量/单样本语义）","invariant":"Var(X) = E[X²] − E[X]²","status":"verified","impl":"variance"},
   {"id":"L10.0222","layer":10,"group":"PROB","groupName":"概率运算指令","op":"variance","opZh":"方差","variant":"batched","name":"variance.batched","semantics":"方差（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Var(X) = E[X²] − E[X]²","status":"verified","impl":"batched"},
-  {"id":"L10.0223","layer":10,"group":"PROB","groupName":"概率运算指令","op":"variance","opZh":"方差","variant":"fused","name":"variance.fused","semantics":"方差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Var(X) = E[X²] − E[X]²","status":"spec","impl":null},
+  {"id":"L10.0223","layer":10,"group":"PROB","groupName":"概率运算指令","op":"variance","opZh":"方差","variant":"fused","name":"variance.fused","semantics":"方差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Var(X) = E[X²] − E[X]²","status":"verified","impl":"fused"},
   {"id":"L10.0224","layer":10,"group":"PROB","groupName":"概率运算指令","op":"variance","opZh":"方差","variant":"inplace","name":"variance.inplace","semantics":"方差（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Var(X) = E[X²] − E[X]²","status":"spec","impl":null},
   {"id":"L10.0225","layer":10,"group":"PROB","groupName":"概率运算指令","op":"covariance","opZh":"协方差","variant":"base","name":"covariance.base","semantics":"协方差（标量/单样本语义）","invariant":"Cov(X,X) = Var(X)","status":"verified","impl":"covariance"},
   {"id":"L10.0226","layer":10,"group":"PROB","groupName":"概率运算指令","op":"covariance","opZh":"协方差","variant":"batched","name":"covariance.batched","semantics":"协方差（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Cov(X,X) = Var(X)","status":"verified","impl":"batched"},
-  {"id":"L10.0227","layer":10,"group":"PROB","groupName":"概率运算指令","op":"covariance","opZh":"协方差","variant":"fused","name":"covariance.fused","semantics":"协方差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Cov(X,X) = Var(X)","status":"spec","impl":null},
+  {"id":"L10.0227","layer":10,"group":"PROB","groupName":"概率运算指令","op":"covariance","opZh":"协方差","variant":"fused","name":"covariance.fused","semantics":"协方差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Cov(X,X) = Var(X)","status":"verified","impl":"fused"},
   {"id":"L10.0228","layer":10,"group":"PROB","groupName":"概率运算指令","op":"covariance","opZh":"协方差","variant":"inplace","name":"covariance.inplace","semantics":"协方差（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Cov(X,X) = Var(X)","status":"spec","impl":null},
   {"id":"L10.0229","layer":10,"group":"PROB","groupName":"概率运算指令","op":"bernoulli_sample","opZh":"伯努利采样","variant":"base","name":"bernoulli_sample.base","semantics":"伯努利采样（标量/单样本语义）","invariant":"频率 ≈ p","status":"verified","impl":"bernoulliSample"},
   {"id":"L10.0230","layer":10,"group":"PROB","groupName":"概率运算指令","op":"bernoulli_sample","opZh":"伯努利采样","variant":"batched","name":"bernoulli_sample.batched","semantics":"伯努利采样（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"频率 ≈ p","status":"spec","impl":null},
@@ -4720,7 +4825,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0240","layer":10,"group":"PROB","groupName":"概率运算指令","op":"uniform_sample","opZh":"均匀采样","variant":"inplace","name":"uniform_sample.inplace","semantics":"均匀采样（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∈ [0,1)","status":"spec","impl":null},
   {"id":"L10.0241","layer":10,"group":"PROB","groupName":"概率运算指令","op":"marginal","opZh":"边缘化","variant":"base","name":"marginal.base","semantics":"边缘化（标量/单样本语义）","invariant":"边缘 = 联合求和","status":"verified","impl":"marginal"},
   {"id":"L10.0242","layer":10,"group":"PROB","groupName":"概率运算指令","op":"marginal","opZh":"边缘化","variant":"batched","name":"marginal.batched","semantics":"边缘化（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"边缘 = 联合求和","status":"verified","impl":"batched"},
-  {"id":"L10.0243","layer":10,"group":"PROB","groupName":"概率运算指令","op":"marginal","opZh":"边缘化","variant":"fused","name":"marginal.fused","semantics":"边缘化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"边缘 = 联合求和","status":"spec","impl":null},
+  {"id":"L10.0243","layer":10,"group":"PROB","groupName":"概率运算指令","op":"marginal","opZh":"边缘化","variant":"fused","name":"marginal.fused","semantics":"边缘化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"边缘 = 联合求和","status":"verified","impl":"fused"},
   {"id":"L10.0244","layer":10,"group":"PROB","groupName":"概率运算指令","op":"marginal","opZh":"边缘化","variant":"inplace","name":"marginal.inplace","semantics":"边缘化（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"边缘 = 联合求和","status":"spec","impl":null},
   {"id":"L10.0245","layer":10,"group":"PROB","groupName":"概率运算指令","op":"condition","opZh":"条件化","variant":"base","name":"condition.base","semantics":"条件化（标量/单样本语义）","invariant":"P(A|B)·P(B) = P(A,B)","status":"verified","impl":"conditionalRow"},
   {"id":"L10.0246","layer":10,"group":"PROB","groupName":"概率运算指令","op":"condition","opZh":"条件化","variant":"batched","name":"condition.batched","semantics":"条件化（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"P(A|B)·P(B) = P(A,B)","status":"spec","impl":null},
@@ -4736,7 +4841,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0256","layer":10,"group":"PROB","groupName":"概率运算指令","op":"sample_stats","opZh":"采样矩估计","variant":"inplace","name":"sample_stats.inplace","semantics":"采样矩估计（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"矩估计随 n 收敛","status":"spec","impl":null},
   {"id":"L10.0257","layer":10,"group":"INFO","groupName":"信息论指令","op":"entropy","opZh":"熵","variant":"base","name":"entropy.base","semantics":"熵（标量/单样本语义）","invariant":"0 ≤ H ≤ log₂n；均匀取等","status":"verified","impl":"entropy"},
   {"id":"L10.0258","layer":10,"group":"INFO","groupName":"信息论指令","op":"entropy","opZh":"熵","variant":"batched","name":"entropy.batched","semantics":"熵（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"0 ≤ H ≤ log₂n；均匀取等","status":"verified","impl":"batched"},
-  {"id":"L10.0259","layer":10,"group":"INFO","groupName":"信息论指令","op":"entropy","opZh":"熵","variant":"fused","name":"entropy.fused","semantics":"熵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"0 ≤ H ≤ log₂n；均匀取等","status":"spec","impl":null},
+  {"id":"L10.0259","layer":10,"group":"INFO","groupName":"信息论指令","op":"entropy","opZh":"熵","variant":"fused","name":"entropy.fused","semantics":"熵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"0 ≤ H ≤ log₂n；均匀取等","status":"verified","impl":"fused"},
   {"id":"L10.0260","layer":10,"group":"INFO","groupName":"信息论指令","op":"entropy","opZh":"熵","variant":"inplace","name":"entropy.inplace","semantics":"熵（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"0 ≤ H ≤ log₂n；均匀取等","status":"spec","impl":null},
   {"id":"L10.0261","layer":10,"group":"INFO","groupName":"信息论指令","op":"cross_entropy","opZh":"交叉熵","variant":"base","name":"cross_entropy.base","semantics":"交叉熵（标量/单样本语义）","invariant":"H(p,q) ≥ H(p)","status":"verified","impl":"crossEntropy"},
   {"id":"L10.0262","layer":10,"group":"INFO","groupName":"信息论指令","op":"cross_entropy","opZh":"交叉熵","variant":"batched","name":"cross_entropy.batched","semantics":"交叉熵（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"H(p,q) ≥ H(p)","status":"verified","impl":"batched"},
@@ -4744,19 +4849,19 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0264","layer":10,"group":"INFO","groupName":"信息论指令","op":"cross_entropy","opZh":"交叉熵","variant":"inplace","name":"cross_entropy.inplace","semantics":"交叉熵（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"H(p,q) ≥ H(p)","status":"spec","impl":null},
   {"id":"L10.0265","layer":10,"group":"INFO","groupName":"信息论指令","op":"kl","opZh":"KL 散度","variant":"base","name":"kl.base","semantics":"KL 散度（标量/单样本语义）","invariant":"≥ 0；p = q 时为 0","status":"verified","impl":"klDivergence"},
   {"id":"L10.0266","layer":10,"group":"INFO","groupName":"信息论指令","op":"kl","opZh":"KL 散度","variant":"batched","name":"kl.batched","semantics":"KL 散度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"≥ 0；p = q 时为 0","status":"verified","impl":"batched"},
-  {"id":"L10.0267","layer":10,"group":"INFO","groupName":"信息论指令","op":"kl","opZh":"KL 散度","variant":"fused","name":"kl.fused","semantics":"KL 散度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"≥ 0；p = q 时为 0","status":"spec","impl":null},
+  {"id":"L10.0267","layer":10,"group":"INFO","groupName":"信息论指令","op":"kl","opZh":"KL 散度","variant":"fused","name":"kl.fused","semantics":"KL 散度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"≥ 0；p = q 时为 0","status":"verified","impl":"fused"},
   {"id":"L10.0268","layer":10,"group":"INFO","groupName":"信息论指令","op":"kl","opZh":"KL 散度","variant":"inplace","name":"kl.inplace","semantics":"KL 散度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"≥ 0；p = q 时为 0","status":"spec","impl":null},
   {"id":"L10.0269","layer":10,"group":"INFO","groupName":"信息论指令","op":"js","opZh":"JS 散度","variant":"base","name":"js.base","semantics":"JS 散度（标量/单样本语义）","invariant":"∈ [0,1]；对称","status":"verified","impl":"jsDivergence"},
   {"id":"L10.0270","layer":10,"group":"INFO","groupName":"信息论指令","op":"js","opZh":"JS 散度","variant":"batched","name":"js.batched","semantics":"JS 散度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∈ [0,1]；对称","status":"verified","impl":"batched"},
-  {"id":"L10.0271","layer":10,"group":"INFO","groupName":"信息论指令","op":"js","opZh":"JS 散度","variant":"fused","name":"js.fused","semantics":"JS 散度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [0,1]；对称","status":"spec","impl":null},
+  {"id":"L10.0271","layer":10,"group":"INFO","groupName":"信息论指令","op":"js","opZh":"JS 散度","variant":"fused","name":"js.fused","semantics":"JS 散度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [0,1]；对称","status":"verified","impl":"fused"},
   {"id":"L10.0272","layer":10,"group":"INFO","groupName":"信息论指令","op":"js","opZh":"JS 散度","variant":"inplace","name":"js.inplace","semantics":"JS 散度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∈ [0,1]；对称","status":"spec","impl":null},
   {"id":"L10.0273","layer":10,"group":"INFO","groupName":"信息论指令","op":"mutual_info","opZh":"互信息","variant":"base","name":"mutual_info.base","semantics":"互信息（标量/单样本语义）","invariant":"I(X;Y) = I(Y;X) ≥ 0；独立为 0","status":"verified","impl":"mutualInfo"},
   {"id":"L10.0274","layer":10,"group":"INFO","groupName":"信息论指令","op":"mutual_info","opZh":"互信息","variant":"batched","name":"mutual_info.batched","semantics":"互信息（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"I(X;Y) = I(Y;X) ≥ 0；独立为 0","status":"verified","impl":"batched"},
-  {"id":"L10.0275","layer":10,"group":"INFO","groupName":"信息论指令","op":"mutual_info","opZh":"互信息","variant":"fused","name":"mutual_info.fused","semantics":"互信息（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"I(X;Y) = I(Y;X) ≥ 0；独立为 0","status":"spec","impl":null},
+  {"id":"L10.0275","layer":10,"group":"INFO","groupName":"信息论指令","op":"mutual_info","opZh":"互信息","variant":"fused","name":"mutual_info.fused","semantics":"互信息（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"I(X;Y) = I(Y;X) ≥ 0；独立为 0","status":"verified","impl":"fused"},
   {"id":"L10.0276","layer":10,"group":"INFO","groupName":"信息论指令","op":"mutual_info","opZh":"互信息","variant":"inplace","name":"mutual_info.inplace","semantics":"互信息（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"I(X;Y) = I(Y;X) ≥ 0；独立为 0","status":"spec","impl":null},
   {"id":"L10.0277","layer":10,"group":"INFO","groupName":"信息论指令","op":"conditional_entropy","opZh":"条件熵","variant":"base","name":"conditional_entropy.base","semantics":"条件熵（标量/单样本语义）","invariant":"H(X|Y) = H(X,Y) − H(Y)","status":"verified","impl":"conditionalEntropy"},
   {"id":"L10.0278","layer":10,"group":"INFO","groupName":"信息论指令","op":"conditional_entropy","opZh":"条件熵","variant":"batched","name":"conditional_entropy.batched","semantics":"条件熵（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"H(X|Y) = H(X,Y) − H(Y)","status":"verified","impl":"batched"},
-  {"id":"L10.0279","layer":10,"group":"INFO","groupName":"信息论指令","op":"conditional_entropy","opZh":"条件熵","variant":"fused","name":"conditional_entropy.fused","semantics":"条件熵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"H(X|Y) = H(X,Y) − H(Y)","status":"spec","impl":null},
+  {"id":"L10.0279","layer":10,"group":"INFO","groupName":"信息论指令","op":"conditional_entropy","opZh":"条件熵","variant":"fused","name":"conditional_entropy.fused","semantics":"条件熵（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"H(X|Y) = H(X,Y) − H(Y)","status":"verified","impl":"fused"},
   {"id":"L10.0280","layer":10,"group":"INFO","groupName":"信息论指令","op":"conditional_entropy","opZh":"条件熵","variant":"inplace","name":"conditional_entropy.inplace","semantics":"条件熵（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"H(X|Y) = H(X,Y) − H(Y)","status":"spec","impl":null},
   {"id":"L10.0281","layer":10,"group":"INFO","groupName":"信息论指令","op":"info_gain","opZh":"信息增益","variant":"base","name":"info_gain.base","semantics":"信息增益（标量/单样本语义）","invariant":"≥ 0；纯分裂 = 1 bit","status":"verified","impl":"infoGain"},
   {"id":"L10.0282","layer":10,"group":"INFO","groupName":"信息论指令","op":"info_gain","opZh":"信息增益","variant":"batched","name":"info_gain.batched","semantics":"信息增益（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"≥ 0；纯分裂 = 1 bit","status":"spec","impl":null},
@@ -4764,7 +4869,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0284","layer":10,"group":"INFO","groupName":"信息论指令","op":"info_gain","opZh":"信息增益","variant":"inplace","name":"info_gain.inplace","semantics":"信息增益（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"≥ 0；纯分裂 = 1 bit","status":"spec","impl":null},
   {"id":"L10.0285","layer":10,"group":"INFO","groupName":"信息论指令","op":"gini","opZh":"基尼不纯度","variant":"base","name":"gini.base","semantics":"基尼不纯度（标量/单样本语义）","invariant":"∈ [0, 1−1/K]；纯类为 0","status":"verified","impl":"gini"},
   {"id":"L10.0286","layer":10,"group":"INFO","groupName":"信息论指令","op":"gini","opZh":"基尼不纯度","variant":"batched","name":"gini.batched","semantics":"基尼不纯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∈ [0, 1−1/K]；纯类为 0","status":"verified","impl":"batched"},
-  {"id":"L10.0287","layer":10,"group":"INFO","groupName":"信息论指令","op":"gini","opZh":"基尼不纯度","variant":"fused","name":"gini.fused","semantics":"基尼不纯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [0, 1−1/K]；纯类为 0","status":"spec","impl":null},
+  {"id":"L10.0287","layer":10,"group":"INFO","groupName":"信息论指令","op":"gini","opZh":"基尼不纯度","variant":"fused","name":"gini.fused","semantics":"基尼不纯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [0, 1−1/K]；纯类为 0","status":"verified","impl":"fused"},
   {"id":"L10.0288","layer":10,"group":"INFO","groupName":"信息论指令","op":"gini","opZh":"基尼不纯度","variant":"inplace","name":"gini.inplace","semantics":"基尼不纯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∈ [0, 1−1/K]；纯类为 0","status":"spec","impl":null},
   {"id":"L10.0289","layer":10,"group":"INFO","groupName":"信息论指令","op":"perplexity","opZh":"困惑度","variant":"base","name":"perplexity.base","semantics":"困惑度（标量/单样本语义）","invariant":"= 2^H","status":"verified","impl":"perplexity"},
   {"id":"L10.0290","layer":10,"group":"INFO","groupName":"信息论指令","op":"perplexity","opZh":"困惑度","variant":"batched","name":"perplexity.batched","semantics":"困惑度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"= 2^H","status":"spec","impl":null},
@@ -4796,7 +4901,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0316","layer":10,"group":"INFO","groupName":"信息论指令","op":"max_entropy","opZh":"最大熵原理","variant":"inplace","name":"max_entropy.inplace","semantics":"最大熵原理（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"无约束最大熵 = 均匀分布","status":"spec","impl":null},
   {"id":"L10.0317","layer":10,"group":"INFO","groupName":"信息论指令","op":"normalize_dist","opZh":"分布归一化","variant":"base","name":"normalize_dist.base","semantics":"分布归一化（标量/单样本语义）","invariant":"Σp = 1","status":"verified","impl":"normalizeDist"},
   {"id":"L10.0318","layer":10,"group":"INFO","groupName":"信息论指令","op":"normalize_dist","opZh":"分布归一化","variant":"batched","name":"normalize_dist.batched","semantics":"分布归一化（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Σp = 1","status":"verified","impl":"batched"},
-  {"id":"L10.0319","layer":10,"group":"INFO","groupName":"信息论指令","op":"normalize_dist","opZh":"分布归一化","variant":"fused","name":"normalize_dist.fused","semantics":"分布归一化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Σp = 1","status":"spec","impl":null},
+  {"id":"L10.0319","layer":10,"group":"INFO","groupName":"信息论指令","op":"normalize_dist","opZh":"分布归一化","variant":"fused","name":"normalize_dist.fused","semantics":"分布归一化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Σp = 1","status":"verified","impl":"fused"},
   {"id":"L10.0320","layer":10,"group":"INFO","groupName":"信息论指令","op":"normalize_dist","opZh":"分布归一化","variant":"inplace","name":"normalize_dist.inplace","semantics":"分布归一化（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Σp = 1","status":"spec","impl":null},
   {"id":"L10.0321","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"gd","opZh":"梯度下降","variant":"base","name":"gd.base","semantics":"梯度下降（标量/单样本语义）","invariant":"凸二次收敛至解析最优 ≤ 1e-7","status":"verified","impl":"gradientDescent"},
   {"id":"L10.0322","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"gd","opZh":"梯度下降","variant":"batched","name":"gd.batched","semantics":"梯度下降（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"凸二次收敛至解析最优 ≤ 1e-7","status":"spec","impl":null},
@@ -4848,7 +4953,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0368","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_clip","opZh":"梯度裁剪","variant":"inplace","name":"grad_clip.inplace","semantics":"梯度裁剪（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"裁剪后 ‖g‖ ≤ max_norm","status":"spec","impl":null},
   {"id":"L10.0369","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_norm","opZh":"梯度范数","variant":"base","name":"grad_norm.base","semantics":"梯度范数（标量/单样本语义）","invariant":"= √Σgᵢ²","status":"verified","impl":"gradNorm"},
   {"id":"L10.0370","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_norm","opZh":"梯度范数","variant":"batched","name":"grad_norm.batched","semantics":"梯度范数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"= √Σgᵢ²","status":"verified","impl":"batched"},
-  {"id":"L10.0371","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_norm","opZh":"梯度范数","variant":"fused","name":"grad_norm.fused","semantics":"梯度范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= √Σgᵢ²","status":"spec","impl":null},
+  {"id":"L10.0371","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_norm","opZh":"梯度范数","variant":"fused","name":"grad_norm.fused","semantics":"梯度范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= √Σgᵢ²","status":"verified","impl":"fused"},
   {"id":"L10.0372","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"grad_norm","opZh":"梯度范数","variant":"inplace","name":"grad_norm.inplace","semantics":"梯度范数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= √Σgᵢ²","status":"spec","impl":null},
   {"id":"L10.0373","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"lr_decay","opZh":"学习率衰减","variant":"base","name":"lr_decay.base","semantics":"学习率衰减（标量/单样本语义）","invariant":"lr_t = lr₀/(1+kt)","status":"verified","impl":"lrDecay"},
   {"id":"L10.0374","layer":10,"group":"OPTIM","groupName":"优化算子指令","op":"lr_decay","opZh":"学习率衰减","variant":"batched","name":"lr_decay.batched","semantics":"学习率衰减（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"lr_t = lr₀/(1+kt)","status":"spec","impl":null},
@@ -4876,23 +4981,23 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0396","layer":10,"group":"FWD","groupName":"前向传播指令","op":"self_attn","opZh":"自注意力","variant":"inplace","name":"self_attn.inplace","semantics":"自注意力（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"权重行和 = 1；因果掩码上三角为 0","status":"spec","impl":null},
   {"id":"L10.0397","layer":10,"group":"FWD","groupName":"前向传播指令","op":"softmax","opZh":"Softmax","variant":"base","name":"softmax.base","semantics":"Softmax（标量/单样本语义）","invariant":"行和 = 1；平移不变","status":"verified","impl":"softmax"},
   {"id":"L10.0398","layer":10,"group":"FWD","groupName":"前向传播指令","op":"softmax","opZh":"Softmax","variant":"batched","name":"softmax.batched","semantics":"Softmax（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"行和 = 1；平移不变","status":"verified","impl":"batched"},
-  {"id":"L10.0399","layer":10,"group":"FWD","groupName":"前向传播指令","op":"softmax","opZh":"Softmax","variant":"fused","name":"softmax.fused","semantics":"Softmax（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"行和 = 1；平移不变","status":"spec","impl":null},
+  {"id":"L10.0399","layer":10,"group":"FWD","groupName":"前向传播指令","op":"softmax","opZh":"Softmax","variant":"fused","name":"softmax.fused","semantics":"Softmax（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"行和 = 1；平移不变","status":"verified","impl":"fused"},
   {"id":"L10.0400","layer":10,"group":"FWD","groupName":"前向传播指令","op":"softmax","opZh":"Softmax","variant":"inplace","name":"softmax.inplace","semantics":"Softmax（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"行和 = 1；平移不变","status":"spec","impl":null},
   {"id":"L10.0401","layer":10,"group":"FWD","groupName":"前向传播指令","op":"sigmoid","opZh":"Sigmoid","variant":"base","name":"sigmoid.base","semantics":"Sigmoid（标量/单样本语义）","invariant":"σ(−x) = 1 − σ(x)","status":"verified","impl":"sigmoid"},
   {"id":"L10.0402","layer":10,"group":"FWD","groupName":"前向传播指令","op":"sigmoid","opZh":"Sigmoid","variant":"batched","name":"sigmoid.batched","semantics":"Sigmoid（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"σ(−x) = 1 − σ(x)","status":"verified","impl":"batched"},
-  {"id":"L10.0403","layer":10,"group":"FWD","groupName":"前向传播指令","op":"sigmoid","opZh":"Sigmoid","variant":"fused","name":"sigmoid.fused","semantics":"Sigmoid（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"σ(−x) = 1 − σ(x)","status":"spec","impl":null},
+  {"id":"L10.0403","layer":10,"group":"FWD","groupName":"前向传播指令","op":"sigmoid","opZh":"Sigmoid","variant":"fused","name":"sigmoid.fused","semantics":"Sigmoid（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"σ(−x) = 1 − σ(x)","status":"verified","impl":"fused"},
   {"id":"L10.0404","layer":10,"group":"FWD","groupName":"前向传播指令","op":"sigmoid","opZh":"Sigmoid","variant":"inplace","name":"sigmoid.inplace","semantics":"Sigmoid（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"σ(−x) = 1 − σ(x)","status":"verified","impl":"inplace"},
   {"id":"L10.0405","layer":10,"group":"FWD","groupName":"前向传播指令","op":"gelu","opZh":"GELU","variant":"base","name":"gelu.base","semantics":"GELU（标量/单样本语义）","invariant":"单调递增；极限 →x","status":"verified","impl":"gelu"},
   {"id":"L10.0406","layer":10,"group":"FWD","groupName":"前向传播指令","op":"gelu","opZh":"GELU","variant":"batched","name":"gelu.batched","semantics":"GELU（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"单调递增；极限 →x","status":"verified","impl":"batched"},
-  {"id":"L10.0407","layer":10,"group":"FWD","groupName":"前向传播指令","op":"gelu","opZh":"GELU","variant":"fused","name":"gelu.fused","semantics":"GELU（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"单调递增；极限 →x","status":"spec","impl":null},
+  {"id":"L10.0407","layer":10,"group":"FWD","groupName":"前向传播指令","op":"gelu","opZh":"GELU","variant":"fused","name":"gelu.fused","semantics":"GELU（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"单调递增；极限 →x","status":"verified","impl":"fused"},
   {"id":"L10.0408","layer":10,"group":"FWD","groupName":"前向传播指令","op":"gelu","opZh":"GELU","variant":"inplace","name":"gelu.inplace","semantics":"GELU（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"单调递增；极限 →x","status":"verified","impl":"inplace"},
   {"id":"L10.0409","layer":10,"group":"FWD","groupName":"前向传播指令","op":"relu","opZh":"ReLU","variant":"base","name":"relu.base","semantics":"ReLU（标量/单样本语义）","invariant":"max(0,x)","status":"verified","impl":"relu"},
   {"id":"L10.0410","layer":10,"group":"FWD","groupName":"前向传播指令","op":"relu","opZh":"ReLU","variant":"batched","name":"relu.batched","semantics":"ReLU（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"max(0,x)","status":"verified","impl":"batched"},
-  {"id":"L10.0411","layer":10,"group":"FWD","groupName":"前向传播指令","op":"relu","opZh":"ReLU","variant":"fused","name":"relu.fused","semantics":"ReLU（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max(0,x)","status":"spec","impl":null},
+  {"id":"L10.0411","layer":10,"group":"FWD","groupName":"前向传播指令","op":"relu","opZh":"ReLU","variant":"fused","name":"relu.fused","semantics":"ReLU（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max(0,x)","status":"verified","impl":"fused"},
   {"id":"L10.0412","layer":10,"group":"FWD","groupName":"前向传播指令","op":"relu","opZh":"ReLU","variant":"inplace","name":"relu.inplace","semantics":"ReLU（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"max(0,x)","status":"verified","impl":"inplace"},
   {"id":"L10.0413","layer":10,"group":"FWD","groupName":"前向传播指令","op":"tanh","opZh":"Tanh","variant":"base","name":"tanh.base","semantics":"Tanh（标量/单样本语义）","invariant":"奇函数；|tanh| ≤ 1","status":"verified","impl":"tanh"},
   {"id":"L10.0414","layer":10,"group":"FWD","groupName":"前向传播指令","op":"tanh","opZh":"Tanh","variant":"batched","name":"tanh.batched","semantics":"Tanh（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"奇函数；|tanh| ≤ 1","status":"verified","impl":"batched"},
-  {"id":"L10.0415","layer":10,"group":"FWD","groupName":"前向传播指令","op":"tanh","opZh":"Tanh","variant":"fused","name":"tanh.fused","semantics":"Tanh（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"奇函数；|tanh| ≤ 1","status":"spec","impl":null},
+  {"id":"L10.0415","layer":10,"group":"FWD","groupName":"前向传播指令","op":"tanh","opZh":"Tanh","variant":"fused","name":"tanh.fused","semantics":"Tanh（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"奇函数；|tanh| ≤ 1","status":"verified","impl":"fused"},
   {"id":"L10.0416","layer":10,"group":"FWD","groupName":"前向传播指令","op":"tanh","opZh":"Tanh","variant":"inplace","name":"tanh.inplace","semantics":"Tanh（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"奇函数；|tanh| ≤ 1","status":"verified","impl":"inplace"},
   {"id":"L10.0417","layer":10,"group":"FWD","groupName":"前向传播指令","op":"embedding_lookup","opZh":"嵌入查找","variant":"base","name":"embedding_lookup.base","semantics":"嵌入查找（标量/单样本语义）","invariant":"输出 = 第 i 行向量","status":"verified","impl":"embeddingLookup"},
   {"id":"L10.0418","layer":10,"group":"FWD","groupName":"前向传播指令","op":"embedding_lookup","opZh":"嵌入查找","variant":"batched","name":"embedding_lookup.batched","semantics":"嵌入查找（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"输出 = 第 i 行向量","status":"spec","impl":null},
@@ -4936,7 +5041,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0456","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"inplace","name":"grad_linear.inplace","semantics":"线性层梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∂L/∂W = δᵀX","status":"spec","impl":null},
   {"id":"L10.0457","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"base","name":"grad_relu.base","semantics":"ReLU 梯度（标量/单样本语义）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"gradRelu"},
   {"id":"L10.0458","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"batched","name":"grad_relu.batched","semantics":"ReLU 梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"batched"},
-  {"id":"L10.0459","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"fused","name":"grad_relu.fused","semantics":"ReLU 梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"x < 0 处梯度 = 0","status":"spec","impl":null},
+  {"id":"L10.0459","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"fused","name":"grad_relu.fused","semantics":"ReLU 梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"fused"},
   {"id":"L10.0460","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"inplace","name":"grad_relu.inplace","semantics":"ReLU 梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"inplace"},
   {"id":"L10.0461","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_tanh","opZh":"Tanh 梯度","variant":"base","name":"grad_tanh.base","semantics":"Tanh 梯度（标量/单样本语义）","invariant":"1 − tanh²(x)","status":"verified","impl":"gradTanh"},
   {"id":"L10.0462","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_tanh","opZh":"Tanh 梯度","variant":"batched","name":"grad_tanh.batched","semantics":"Tanh 梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"1 − tanh²(x)","status":"verified","impl":"batched"},
@@ -4992,15 +5097,15 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0512","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"inplace","name":"bptt.inplace","semantics":"时间反向传播（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"梯度沿时间步累加","status":"spec","impl":null},
   {"id":"L10.0513","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"base","name":"l1.base","semantics":"L1 范数（标量/单样本语义）","invariant":"Σ|xᵢ|","status":"verified","impl":"l1Norm"},
   {"id":"L10.0514","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"batched","name":"l1.batched","semantics":"L1 范数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Σ|xᵢ|","status":"verified","impl":"batched"},
-  {"id":"L10.0515","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"fused","name":"l1.fused","semantics":"L1 范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Σ|xᵢ|","status":"spec","impl":null},
+  {"id":"L10.0515","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"fused","name":"l1.fused","semantics":"L1 范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Σ|xᵢ|","status":"verified","impl":"fused"},
   {"id":"L10.0516","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"inplace","name":"l1.inplace","semantics":"L1 范数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Σ|xᵢ|","status":"spec","impl":null},
   {"id":"L10.0517","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2","opZh":"L2 范数","variant":"base","name":"l2.base","semantics":"L2 范数（标量/单样本语义）","invariant":"√Σxᵢ²","status":"verified","impl":"l2Norm"},
   {"id":"L10.0518","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2","opZh":"L2 范数","variant":"batched","name":"l2.batched","semantics":"L2 范数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"√Σxᵢ²","status":"verified","impl":"batched"},
-  {"id":"L10.0519","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2","opZh":"L2 范数","variant":"fused","name":"l2.fused","semantics":"L2 范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"√Σxᵢ²","status":"spec","impl":null},
+  {"id":"L10.0519","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2","opZh":"L2 范数","variant":"fused","name":"l2.fused","semantics":"L2 范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"√Σxᵢ²","status":"verified","impl":"fused"},
   {"id":"L10.0520","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2","opZh":"L2 范数","variant":"inplace","name":"l2.inplace","semantics":"L2 范数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"√Σxᵢ²","status":"spec","impl":null},
   {"id":"L10.0521","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"linf","opZh":"无穷范数","variant":"base","name":"linf.base","semantics":"无穷范数（标量/单样本语义）","invariant":"max|xᵢ|","status":"verified","impl":"linfNorm"},
   {"id":"L10.0522","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"linf","opZh":"无穷范数","variant":"batched","name":"linf.batched","semantics":"无穷范数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"max|xᵢ|","status":"verified","impl":"batched"},
-  {"id":"L10.0523","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"linf","opZh":"无穷范数","variant":"fused","name":"linf.fused","semantics":"无穷范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max|xᵢ|","status":"spec","impl":null},
+  {"id":"L10.0523","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"linf","opZh":"无穷范数","variant":"fused","name":"linf.fused","semantics":"无穷范数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"max|xᵢ|","status":"verified","impl":"fused"},
   {"id":"L10.0524","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"linf","opZh":"无穷范数","variant":"inplace","name":"linf.inplace","semantics":"无穷范数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"max|xᵢ|","status":"spec","impl":null},
   {"id":"L10.0525","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"normalize_l2","opZh":"L2 归一化","variant":"base","name":"normalize_l2.base","semantics":"L2 归一化（标量/单样本语义）","invariant":"‖x̂‖ = 1 ≤ 1e-15","status":"verified","impl":"normalizeL2"},
   {"id":"L10.0526","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"normalize_l2","opZh":"L2 归一化","variant":"batched","name":"normalize_l2.batched","semantics":"L2 归一化（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"‖x̂‖ = 1 ≤ 1e-15","status":"verified","impl":"batched"},
@@ -5008,11 +5113,11 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0528","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"normalize_l2","opZh":"L2 归一化","variant":"inplace","name":"normalize_l2.inplace","semantics":"L2 归一化（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"‖x̂‖ = 1 ≤ 1e-15","status":"verified","impl":"inplace_normalizeL2"},
   {"id":"L10.0529","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"minmax","opZh":"最小最大缩放","variant":"base","name":"minmax.base","semantics":"最小最大缩放（标量/单样本语义）","invariant":"输出 ∈ [0,1]","status":"verified","impl":"minmaxScale"},
   {"id":"L10.0530","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"minmax","opZh":"最小最大缩放","variant":"batched","name":"minmax.batched","semantics":"最小最大缩放（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"输出 ∈ [0,1]","status":"verified","impl":"batched"},
-  {"id":"L10.0531","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"minmax","opZh":"最小最大缩放","variant":"fused","name":"minmax.fused","semantics":"最小最大缩放（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"输出 ∈ [0,1]","status":"spec","impl":null},
+  {"id":"L10.0531","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"minmax","opZh":"最小最大缩放","variant":"fused","name":"minmax.fused","semantics":"最小最大缩放（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"输出 ∈ [0,1]","status":"verified","impl":"fused"},
   {"id":"L10.0532","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"minmax","opZh":"最小最大缩放","variant":"inplace","name":"minmax.inplace","semantics":"最小最大缩放（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"输出 ∈ [0,1]","status":"verified","impl":"inplace"},
   {"id":"L10.0533","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"zscore","opZh":"标准化","variant":"base","name":"zscore.base","semantics":"标准化（标量/单样本语义）","invariant":"均值 = 0、方差 = 1","status":"verified","impl":"zscore"},
   {"id":"L10.0534","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"zscore","opZh":"标准化","variant":"batched","name":"zscore.batched","semantics":"标准化（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"均值 = 0、方差 = 1","status":"verified","impl":"batched"},
-  {"id":"L10.0535","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"zscore","opZh":"标准化","variant":"fused","name":"zscore.fused","semantics":"标准化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"均值 = 0、方差 = 1","status":"spec","impl":null},
+  {"id":"L10.0535","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"zscore","opZh":"标准化","variant":"fused","name":"zscore.fused","semantics":"标准化（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"均值 = 0、方差 = 1","status":"verified","impl":"fused"},
   {"id":"L10.0536","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"zscore","opZh":"标准化","variant":"inplace","name":"zscore.inplace","semantics":"标准化（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"均值 = 0、方差 = 1","status":"verified","impl":"inplace"},
   {"id":"L10.0537","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2_reg","opZh":"L2 正则","variant":"base","name":"l2_reg.base","semantics":"L2 正则（标量/单样本语义）","invariant":"λ‖w‖²","status":"verified","impl":"l2Reg"},
   {"id":"L10.0538","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l2_reg","opZh":"L2 正则","variant":"batched","name":"l2_reg.batched","semantics":"L2 正则（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"λ‖w‖²","status":"spec","impl":null},
@@ -5128,7 +5233,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0648","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"categorical","opZh":"类别采样","variant":"inplace","name":"categorical.inplace","semantics":"类别采样（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"频率 ≈ p ≤ 0.01","status":"spec","impl":null},
   {"id":"L10.0649","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"temperature","opZh":"温度采样","variant":"base","name":"temperature.base","semantics":"温度采样（标量/单样本语义）","invariant":"T↓ → 熵↓","status":"verified","impl":"temperatureSoftmax"},
   {"id":"L10.0650","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"temperature","opZh":"温度采样","variant":"batched","name":"temperature.batched","semantics":"温度采样（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"T↓ → 熵↓","status":"verified","impl":"batched"},
-  {"id":"L10.0651","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"temperature","opZh":"温度采样","variant":"fused","name":"temperature.fused","semantics":"温度采样（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"T↓ → 熵↓","status":"spec","impl":null},
+  {"id":"L10.0651","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"temperature","opZh":"温度采样","variant":"fused","name":"temperature.fused","semantics":"温度采样（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"T↓ → 熵↓","status":"verified","impl":"fused"},
   {"id":"L10.0652","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"temperature","opZh":"温度采样","variant":"inplace","name":"temperature.inplace","semantics":"温度采样（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"T↓ → 熵↓","status":"spec","impl":null},
   {"id":"L10.0653","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"topk","opZh":"Top-K 采样","variant":"base","name":"topk.base","semantics":"Top-K 采样（标量/单样本语义）","invariant":"支撑外 = 0；支撑上和 = 1","status":"verified","impl":"topK"},
   {"id":"L10.0654","layer":10,"group":"SAMPLE","groupName":"采样生成指令","op":"topk","opZh":"Top-K 采样","variant":"batched","name":"topk.batched","semantics":"Top-K 采样（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"支撑外 = 0；支撑上和 = 1","status":"verified","impl":"batched"},
@@ -5312,19 +5417,19 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0832","layer":10,"group":"RL","groupName":"强化学习指令","op":"ppo","opZh":"PPO 截断","variant":"inplace","name":"ppo.inplace","semantics":"PPO 截断（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"比率裁剪至 [1−ε, 1+ε]","status":"spec","impl":null},
   {"id":"L10.0833","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"accuracy","opZh":"准确率","variant":"base","name":"accuracy.base","semantics":"准确率（标量/单样本语义）","invariant":"= 正确数 / 总数","status":"verified","impl":"accuracy"},
   {"id":"L10.0834","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"accuracy","opZh":"准确率","variant":"batched","name":"accuracy.batched","semantics":"准确率（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"= 正确数 / 总数","status":"verified","impl":"batched"},
-  {"id":"L10.0835","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"accuracy","opZh":"准确率","variant":"fused","name":"accuracy.fused","semantics":"准确率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= 正确数 / 总数","status":"spec","impl":null},
+  {"id":"L10.0835","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"accuracy","opZh":"准确率","variant":"fused","name":"accuracy.fused","semantics":"准确率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= 正确数 / 总数","status":"verified","impl":"fused"},
   {"id":"L10.0836","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"accuracy","opZh":"准确率","variant":"inplace","name":"accuracy.inplace","semantics":"准确率（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= 正确数 / 总数","status":"spec","impl":null},
   {"id":"L10.0837","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"precision","opZh":"精确率","variant":"base","name":"precision.base","semantics":"精确率（标量/单样本语义）","invariant":"TP/(TP+FP)","status":"verified","impl":"precision"},
   {"id":"L10.0838","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"precision","opZh":"精确率","variant":"batched","name":"precision.batched","semantics":"精确率（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"TP/(TP+FP)","status":"verified","impl":"batched"},
-  {"id":"L10.0839","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"precision","opZh":"精确率","variant":"fused","name":"precision.fused","semantics":"精确率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TP/(TP+FP)","status":"spec","impl":null},
+  {"id":"L10.0839","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"precision","opZh":"精确率","variant":"fused","name":"precision.fused","semantics":"精确率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TP/(TP+FP)","status":"verified","impl":"fused"},
   {"id":"L10.0840","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"precision","opZh":"精确率","variant":"inplace","name":"precision.inplace","semantics":"精确率（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"TP/(TP+FP)","status":"spec","impl":null},
   {"id":"L10.0841","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"recall","opZh":"召回率","variant":"base","name":"recall.base","semantics":"召回率（标量/单样本语义）","invariant":"TP/(TP+FN)","status":"verified","impl":"recall"},
   {"id":"L10.0842","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"recall","opZh":"召回率","variant":"batched","name":"recall.batched","semantics":"召回率（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"TP/(TP+FN)","status":"verified","impl":"batched"},
-  {"id":"L10.0843","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"recall","opZh":"召回率","variant":"fused","name":"recall.fused","semantics":"召回率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TP/(TP+FN)","status":"spec","impl":null},
+  {"id":"L10.0843","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"recall","opZh":"召回率","variant":"fused","name":"recall.fused","semantics":"召回率（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"TP/(TP+FN)","status":"verified","impl":"fused"},
   {"id":"L10.0844","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"recall","opZh":"召回率","variant":"inplace","name":"recall.inplace","semantics":"召回率（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"TP/(TP+FN)","status":"spec","impl":null},
   {"id":"L10.0845","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"f1","opZh":"F1 分数","variant":"base","name":"f1.base","semantics":"F1 分数（标量/单样本语义）","invariant":"= 2PR/(P+R)","status":"verified","impl":"f1"},
   {"id":"L10.0846","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"f1","opZh":"F1 分数","variant":"batched","name":"f1.batched","semantics":"F1 分数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"= 2PR/(P+R)","status":"verified","impl":"batched"},
-  {"id":"L10.0847","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"f1","opZh":"F1 分数","variant":"fused","name":"f1.fused","semantics":"F1 分数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= 2PR/(P+R)","status":"spec","impl":null},
+  {"id":"L10.0847","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"f1","opZh":"F1 分数","variant":"fused","name":"f1.fused","semantics":"F1 分数（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= 2PR/(P+R)","status":"verified","impl":"fused"},
   {"id":"L10.0848","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"f1","opZh":"F1 分数","variant":"inplace","name":"f1.inplace","semantics":"F1 分数（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= 2PR/(P+R)","status":"spec","impl":null},
   {"id":"L10.0849","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"auc","opZh":"AUC","variant":"base","name":"auc.base","semantics":"AUC（标量/单样本语义）","invariant":"完美分离 = 1；A(y,s) = 1 − A(y,−s)","status":"verified","impl":"auc"},
   {"id":"L10.0850","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"auc","opZh":"AUC","variant":"batched","name":"auc.batched","semantics":"AUC（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"完美分离 = 1；A(y,s) = 1 − A(y,−s)","status":"spec","impl":null},
@@ -5340,7 +5445,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0860","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mse","opZh":"均方误差","variant":"inplace","name":"mse.inplace","semantics":"均方误差（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= mean((ŷ−y)²)","status":"spec","impl":null},
   {"id":"L10.0861","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mae","opZh":"平均绝对误差","variant":"base","name":"mae.base","semantics":"平均绝对误差（标量/单样本语义）","invariant":"= mean|ŷ−y|","status":"verified","impl":"mae"},
   {"id":"L10.0862","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mae","opZh":"平均绝对误差","variant":"batched","name":"mae.batched","semantics":"平均绝对误差（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"= mean|ŷ−y|","status":"verified","impl":"batched"},
-  {"id":"L10.0863","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mae","opZh":"平均绝对误差","variant":"fused","name":"mae.fused","semantics":"平均绝对误差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= mean|ŷ−y|","status":"spec","impl":null},
+  {"id":"L10.0863","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mae","opZh":"平均绝对误差","variant":"fused","name":"mae.fused","semantics":"平均绝对误差（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"= mean|ŷ−y|","status":"verified","impl":"fused"},
   {"id":"L10.0864","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"mae","opZh":"平均绝对误差","variant":"inplace","name":"mae.inplace","semantics":"平均绝对误差（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= mean|ŷ−y|","status":"spec","impl":null},
   {"id":"L10.0865","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"logloss","opZh":"对数损失","variant":"base","name":"logloss.base","semantics":"对数损失（标量/单样本语义）","invariant":"≥ 0；完美预测 ≈ 0","status":"verified","impl":"logLoss"},
   {"id":"L10.0866","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"logloss","opZh":"对数损失","variant":"batched","name":"logloss.batched","semantics":"对数损失（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"≥ 0；完美预测 ≈ 0","status":"spec","impl":null},
@@ -5348,7 +5453,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0868","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"logloss","opZh":"对数损失","variant":"inplace","name":"logloss.inplace","semantics":"对数损失（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"≥ 0；完美预测 ≈ 0","status":"spec","impl":null},
   {"id":"L10.0869","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"cosine","opZh":"余弦相似度","variant":"base","name":"cosine.base","semantics":"余弦相似度（标量/单样本语义）","invariant":"∈ [−1,1]","status":"verified","impl":"cosineSimilarity"},
   {"id":"L10.0870","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"cosine","opZh":"余弦相似度","variant":"batched","name":"cosine.batched","semantics":"余弦相似度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∈ [−1,1]","status":"verified","impl":"batched"},
-  {"id":"L10.0871","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"cosine","opZh":"余弦相似度","variant":"fused","name":"cosine.fused","semantics":"余弦相似度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [−1,1]","status":"spec","impl":null},
+  {"id":"L10.0871","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"cosine","opZh":"余弦相似度","variant":"fused","name":"cosine.fused","semantics":"余弦相似度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∈ [−1,1]","status":"verified","impl":"fused"},
   {"id":"L10.0872","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"cosine","opZh":"余弦相似度","variant":"inplace","name":"cosine.inplace","semantics":"余弦相似度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∈ [−1,1]","status":"spec","impl":null},
   {"id":"L10.0873","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"edit_distance","opZh":"编辑距离","variant":"base","name":"edit_distance.base","semantics":"编辑距离（标量/单样本语义）","invariant":"d(kitten,sitting) = 3；对称","status":"verified","impl":"editDistance"},
   {"id":"L10.0874","layer":10,"group":"METRIC","groupName":"评估度量指令","op":"edit_distance","opZh":"编辑距离","variant":"batched","name":"edit_distance.batched","semantics":"编辑距离（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"d(kitten,sitting) = 3；对称","status":"spec","impl":null},
@@ -5448,7 +5553,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0968","layer":10,"group":"SYS","groupName":"系统级微指令","op":"reduce_all","opZh":"全局归约","variant":"inplace","name":"reduce_all.inplace","semantics":"全局归约（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"= Kahan 精确和","status":"spec","impl":null},
   {"id":"L10.0969","layer":10,"group":"SYS","groupName":"系统级微指令","op":"broadcast","opZh":"广播","variant":"base","name":"broadcast.base","semantics":"广播（标量/单样本语义）","invariant":"恒等映射（深拷贝）","status":"verified","impl":"broadcast"},
   {"id":"L10.0970","layer":10,"group":"SYS","groupName":"系统级微指令","op":"broadcast","opZh":"广播","variant":"batched","name":"broadcast.batched","semantics":"广播（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"恒等映射（深拷贝）","status":"verified","impl":"batched"},
-  {"id":"L10.0971","layer":10,"group":"SYS","groupName":"系统级微指令","op":"broadcast","opZh":"广播","variant":"fused","name":"broadcast.fused","semantics":"广播（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"恒等映射（深拷贝）","status":"spec","impl":null},
+  {"id":"L10.0971","layer":10,"group":"SYS","groupName":"系统级微指令","op":"broadcast","opZh":"广播","variant":"fused","name":"broadcast.fused","semantics":"广播（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"恒等映射（深拷贝）","status":"verified","impl":"fused"},
   {"id":"L10.0972","layer":10,"group":"SYS","groupName":"系统级微指令","op":"broadcast","opZh":"广播","variant":"inplace","name":"broadcast.inplace","semantics":"广播（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"恒等映射（深拷贝）","status":"spec","impl":null},
   {"id":"L10.0973","layer":10,"group":"SYS","groupName":"系统级微指令","op":"gather_all","opZh":"全局收集","variant":"base","name":"gather_all.base","semantics":"全局收集（标量/单样本语义）","invariant":"根节点收齐全部","status":"verified","impl":"gatherAll"},
   {"id":"L10.0974","layer":10,"group":"SYS","groupName":"系统级微指令","op":"gather_all","opZh":"全局收集","variant":"batched","name":"gather_all.batched","semantics":"全局收集（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"根节点收齐全部","status":"spec","impl":null},

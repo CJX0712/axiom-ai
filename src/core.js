@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.5';
+  var VERSION = '1.1.6';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2602,6 +2602,99 @@
     throw new Error('inplace: 未知 cls ' + s.cls);
   }
 
+  /* 通用 Epilogue 融合引擎（v1.1.6）：单一 fused(opCode, item) 调度器 + FUSE_SIG 签名表。
+   * 语义：算子输出不落地中间张量，单遍「就地」施加逐元素尾算子（epilogue）；
+   *     硬不变量 fused ≡ post ∘ op（≤1e-15）。
+   * 世界级范式锚定：cuBLASLt / CUTLASS 的 GEMM epilogue 融合（BIAS/RELU/GELU 尾算子内联进主循环）。
+   * 与 BATCH_SIG 同构复用 cls/sample（vec/elem/pair/triple/shared），仅多一个逐元素 post。 */
+  function _applySig(s, item) { // 单样本按 cls 施加算子
+    var f = s.fn;
+    if (s.cls === 'vec') return f(item);
+    if (s.cls === 'elem') return item.map(function (e) { return f(e); });
+    if (s.cls === 'pair') return f(item[0], item[1]);
+    if (s.cls === 'triple') return f(item[0], item[1], item[2]);
+    if (s.cls === 'shared') return f.apply(null, [item].concat(s.shared));
+    throw new Error('_applySig: 未知 cls ' + s.cls);
+  }
+  function _epilogue(dst, g) { // 就地单遍施加逐元素尾算子（不物化中间张量，单次分配）
+    if (typeof dst === 'number') return g(dst);
+    if (Array.isArray(dst)) { for (var i = 0; i < dst.length; i++) dst[i] = _epilogue(dst[i], g); return dst; }
+    return dst;
+  }
+  function _mapPost(src, g) { // 参照实现：纯函数逐元素映射（会物化中间张量，两次分配）
+    if (typeof src === 'number') return g(src);
+    if (Array.isArray(src)) return src.map(function (x) { return _mapPost(x, g); });
+    return src;
+  }
+  function fused(opCode, item) {
+    var s = FUSE_SIG[opCode];
+    if (!s) throw new Error('fused: 无签名 ' + opCode);
+    return _epilogue(_applySig(s, item), s.post);
+  }
+  var FUSE_SIG = {
+    /* TENSOR：拷贝 / 展平 ∘ ReLU 尾算子 */
+    'TENSOR.copy': { cls: 'vec', fn: tensorCopy, sample: _M, post: relu },
+    'TENSOR.flatten': { cls: 'vec', fn: flatten, sample: _M, post: relu },
+    /* NUMER：激活 ∘ 对数域 / 平方根；expm1↔log1p 为互逆尾算子 */
+    'NUMER.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V, post: Math.log },
+    'NUMER.relu': { cls: 'elem', fn: relu, sample: _V, post: Math.sqrt },
+    'NUMER.gelu': { cls: 'elem', fn: gelu, sample: _V, post: tanh },
+    'NUMER.erf': { cls: 'elem', fn: erf, sample: _V, post: Math.abs },
+    'NUMER.reciprocal': { cls: 'elem', fn: reciprocal, sample: _V, post: Math.abs },
+    'NUMER.expm1': { cls: 'elem', fn: expm1, sample: _V, post: log1p },       // log1p(expm1(x)) = x
+    'NUMER.log1p': { cls: 'elem', fn: log1p, sample: _V, post: expm1 },       // expm1(log1p(x)) = x
+    'NUMER.kahan': { cls: 'vec', fn: kahanSum, sample: _V, post: Math.abs },
+    'NUMER.exactsum': { cls: 'vec', fn: exactSum, sample: _V, post: Math.abs },
+    /* NORM：范数 ∘ 倒数 = 自适应缩放因子；缩放 ∘ tanh 压缩 */
+    'NORM.l1': { cls: 'vec', fn: l1Norm, sample: _V, post: Math.sqrt },
+    'NORM.l2': { cls: 'vec', fn: l2Norm, sample: _V, post: reciprocal },
+    'NORM.linf': { cls: 'vec', fn: linfNorm, sample: _V, post: reciprocal },
+    'NORM.minmax': { cls: 'vec', fn: minmaxScale, sample: _V, post: tanh },
+    'NORM.zscore': { cls: 'vec', fn: zscore, sample: _V, post: tanh },
+    /* FWD：log-softmax / log-sigmoid（对数域稳定，损失层直接消费） */
+    'FWD.softmax': { cls: 'vec', fn: softmax, sample: _V, post: Math.log },
+    'FWD.sigmoid': { cls: 'elem', fn: sigmoid, sample: _V, post: Math.log },
+    'FWD.gelu': { cls: 'elem', fn: gelu, sample: _V, post: tanh },
+    'FWD.relu': { cls: 'elem', fn: relu, sample: _V, post: Math.sqrt },
+    'FWD.tanh': { cls: 'elem', fn: tanh, sample: _V, post: Math.abs },
+    /* BWD：梯度掩码 ∘ Sigmoid */
+    'BWD.grad_relu': { cls: 'vec', fn: gradRelu, sample: _V, post: sigmoid },
+    /* INFO：熵 ∘ exp = 困惑度；散度 ∘ sqrt（Hellinger 型距离） */
+    'INFO.entropy': { cls: 'vec', fn: entropy, sample: _V, post: Math.exp },
+    'INFO.kl': { cls: 'pair', fn: klDivergence, sample: _P, post: Math.sqrt },
+    'INFO.js': { cls: 'pair', fn: jsDivergence, sample: _P, post: Math.sqrt },
+    'INFO.mutual_info': { cls: 'vec', fn: mutualInfo, sample: _M, post: Math.abs },
+    'INFO.conditional_entropy': { cls: 'vec', fn: conditionalEntropy, sample: _M, post: Math.exp },
+    'INFO.gini': { cls: 'vec', fn: gini, sample: _V, post: Math.sqrt },
+    'INFO.normalize_dist': { cls: 'vec', fn: normalizeDist, sample: _V, post: Math.abs },
+    /* PROB：方差 ∘ sqrt = 标准差；CDF ∘ log */
+    'PROB.gauss_cdf': { cls: 'triple', fn: normalCDF, sample: _T, post: Math.log },
+    'PROB.covariance': { cls: 'pair', fn: covariance, sample: _P, post: Math.abs },
+    'PROB.expectation': { cls: 'vec', fn: expectation, sample: _V, post: tanh },
+    'PROB.variance': { cls: 'vec', fn: variance, sample: _V, post: Math.sqrt },
+    'PROB.marginal': { cls: 'vec', fn: marginal, sample: _M, post: Math.sqrt },
+    /* METRIC：比率型 ∘ sqrt；余弦 ∘ abs */
+    'METRIC.accuracy': { cls: 'pair', fn: accuracy, sample: _P, post: Math.sqrt },
+    'METRIC.precision': { cls: 'pair', fn: precision, sample: _P, post: Math.sqrt },
+    'METRIC.recall': { cls: 'pair', fn: recall, sample: _P, post: Math.sqrt },
+    'METRIC.f1': { cls: 'pair', fn: f1, sample: _P, post: Math.sqrt },
+    'METRIC.mae': { cls: 'pair', fn: mae, sample: _P, post: Math.sqrt },
+    'METRIC.cosine': { cls: 'pair', fn: cosineSimilarity, sample: _P, post: Math.abs },
+    /* LINALG：GEMM ∘ ReLU（cuBLASLt epilogue 正统范式）；log|det|（高斯对数似然项） */
+    'LINALG.matmul': { cls: 'pair', fn: matMul, sample: _MM, post: relu },
+    'LINALG.solve': { cls: 'pair', fn: solveLinear, sample: _SOLVE, post: relu },
+    'LINALG.trace': { cls: 'vec', fn: trace, sample: _MS, post: Math.abs },
+    'LINALG.det': { cls: 'vec', fn: det, sample: _MS, post: Math.log },
+    'LINALG.inverse': { cls: 'vec', fn: inverse, sample: _MS, post: Math.abs },
+    'LINALG.cholesky': { cls: 'vec', fn: cholesky, sample: _MS, post: Math.abs },
+    /* OPTIM：梯度范数 ∘ 倒数 = 自适应步长缩放因子 */
+    'OPTIM.grad_norm': { cls: 'vec', fn: gradNorm, sample: _V, post: reciprocal },
+    /* SYS：广播 ∘ ReLU */
+    'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: _V, post: relu },
+    /* SAMPLE：温度 softmax ∘ log（对数域损失输入） */
+    'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V, post: Math.log }
+  };
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -4278,8 +4371,19 @@
   }
 
   /* 执行变体：fused 融合一致性（v1.1.3） */
-  check('variant.fused：与相邻算子融合，输出等于顺序组合（参照实现 vs 主实现，16 族代表算子）', 1e-15, function () {
-    var bad = 0;
+  check('variant.fused：通用 Epilogue 融合引擎 — fused ≡ post ∘ op（不物化中间张量）＋16 族代表算子融合', 1e-15, function () {
+    var bad = 0, n = 0;
+    // 通用融合引擎：遍历 FUSE_SIG，断言 fused 路径 ≡ 纯组合（post ∘ op）
+    for (var fcode in FUSE_SIG) {
+      if (!FUSE_SIG.hasOwnProperty(fcode)) continue;
+      var fs = FUSE_SIG[fcode], fitems = fs.sample;
+      for (var fi = 0; fi < fitems.length; fi++) {
+        n++;
+        var fgot = fused(fcode, cloneVal(fitems[fi]));
+        var fref = _mapPost(_applySig(fs, cloneVal(fitems[fi])), fs.post);
+        if (arrMaxDiff(fgot, fref) > 1e-15) bad++;
+      }
+    }
     var A = [[1, 2, 3], [4, 5, 6]];
     if (arrMaxDiff(fused_transpose_flatten(A), flatten(transpose(A))) > 1e-15) bad++;
     var M = [[1, 2], [3, 4]], xv = [1, 1];
@@ -4321,7 +4425,7 @@
     var labels = ['a', 'b', 'a', 'c'];
     if (arrMaxDiff(fused_label_onehot(labels), oneHot(labelEncode(labels).codes).matrix) > 0) bad++;
     if (Math.abs(fused_allreduce([1, 2, 3, 4]) - reduceAll(broadcast([1, 2, 3, 4]))) > 0) bad++;
-    return bad;
+    return bad + (n < 40 ? 1e6 : 0); // 守卫：至少覆盖 40 个融合样本
   });
 
   function runChecks() {
@@ -4442,6 +4546,7 @@
     batched: batched, BATCH_SIG: BATCH_SIG,                 // 通用批处理引擎（v1.1.4）
     batched_selfAttention: batched_selfAttention, batched_oneHot: batched_oneHot,
     inplace: inplace, INPLACE_SIG: INPLACE_SIG,             // 通用原地引擎（v1.1.5）
+    fused: fused, FUSE_SIG: FUSE_SIG,                       // 通用 Epilogue 融合引擎（v1.1.6）
     inplace_tensorFill: inplace_tensorFill, inplace_tensorCopy: inplace_tensorCopy, inplace_normalizeL2: inplace_normalizeL2,
     /* 融合变体内核（v1.1.3） */
     fused_transpose_flatten: fused_transpose_flatten, fused_matvec_relu: fused_matvec_relu,

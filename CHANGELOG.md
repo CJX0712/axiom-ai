@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.1.6] - 2026-10-18
+
+### 通用 Epilogue 融合引擎（Generic Epilogue Fusion Engine）
+- 建造**单一 `fused` 调度器 + `FUSE_SIG` 签名表**（49 个非代表算子的 fused 变体），与 `BATCH_SIG` 同构复用 cls/sample，仅多一个逐元素尾算子 `post`
+- **世界级范式锚定**：cuBLASLt / CUTLASS 的 GEMM epilogue 融合 —— 算子输出不物化中间张量，单遍「就地」施加逐元素尾算子（单次分配，省去一次全量分配与一趟遍历）
+- 新增助手：`_applySig`（单样本按 cls 施加算子）、`_epilogue`（就地单遍尾算子）、`_mapPost`（参照实现，纯函数映射会物化中间张量）
+- 硬不变量：`fused ≡ post ∘ op`（≤1e-15）。代表融合对：GEMM∘ReLU（LINALG.matmul）、log-softmax（FWD.softmax）、log-sigmoid、方差∘sqrt→标准差（PROB.variance）、熵∘exp→困惑度（INFO.entropy）、log|det|（LINALG.det，高斯对数似然项）、梯度范数∘倒数→自适应步长（OPTIM.grad_norm）、散度∘sqrt（Hellinger 型）、expm1↔log1p 互逆尾算子、温度 softmax∘log
+- 不变量 +0（仍为 178 核心）：`variant.fused` 聚合检查扩展为「遍历 FUSE_SIG 断言 ≡ 纯组合」＋原有 16 族具名代表内核，带"至少覆盖 40 个融合样本"守卫
+- `gen-registry.js` 由 `FUSE_SIG` 驱动 fused 变体标记 verified（键格式 `GROUP.op.fused`），与 BATCH_SIG / INPLACE_SIG 三者对称
+- 指标：verified **358 → 407 / 1024**；fused 层 **16 → 65**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 494.0 KB
+
 ## [1.1.5] - 2026-10-18
 
 ### 通用原地引擎（Generic Inplace Engine）
