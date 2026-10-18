@@ -202,29 +202,29 @@
 | 全部含数学不变量 | ✅ |
 | verified 项 impl 均为 core.js 真实导出 | ✅ |
 | 仅 base 变体可为 verified | ❌ |
-| verified 数 > 0（当前 648） | ✅ |
+| verified 数 > 0（当前 718） | ✅ |
 
 ## 3. 微指令内核化覆盖（verified = 有 core.js 实现且通过不变量自检）
 
 | 指令族 | verified / 16 |
 |---|---|
-| ATTEN | 45 / 16 |
-| BWD | 32 / 16 |
-| DATA | 45 / 16 |
-| FWD | 55 / 16 |
+| ATTEN | 51 / 16 |
+| BWD | 40 / 16 |
+| DATA | 47 / 16 |
+| FWD | 57 / 16 |
 | GRAPH | 18 / 16 |
-| INFO | 39 / 16 |
-| LINALG | 49 / 16 |
+| INFO | 49 / 16 |
+| LINALG | 51 / 16 |
 | METRIC | 48 / 16 |
-| NORM | 50 / 16 |
-| NUMER | 52 / 16 |
-| OPTIM | 21 / 16 |
-| PROB | 41 / 16 |
-| RL | 29 / 16 |
-| SAMPLE | 42 / 16 |
+| NORM | 58 / 16 |
+| NUMER | 56 / 16 |
+| OPTIM | 27 / 16 |
+| PROB | 47 / 16 |
+| RL | 39 / 16 |
+| SAMPLE | 48 / 16 |
 | SYS | 29 / 16 |
 | TENSOR | 53 / 16 |
-| **合计** | **648 / 1024** |
+| **合计** | **718 / 1024** |
 
 ## 4. 残差分级说明
 

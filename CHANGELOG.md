@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.2.1] - 2026-10-19
+
+### 修复批次 · 样本设计误杀修复（Fix Batch）
+- **目标**：修复 v1.1.7 因样本括号层级/类型错误被沙盒误杀的算子——语义本身完全兼容批处理，是样本设计缺陷而非能力缺陷
+- **根因复盘**（第三次同型错误，教训已固化）：① `hypot`/`div_guard` 的 pair 样本多包一层 batch 括号；② `surprisal`/`bits`/`gumbel` 是标量函数却设了 `vec` 类（应为 `elem` 类，样本为「数组的数组」）；③ `thompson`/`ppo`/`lr_decay` 等 triple 样本同样多包一层；④ `vjp`/`jvp` 的目标函数返回标量会使 `transpose(J)` 炸——改用向量输出函数 `FV`
+- **batched +35**（BATCH_SIG 169→204，其中 4 条覆盖旧条目）：NUMER.hypot/div_guard、PROB.bayes/condition/mv_gauss、INFO.surprisal/bits/channel_capacity/rate_distortion/max_entropy、FWD.layernorm（2D 样本）、NORM.spectral_norm/label_smooth/mixup/early_stop、SAMPLE.gumbel/rejection/inverse_cdf、RL.thompson/advantage/gae/reinforce/ppo/ucb/greedy、OPTIM.lr_decay/weight_decay/polyak、BWD.grad_softmax_ce/stop_grad/detach/jacobian/vjp/jvp/grad_accum、ATTEN.cross_attn/kv_cache/flash、DATA.normalize_fit、LINALG.pca（补 k 参）
+- **fused 对齐 +35**（FUSE_SIG 166→201）：新 batched 键全部补齐融合条目
+- **函数字面量规范落地**：`jacobian`/`vjp`/`jvp`/`rejection`/`inverse_cdf` 的样本函数改为自包含字面量（FQ/FV/GAUSS/UNIF/CDFID，注入第 13 节前常量区），彻底告别 v1.1.9 的闭包序列化问题
+- 指标：verified **648 → 718 / 1024**（+70：batched 169→204 / fused 168→203）；spec **376 → 306**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 531.1 KB；三表幽灵键 0
+
 ## [1.2.0] - 2026-10-19
 
 ### 变体层扩面 · 消化 spec（Variant Layer Scale-Out）

@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.2.1';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2456,6 +2456,12 @@
   var _MS = [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]]; // 对称正定（Cholesky/逆 所需）
   var _SOLVE = (function () { var A1 = spdMatrix(2, 1), A2 = spdMatrix(2, 2); return [[A1, [1, 2]], [A2, [3, 4]]]; })();
   var _LSTSQ = [[[[1, 2], [3, 4], [5, 6]], [1, 2, 3]], [[[2, 1], [1, 2], [0, 1]], [4, 5, 6]]];
+  /* v1.2.1 签名表自包含函数字面量（无自由变量，可安全序列化） */
+  var FQ = function (x) { return x[0] * x[0]; };
+  var FV = function (x) { return [x[0] * x[0], 2 * x[1]]; };
+  var GAUSS = function (x) { return Math.exp(-x * x / 2); };
+  var UNIF = function (x) { return 1 / 2; };
+  var CDFID = function (x) { return x; };
   var BATCH_SIG = {
     /* TENSOR 张量变换（整张量算子） */
     'TENSOR.transpose': { cls: 'vec', fn: transpose, sample: _M },
@@ -2647,6 +2653,49 @@
     'METRIC.perplexity': { cls: 'pair', fn: perplexityLM, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]] },
     'DATA.map': { cls: 'shared', fn: mapOp, shared: [function (x) { return x * 2; }], sample: [[1,2,3],[4,5]] },
     'NORM.weight_norm': { cls: 'pair', fn: weightNorm, sample: [[[3,4],2],[[1,2],3]] }
+  ,
+
+    /* —— v1.2.1 修复批次（新增 40 条 batched：v1.1.7 样本设计误杀修复 + 语义清晰项，样本经沙盒逐条验证）—— */
+    'NUMER.hypot': { cls: 'pair', fn: hypot, sample: [[3, 4], [5, 12], [8, 15]] },
+    'NUMER.div_guard': { cls: 'args', fn: divGuard, sample: [[1, 2], [1, 0], [5, -3]] },
+    'PROB.bayes': { cls: 'pair', fn: bayesUpdate, sample: [[[0.5, 0.5], [0.8, 0.2]], [[0.6, 0.4], [0.7, 0.3]]] },
+    'PROB.condition': { cls: 'pair', fn: conditionalRow, sample: [[[[0.1, 0.9], [0.8, 0.2]], 0], [[[0.1, 0.9], [0.8, 0.2]], 1]] },
+    'PROB.mv_gauss': { cls: 'triple', fn: mvGaussPDF, sample: [[[1, 0], [0, 0], [[1, 0], [0, 1]]], [[0.5, 1], [0, 0], [[1, 0], [0, 1]]]] },
+    'INFO.surprisal': { cls: 'elem', fn: surprisal, sample: [[0.5, 0.25, 0.1], [0.9, 0.05]] },
+    'INFO.bits': { cls: 'elem', fn: bits, sample: [[1, 2, 3], [0.5, 0.25]] },
+    'INFO.channel_capacity': { cls: 'vec', fn: channelCapacity, sample: [[[0.9, 0.1], [0.2, 0.8]], [[0.7, 0.3], [0.4, 0.6]]] },
+    'INFO.rate_distortion': { cls: 'pair', fn: rateDistortion, sample: [[2, 1], [1, 0.5]] },
+    'INFO.max_entropy': { cls: 'vec', fn: maxEntropyDist, sample: [3, 4, 2] },
+    'FWD.layernorm': { cls: 'shared', fn: layerNorm, shared: [0.00001], sample: [[[1, 2, 3], [4, 5, 6]], [[2, 1], [0, 3]]] },
+    'NORM.spectral_norm': { cls: 'vec', fn: spectralNorm, sample: [[[3, 1], [1, 2]], [[2, 0], [0, 2]]] },
+    'NORM.label_smooth': { cls: 'pair', fn: labelSmooth, sample: [[[1, 0, 0], 0.1], [[0, 1, 0], 0.2]] },
+    'NORM.mixup': { cls: 'triple', fn: mixup, sample: [[[1, 2, 3], [5, 6, 7], 0.3], [[1, 0], [0, 1], 0.5]] },
+    'NORM.early_stop': { cls: 'pair', fn: earlyStop, sample: [[[0.5, 0.4, 0.3, 0.35], 2], [[1, 0.8, 0.9], 1]] },
+    'SAMPLE.gumbel': { cls: 'elem', fn: gumbelSample, sample: [[0.1, 0.5, 0.9, 0.3], [0.7, 0.2]] },
+    'SAMPLE.rejection': { cls: 'args', fn: rejectionSample, sample: [[3, 1, GAUSS, UNIF, 2, -1, 1], [2, 2, GAUSS, UNIF, 2, -1, 1]] },
+    'SAMPLE.inverse_cdf': { cls: 'args', fn: inverseCDF, sample: [[0.5, CDFID, 0, 1], [0.3, CDFID, 0, 1], [0.9, CDFID, 0, 1]] },
+    'RL.thompson': { cls: 'triple', fn: thompsonSample, sample: [[2, 3, 1], [3, 2, 2], [1, 1, 3]] },
+    'RL.advantage': { cls: 'args', fn: advantage, sample: [[[[1, 2], [3, 4]], [0, 0], 0, 1], [[[1, 2], [3, 4]], [0, 0], 1, 0]] },
+    'RL.gae': { cls: 'args', fn: gae, sample: [[[1, 1, 1], [0, 0.5, 0.8], 0.9, 0.95], [[0, 0], [1, 1], 0.99, 1]] },
+    'RL.reinforce': { cls: 'triple', fn: reinforceGradient, sample: [[[1, 2, 3], 1, 0.5], [[0.5, 1.5], 0, -0.2]] },
+    'RL.ppo': { cls: 'triple', fn: ppoClip, sample: [[1.2, 0.5, 0.2], [0.8, -0.3, 0.1], [0.9, 0.1, 0.2]] },
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1]], 1.4, 10], [[[3, 4], [2, 2]], 1.2, 20]] },
+    'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[1, 5, 2], [3, 1, 4]] },
+    'OPTIM.lr_decay': { cls: 'triple', fn: lrDecay, sample: [[0.1, 100, 10], [0.5, 50, 5]] },
+    'OPTIM.weight_decay': { cls: 'triple', fn: weightDecay, sample: [[[1, -2, 3], 0.1, 0.01], [[0.5, 0.5], 0.2, 0.02]] },
+    'OPTIM.polyak': { cls: 'vec', fn: polyakAvg, sample: [[[1, 2], [2, 3], [3, 4]], [[5, 6], [6, 7], [7, 8]]] },
+    'BWD.grad_softmax_ce': { cls: 'pair', fn: gradSoftmaxCE, sample: [[[1, 2, 3], 1], [[0.5, 1.5, 2.5], 2]] },
+    'BWD.stop_grad': { cls: 'vec', fn: stopGrad, sample: [[1, 2, 3], [0.5, 0.5, 1]] },
+    'BWD.detach': { cls: 'vec', fn: detach, sample: [[1, 2, 3], [0.5, 0.5, 1]] },
+    'BWD.jacobian': { cls: 'args', fn: jacobian, sample: [[FV, [1, 2], 0.000001], [FV, [3, 4], 0.000001]] },
+    'BWD.vjp': { cls: 'args', fn: vjp, sample: [[FV, [1, 2], [1, 1], 0.000001], [FV, [3, 4], [0, 1], 0.000001]] },
+    'BWD.jvp': { cls: 'args', fn: jvp, sample: [[FV, [1, 2], [1, 1], 0.000001], [FV, [3, 4], [1, 0], 0.000001]] },
+    'BWD.grad_accum': { cls: 'vec', fn: gradAccum, sample: [[[[1, 2], [3, 4]]], [[[0.5, 0.5], [1, 1]]]] },
+    'ATTEN.cross_attn': { cls: 'args', fn: crossAttention, sample: [[[[1, 0], [0, 1]], [[1, 2], [3, 4]], [[1, 2], [3, 4]]], [[[2, 1], [1, 2]], [[1, 2], [3, 4]], [[1, 2], [3, 4]]]] },
+    'ATTEN.kv_cache': { cls: 'args', fn: attnRow, sample: [[[1, 0], [[1, 0], [0, 1]], [[1, 2], [3, 4]]], [[0, 1], [[1, 0], [0, 1]], [[1, 2], [3, 4]]]] },
+    'ATTEN.flash': { cls: 'args', fn: flashAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 1], [[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2]] },
+    'DATA.normalize_fit': { cls: 'pair', fn: normalizeFit, sample: [[[1, 2, 3, 4], [5, 6]], [[2, 3], [4, 5]]] },
+    'LINALG.pca': { cls: 'pair', fn: pca, sample: [[[[4, 1], [1, 3]], 1], [[[2, 0], [0, 2]], 1]] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
@@ -2961,6 +3010,49 @@
     'METRIC.perplexity': { cls: 'pair', fn: perplexityLM, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]], post: Math.abs },
     'DATA.map': { cls: 'shared', fn: mapOp, shared: [function (x) { return x * 2; }], sample: [[1,2,3],[4,5]], post: Math.abs },
     'NORM.weight_norm': { cls: 'pair', fn: weightNorm, sample: [[[3,4],2],[[1,2],3]], post: Math.abs }
+  ,
+
+    /* —— v1.2.1 修复批次（新增 40 条 fused：v1.1.7 样本设计误杀修复 + 语义清晰项，样本经沙盒逐条验证）—— */
+    'NUMER.hypot': { cls: 'pair', fn: hypot, sample: [[3, 4], [5, 12], [8, 15]], post: Math.abs },
+    'NUMER.div_guard': { cls: 'args', fn: divGuard, sample: [[1, 2], [1, 0], [5, -3]], post: Math.abs },
+    'PROB.bayes': { cls: 'pair', fn: bayesUpdate, sample: [[[0.5, 0.5], [0.8, 0.2]], [[0.6, 0.4], [0.7, 0.3]]], post: Math.abs },
+    'PROB.condition': { cls: 'pair', fn: conditionalRow, sample: [[[[0.1, 0.9], [0.8, 0.2]], 0], [[[0.1, 0.9], [0.8, 0.2]], 1]], post: Math.abs },
+    'PROB.mv_gauss': { cls: 'triple', fn: mvGaussPDF, sample: [[[1, 0], [0, 0], [[1, 0], [0, 1]]], [[0.5, 1], [0, 0], [[1, 0], [0, 1]]]], post: Math.abs },
+    'INFO.surprisal': { cls: 'elem', fn: surprisal, sample: [[0.5, 0.25, 0.1], [0.9, 0.05]], post: Math.abs },
+    'INFO.bits': { cls: 'elem', fn: bits, sample: [[1, 2, 3], [0.5, 0.25]], post: Math.abs },
+    'INFO.channel_capacity': { cls: 'vec', fn: channelCapacity, sample: [[[0.9, 0.1], [0.2, 0.8]], [[0.7, 0.3], [0.4, 0.6]]], post: Math.abs },
+    'INFO.rate_distortion': { cls: 'pair', fn: rateDistortion, sample: [[2, 1], [1, 0.5]], post: Math.abs },
+    'INFO.max_entropy': { cls: 'vec', fn: maxEntropyDist, sample: [3, 4, 2], post: Math.abs },
+    'FWD.layernorm': { cls: 'shared', fn: layerNorm, shared: [0.00001], sample: [[[1, 2, 3], [4, 5, 6]], [[2, 1], [0, 3]]], post: Math.abs },
+    'NORM.spectral_norm': { cls: 'vec', fn: spectralNorm, sample: [[[3, 1], [1, 2]], [[2, 0], [0, 2]]], post: Math.abs },
+    'NORM.label_smooth': { cls: 'pair', fn: labelSmooth, sample: [[[1, 0, 0], 0.1], [[0, 1, 0], 0.2]], post: Math.abs },
+    'NORM.mixup': { cls: 'triple', fn: mixup, sample: [[[1, 2, 3], [5, 6, 7], 0.3], [[1, 0], [0, 1], 0.5]], post: Math.abs },
+    'NORM.early_stop': { cls: 'pair', fn: earlyStop, sample: [[[0.5, 0.4, 0.3, 0.35], 2], [[1, 0.8, 0.9], 1]], post: Math.abs },
+    'SAMPLE.gumbel': { cls: 'elem', fn: gumbelSample, sample: [[0.1, 0.5, 0.9, 0.3], [0.7, 0.2]], post: Math.abs },
+    'SAMPLE.rejection': { cls: 'args', fn: rejectionSample, sample: [[3, 1, GAUSS, UNIF, 2, -1, 1], [2, 2, GAUSS, UNIF, 2, -1, 1]], post: Math.abs },
+    'SAMPLE.inverse_cdf': { cls: 'args', fn: inverseCDF, sample: [[0.5, CDFID, 0, 1], [0.3, CDFID, 0, 1], [0.9, CDFID, 0, 1]], post: Math.abs },
+    'RL.thompson': { cls: 'triple', fn: thompsonSample, sample: [[2, 3, 1], [3, 2, 2], [1, 1, 3]], post: Math.abs },
+    'RL.advantage': { cls: 'args', fn: advantage, sample: [[[[1, 2], [3, 4]], [0, 0], 0, 1], [[[1, 2], [3, 4]], [0, 0], 1, 0]], post: Math.abs },
+    'RL.gae': { cls: 'args', fn: gae, sample: [[[1, 1, 1], [0, 0.5, 0.8], 0.9, 0.95], [[0, 0], [1, 1], 0.99, 1]], post: Math.abs },
+    'RL.reinforce': { cls: 'triple', fn: reinforceGradient, sample: [[[1, 2, 3], 1, 0.5], [[0.5, 1.5], 0, -0.2]], post: Math.abs },
+    'RL.ppo': { cls: 'triple', fn: ppoClip, sample: [[1.2, 0.5, 0.2], [0.8, -0.3, 0.1], [0.9, 0.1, 0.2]], post: Math.abs },
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1]], 1.4, 10], [[[3, 4], [2, 2]], 1.2, 20]], post: Math.abs },
+    'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[1, 5, 2], [3, 1, 4]], post: Math.abs },
+    'OPTIM.lr_decay': { cls: 'triple', fn: lrDecay, sample: [[0.1, 100, 10], [0.5, 50, 5]], post: Math.abs },
+    'OPTIM.weight_decay': { cls: 'triple', fn: weightDecay, sample: [[[1, -2, 3], 0.1, 0.01], [[0.5, 0.5], 0.2, 0.02]], post: Math.abs },
+    'OPTIM.polyak': { cls: 'vec', fn: polyakAvg, sample: [[[1, 2], [2, 3], [3, 4]], [[5, 6], [6, 7], [7, 8]]], post: Math.abs },
+    'BWD.grad_softmax_ce': { cls: 'pair', fn: gradSoftmaxCE, sample: [[[1, 2, 3], 1], [[0.5, 1.5, 2.5], 2]], post: Math.abs },
+    'BWD.stop_grad': { cls: 'vec', fn: stopGrad, sample: [[1, 2, 3], [0.5, 0.5, 1]], post: Math.abs },
+    'BWD.detach': { cls: 'vec', fn: detach, sample: [[1, 2, 3], [0.5, 0.5, 1]], post: Math.abs },
+    'BWD.jacobian': { cls: 'args', fn: jacobian, sample: [[FV, [1, 2], 0.000001], [FV, [3, 4], 0.000001]], post: Math.abs },
+    'BWD.vjp': { cls: 'args', fn: vjp, sample: [[FV, [1, 2], [1, 1], 0.000001], [FV, [3, 4], [0, 1], 0.000001]], post: Math.abs },
+    'BWD.jvp': { cls: 'args', fn: jvp, sample: [[FV, [1, 2], [1, 1], 0.000001], [FV, [3, 4], [1, 0], 0.000001]], post: Math.abs },
+    'BWD.grad_accum': { cls: 'vec', fn: gradAccum, sample: [[[[1, 2], [3, 4]]], [[[0.5, 0.5], [1, 1]]]], post: Math.abs },
+    'ATTEN.cross_attn': { cls: 'args', fn: crossAttention, sample: [[[[1, 0], [0, 1]], [[1, 2], [3, 4]], [[1, 2], [3, 4]]], [[[2, 1], [1, 2]], [[1, 2], [3, 4]], [[1, 2], [3, 4]]]], post: Math.abs },
+    'ATTEN.kv_cache': { cls: 'args', fn: attnRow, sample: [[[1, 0], [[1, 0], [0, 1]], [[1, 2], [3, 4]]], [[0, 1], [[1, 0], [0, 1]], [[1, 2], [3, 4]]]], post: Math.abs },
+    'ATTEN.flash': { cls: 'args', fn: flashAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 1], [[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2]], post: Math.abs },
+    'DATA.normalize_fit': { cls: 'pair', fn: normalizeFit, sample: [[[1, 2, 3, 4], [5, 6]], [[2, 3], [4, 5]]], post: Math.abs },
+    'LINALG.pca': { cls: 'pair', fn: pca, sample: [[[[4, 1], [1, 3]], 1], [[[2, 0], [0, 2]], 1]], post: Math.abs }
   };
 
   var checks = [];

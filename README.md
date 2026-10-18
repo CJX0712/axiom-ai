@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-178%2F178-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-648%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-178%2F178-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-718%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
@@ -62,7 +62,7 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 | L7 | 评估与数据 | 32/128 | METRIC · DATA |
 | L8 | 系统运行时 | 15/64 | SYS |
 | L9 | 组合应用层 | — | 由 L1–L8 微指令组合而成的推理/训练编排层（管线编排视图） |
-| L10 | **微指令层** | **648/1024** | 全部 16 族（本指令集主体） |
+| L10 | **微指令层** | **718/1024** | 全部 16 族（本指令集主体） |
 
 每条指令的 4 个执行变体：`base`（标量语义）· `batched`（批处理，逐位一致）· `fused`（融合，消除中间物化）· `inplace`（原地执行）。
 
@@ -140,12 +140,12 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - **为什么纯 JS 数组不用 Float64Array/BLAS**：单文件零依赖 + 简单数组作为 API 边界（与 @tangent.to/lina 同思路），规模定位在 n≤数百的教学/验证负载；算法选型偏向无条件稳定（Jacobi/Householder）而非速度。
 - **为什么确定性随机（mulberry32）**：一切蒙特卡洛类验证必须可复现——同种子同序列是检查项之一。
 - **为什么 1024 = 16×16×4**：指令集需要完备且可枚举；4 变体覆盖执行语义的三个正交维度（批/融合/原地），全部携带"与 base 逐位一致"的降级契约。
-- **为什么 verified 是 648 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 376 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base，以及三大通用执行变体引擎规模化覆盖的实例**：
-  - **通用批处理引擎（v1.1.4，v1.1.7 扩面）**：`batched` 变体 **169 个**（沿 batch 维逐位一致，单一 `batched` 调度器 + `BATCH_SIG` 签名表；v1.1.7 新增 `args` 可变参数类并扩至全谱 14 族算子：TENSOR/LINALG/NUMER/PROB/INFO/METRIC/SYS/FWD/BWD/NORM/ATTEN/SAMPLE/DATA/RL）；
+- **为什么 verified 是 718 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 306 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base，以及三大通用执行变体引擎规模化覆盖的实例**：
+  - **通用批处理引擎（v1.1.4，v1.1.7 扩面）**：`batched` 变体 **204 个**（沿 batch 维逐位一致，单一 `batched` 调度器 + `BATCH_SIG` 签名表；v1.1.7 新增 `args` 可变参数类并扩至全谱 14 族算子：TENSOR/LINALG/NUMER/PROB/INFO/METRIC/SYS/FWD/BWD/NORM/ATTEN/SAMPLE/DATA/RL）；
   - **通用原地引擎（v1.1.5，v1.1.8 扩面）**：`inplace` 变体 **56 个**（53 引擎实例 + 3 具名内核）。原地覆盖输入、返回值与 out-of-place 逐位一致；v1.1.8 将 `INPLACE_SIG` 扩至全谱（17→43），引擎统一为「首参 dst 写回」：elem（逐元素标量，extra 可选标量参数）/ vec（整张量形状守恒，extra 可选，如映射类）/ pair / triple / args（多输入：其余参数经 extra 传入，如残差加、层归一化、谱归一化、温度采样、梯度裁剪、Mixup、权重衰减、Dropout）；
-  - **通用 Epilogue 融合引擎（v1.1.6，v1.1.7/v1.1.9 扩面）**：`fused` 变体 **168 个**（152 个引擎实例 + 16 个具名代表内核；v1.1.9/v1.2.0 持续对齐 `FUSE_SIG` 与 `BATCH_SIG` 键集，通用引擎测试覆盖全部融合算子）。引擎锚定 **cuBLASLt / CUTLASS 的 GEMM epilogue 融合范式**：算子输出不物化中间张量，单遍就地施加逐元素尾算子，硬不变量 `fused ≡ post ∘ op`（≤1e-15）；v1.1.7 将 `FUSE_SIG` 扩至全谱（尾算子统一 `Math.abs` 保证域安全），全部 183 条新样本经沙盒逐条验证（无异常 + 输出全有限）；
+  - **通用 Epilogue 融合引擎（v1.1.6，v1.1.7/v1.1.9 扩面）**：`fused` 变体 **203 个**（187 个引擎实例 + 16 个具名代表内核；v1.1.9/v1.2.0 持续对齐 `FUSE_SIG` 与 `BATCH_SIG` 键集，通用引擎测试覆盖全部融合算子）。引擎锚定 **cuBLASLt / CUTLASS 的 GEMM epilogue 融合范式**：算子输出不物化中间张量，单遍就地施加逐元素尾算子，硬不变量 `fused ≡ post ∘ op`（≤1e-15）；v1.1.7 将 `FUSE_SIG` 扩至全谱（尾算子统一 `Math.abs` 保证域安全），全部 183 条新样本经沙盒逐条验证（无异常 + 输出全有限）；
   - 具名原地内核 3 个（fill / copy / normalize_l2，真正原地无中间数组）。
-  - 剩余 spec 376 条主要是形状变化/多返回/系统语义不兼容的诚实保留项（详见 ARCHITECTURE 甄别说明），以及 JS 单线程下无可验证语义的 `fence`（内存屏障在单线程运行时是恒等操作，无残差可测）。
+  - 剩余 spec 306 条主要是优化器状态/图推断多返回/系统语义/SYS.fence 等诚实保留项（详见 ARCHITECTURE 甄别说明），以及 JS 单线程下无可验证语义的 `fence`（内存屏障在单线程运行时是恒等操作，无残差可测）。
 
 ## 8. 路线图
 
