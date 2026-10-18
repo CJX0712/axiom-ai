@@ -1,5 +1,17 @@
 # 更新日志
 
+## [1.1.7] - 2026-10-19
+
+### 三大引擎规模化扩面（Engine Scale-Out）
+- **目标**：把 batched / fused 两个通用引擎从"16 族代表算子"扩到**全谱算子**——签名表驱动，只增数据不改引擎代码
+- `batched()` 与 `_applySig()` 新增 `args` 可变参数类：`f.apply(null, x)` 展平调用，覆盖创建型/多参数型算子（tensorCreate/zeros/reshape/gather/scatter、selfAttention/multiHead、jacobian/vjp/jvp、binomial 等）
+- `BATCH_SIG` **67 → 159 条**（新增 92 条，覆盖 TENSOR/LINALG/NUMER/PROB/INFO/METRIC/SYS/FWD/BWD/NORM/ATTEN/SAMPLE/DATA/RL 共 14 族）；`FUSE_SIG` **49 → 140 条**（新增 91 条，尾算子统一 `Math.abs` 保证 log/sqrt 域安全；`DATA.label_encode` 因输出含字符串而诚实排除）
+- **样本质量闭环**：183 条新签名的全部样本先经沙盒逐条验证（引擎执行无异常 + 输出全有限，剔除 67 个失败候选），再由生成器整块写入，杜绝"幽灵样本"
+- `variant.batched` 聚合检查的朴素参照路径补齐 `args` 分支（`s.fn.apply(null, x)`），与引擎调度严格对称；`variant.fused` 经 `_applySig` 自动获得 args 支持
+- `gen-registry.js` 零改动：签名表扩面后自动标记对应变体 verified（impl='batched'/'fused'）
+- 指标：verified **407 → 589 / 1024**（+182）；batched 层 **67 → 159**；fused 层 **65 → 155**（139 引擎 + 16 具名）；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 511.9 KB
+- 诚实说明：FUSE_SIG 中 1 个键（`ATTEN.qk_dot.fused`）被 v1.1.3 具名内核 `fused_attn_weights`（QK∘scale∘掩码∘softmax 单趟注意力权重）按"具名优先"规则遮蔽，注册表标记 139 而非 140——具名实现硬不变量更强，属预期行为
+
 ## [1.1.6] - 2026-10-18
 
 ### 通用 Epilogue 融合引擎（Generic Epilogue Fusion Engine）

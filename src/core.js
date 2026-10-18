@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.6';
+  var VERSION = '1.1.7';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2541,8 +2541,100 @@
     /* SAMPLE 采样生成 */
     'SAMPLE.categorical': { cls: 'pair', fn: categoricalSample, sample: [[[0.2, 0.3, 0.5], 7], [[0.1, 0.4, 0.5], 5]] },
     'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V },
-    'SAMPLE.topk': { cls: 'shared', fn: topK, shared: [2], sample: _V }
-  };
+    'SAMPLE.topk': { cls: 'shared', fn: topK, shared: [2], sample: _V },
+            /* ——     /* —— v1.1.7 引擎规模化扩面（新增 92 条 batched 签名，样本经沙盒逐条验证）—— */
+    'TENSOR.create': { cls: 'args', fn: tensorCreate, sample: [[[2, 2], 1], [[3, 1], 0]] },
+    'TENSOR.zeros': { cls: 'args', fn: tensorZeros, sample: [[[2, 2]], [[3, 1]]] },
+    'TENSOR.ones': { cls: 'args', fn: tensorOnes, sample: [[[2, 2]], [[1, 3]]] },
+    'TENSOR.arange': { cls: 'args', fn: arange, sample: [[0, 6, 2], [1, 5, 1], [0, 4, 1]] },
+    'TENSOR.reshape': { cls: 'args', fn: reshape, sample: [[[1, 2, 3, 4], [2, 2]], [[1, 2, 3, 4, 5, 6], [3, 2]]] },
+    'TENSOR.slice': { cls: 'args', fn: tensorSlice, sample: [[[1, 2, 3, 4], 0, 2], [[1, 2, 3, 4], 1, 3]] },
+    'TENSOR.concat': { cls: 'args', fn: tensorConcat, sample: [[[[1, 2], [3, 4]]], [[[5, 6], [7, 8]]]] },
+    'TENSOR.stack': { cls: 'args', fn: tensorStack, sample: [[[[1, 2], [3, 4]]], [[[5, 6], [7, 8]]]] },
+    'TENSOR.split': { cls: 'args', fn: tensorSplit, sample: [[[1, 2, 3, 4], [2, 2]], [[1, 2, 3, 4, 5, 6], [3, 3]]] },
+    'TENSOR.cast': { cls: 'args', fn: tensorCast, sample: [[[1, 2, 3]], [[4, 5]]] },
+    'TENSOR.gather': { cls: 'args', fn: tensorGather, sample: [[[1, 2, 3, 4], [0, 2]], [[5, 6, 7, 8], [1, 3]]] },
+    'TENSOR.scatter': { cls: 'args', fn: tensorScatter, sample: [[[1, 2, 3, 4], [0, 1], [9, 9]], [[5, 6, 7, 8], [2, 3], [1, 1]]] },
+    'TENSOR.fill': { cls: 'args', fn: tensorFill, sample: [[[1, 2, 3], 7], [[4, 5], 0]] },
+    'LINALG.qr': { cls: 'vec', fn: qrDecompose, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'LINALG.eigen': { cls: 'vec', fn: jacobiEigen, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'LINALG.power': { cls: 'vec', fn: powerIteration, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'LINALG.rank': { cls: 'vec', fn: matrixRank, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'LINALG.nullspace': { cls: 'vec', fn: nullspace, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'LINALG.orthonormalize': { cls: 'vec', fn: orthonormalize, sample: [[[[1, 0], [1, 1]], [[1, 2], [2, 4]]]] },
+    'LINALG.cond': { cls: 'vec', fn: condEstimate, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]] },
+    'NUMER.logsumexp': { cls: 'vec', fn: logsumexp, sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]] },
+    'NUMER.clip': { cls: 'args', fn: clip, sample: [[[1.5, -1, 1], [-3, -1, 1], [0.2, -1, 1]]] },
+    'NUMER.fma': { cls: 'triple', fn: fma, sample: [[[1, 2, 3], [4, 5, 6], [-1, 2, 0]]] },
+    'PROB.normal_sample': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]] },
+    'PROB.categorical_sample': { cls: 'pair', fn: categoricalSample, sample: [[[[0.2, 0.3, 0.5], 7], [[0.1, 0.4, 0.5], 5]]] },
+    'PROB.bernoulli_sample': { cls: 'triple', fn: bernoulliSample, sample: [[[0.5, 3, 1], [0.3, 4, 2]]] },
+    'PROB.binomial_sample': { cls: 'args', fn: binomialSample, sample: [[[10, 0.5, 5, 1], [8, 0.3, 4, 2]]] },
+    'PROB.uniform_sample': { cls: 'pair', fn: uniformSample, sample: [[[3, 1], [5, 2]]] },
+    'PROB.sample_stats': { cls: 'vec', fn: sampleStats, sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]] },
+    'INFO.info_gain': { cls: 'pair', fn: infoGain, sample: [[[[0, 0, 1, 1], [[0, 1], [1, 1]]], [[1, 1, 0, 0], [[1, 0], [0, 1]]]]] },
+    'INFO.perplexity': { cls: 'vec', fn: perplexity, sample: [[[[0.2, 0.3, 0.5]], [[0.5, 0.25, 0.25]]]] },
+    'INFO.kl_reverse': { cls: 'pair', fn: klReverse, sample: [[[[0.5, 0.5], [0.4, 0.6]], [[0.3, 0.7], [0.5, 0.5]]]] },
+    'METRIC.auc': { cls: 'pair', fn: auc, sample: [[[0, 1, 1], [0.1, 0.4, 0.8]], [[1, 0, 1], [0.3, 0.2, 0.9]]] },
+    'METRIC.r2': { cls: 'pair', fn: r2, sample: [[[1, 2, 3], [1.1, 1.9, 3.2]], [[0, 1, 2], [0.1, 0.9, 2.1]]] },
+    'METRIC.edit_distance': { cls: 'pair', fn: editDistance, sample: [["kitten", "sitting"], ["sunday", "saturday"]] },
+    'METRIC.silhouette': { cls: 'pair', fn: silhouette, sample: [[[[1, 1], [2, 2], [8, 8], [9, 9]], [0, 0, 1, 1]], [[[1, 1], [1.5, 1.5], [9, 9]], [0, 0, 1]]] },
+    'METRIC.bleu': { cls: 'triple', fn: bleu, sample: [[["a b", "a b", 2], ["cat sat", "cat sat", 3]]] },
+    'METRIC.map': { cls: 'vec', fn: averagePrecision, sample: [[[1, 0, 1], [0, 1, 1]]] },
+    'METRIC.confusion': { cls: 'triple', fn: confusionMatrix, sample: [[[0, 1, 1], [0, 1, 0], [0, 1]]] },
+    'SYS.gather_all': { cls: 'vec', fn: gatherAll, sample: [[[[1, 2], [3]], [[4], [5, 6]]]] },
+    'SYS.scatter_all': { cls: 'pair', fn: scatterAll, sample: [[[[1, 2, 3], [0, 1, 0]], [[4, 5], [1, 0]]]] },
+    'SYS.checkpoint': { cls: 'vec', fn: checkpoint, sample: [[{"a":[1,2]}, {"b":[3,4]}]] },
+    'SYS.prefetch': { cls: 'vec', fn: prefetch, sample: [[[1, 2, 3], [4, 5, 6]]] },
+    'FWD.self_attn': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], false]] },
+    'FWD.embedding_lookup': { cls: 'pair', fn: embeddingLookup, sample: [[[[1, 2], [3, 4]], [0, 1]], [[[5, 6], [7, 8]], [1, 0]]] },
+    'FWD.flatten': { cls: 'vec', fn: flatten, sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]] },
+    'FWD.residual_add': { cls: 'pair', fn: residualAdd, sample: [[[[1, 2], [3, 4]], [[0.1, 0.2], [0.3, 0.4]]], [[[5, 6], [7, 8]], [[0.5, 0.5], [0.5, 0.5]]]] },
+    'FWD.concat_heads': { cls: 'vec', fn: concatHeads, sample: [[[[1, 2]], [[3, 4]]], [[[5, 6]], [[7, 8]]]] },
+    'FWD.pool_max': { cls: 'pair', fn: poolMax, sample: [[[1, 5, 2, 8], 2], [[3, 1, 4, 2], 2]] },
+    'FWD.conv1d': { cls: 'args', fn: conv1d, sample: [[[1, 2, 3, 4], [2, 4, 6]]] },
+    'FWD.batchnorm': { cls: 'shared', fn: batchNorm, shared: [0.00001], sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]] },
+    'FWD.dropout': { cls: 'args', fn: dropout, sample: [[[[1, 2, 3, 4], 0.5, 1], [[5, 6, 7, 8], 0.5, 2]]] },
+    'BWD.grad_softmax_ce': { cls: 'pair', fn: gradSoftmaxCE, sample: [[[1, 2, 3], 1], [[0.5, 0.5, 1], 2]] },
+    'BWD.grad_matmul': { cls: 'triple', fn: gradMatmul, sample: [[[[1, 2]], [[1], [2]], [[3]]], [[[3, 4]], [[1], [3]], [[2]]]] },
+    'BWD.stop_grad': { cls: 'vec', fn: stopGrad, sample: [[[1, 2, 3], [0.5, 0.5, 1]]] },
+    'BWD.detach': { cls: 'vec', fn: detach, sample: [[[1, 2, 3], [0.5, 0.5, 1]]] },
+    'NORM.l2_reg': { cls: 'shared', fn: l2Reg, shared: [0.01], sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]] },
+    'NORM.l1_reg': { cls: 'shared', fn: l1Reg, shared: [0.01], sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]] },
+    'NORM.group_norm': { cls: 'args', fn: groupNorm, sample: [[[[1, 2, 3, 4], 2, 0.00001], [[5, 6, 7, 8], 2, 0.00001]]] },
+    'NORM.batch_norm': { cls: 'shared', fn: batchNorm, shared: [0.00001], sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]] },
+    'NORM.dropout_reg': { cls: 'args', fn: dropout, sample: [[[[1, 2, 3, 4], 0.5, 2], [[5, 6, 7, 8], 0.5, 3]]] },
+    'ATTEN.qk_dot': { cls: 'pair', fn: qkDot, sample: [[[[1, 0], [0, 1]], [[2, 1], [1, 2]]]] },
+    'ATTEN.rel_pos': { cls: 'pair', fn: relPosBias, sample: [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]] },
+    'ATTEN.mha_split': { cls: 'pair', fn: splitHeads, sample: [[[[1, 2], [3, 4]], 2], [[[5, 6], [7, 8]], 2]] },
+    'ATTEN.attn_entropy': { cls: 'vec', fn: attnEntropy, sample: [[[0, 1, 1], [1, 0, 1]]] },
+    'ATTEN.softmax_attn': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], false]] },
+    'ATTEN.causal_mask': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], true]] },
+    'ATTEN.multi_head': { cls: 'args', fn: multiHead, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2, false]] },
+    'SAMPLE.box_muller': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]] },
+    'SAMPLE.uniform': { cls: 'pair', fn: uniformSample, sample: [[[3, 1], [5, 2]]] },
+    'SAMPLE.bernoulli': { cls: 'triple', fn: bernoulliSample, sample: [[[0.5, 3, 1], [0.3, 4, 2]]] },
+    'SAMPLE.multinomial': { cls: 'triple', fn: multinomialSample, sample: [[[[0.2, 0.3, 0.5], 3, 1], [[0.1, 0.4, 0.5], 4, 2]]] },
+    'SAMPLE.antithetic': { cls: 'pair', fn: antitheticSample, sample: [[[3, 1], [5, 2]]] },
+    'SAMPLE.stratified': { cls: 'pair', fn: stratifiedSample, sample: [[[3, 1], [5, 2]]] },
+    'SAMPLE.systematic': { cls: 'pair', fn: systematicSample, sample: [[[3, 1], [5, 2]]] },
+    'SAMPLE.normal': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]] },
+    'DATA.shuffle': { cls: 'pair', fn: shuffle, sample: [[[[1, 2, 3, 4], 1], [[4, 3, 2, 1], 2]]] },
+    'DATA.train_test': { cls: 'triple', fn: trainTestSplit, sample: [[[10, 0.8, 1], [8, 0.7, 2]]] },
+    'DATA.kfold': { cls: 'triple', fn: kFold, sample: [[[10, 3, 1], [9, 3, 2]]] },
+    'DATA.label_encode': { cls: 'vec', fn: labelEncode, sample: [[["a", "b", "a"], ["x", "y", "z", "x"]]] },
+    'DATA.pad': { cls: 'triple', fn: padSeq, sample: [[[[1, 2], 4, 0], [[3, 4, 5], 2, -1]]] },
+    'DATA.truncate': { cls: 'pair', fn: truncateSeq, sample: [[[[1, 2, 3, 4], 2], [[5, 6, 7], 3]]] },
+    'DATA.bucket': { cls: 'pair', fn: bucketize, sample: [[[[1, 2, 3, 4], 2], [[5, 1, 3, 2], 3]]] },
+    'DATA.dedup': { cls: 'vec', fn: dedup, sample: [[[1, 2, 2, 3], [4, 4, 5, 1]]] },
+    'DATA.filter': { cls: 'shared', fn: filterOp, shared: [function () { return 1; }], sample: [[[1, 2, 3, 4], [0, 1, 2, 3]]] },
+    'DATA.zip': { cls: 'pair', fn: zipOp, sample: [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]] },
+    'DATA.batch': { cls: 'pair', fn: batchOp, sample: [[[[1, 2, 3, 4], 2], [[5, 6, 7, 8, 9], 3]]] },
+    'DATA.augment': { cls: 'triple', fn: augment, sample: [[[[1, 2, 3], 1, 0.1], [[4, 5], 2, 0.2]]] },
+    'RL.td0': { cls: 'pair', fn: td0Sweep, sample: [[[3, 0.9], [5, 0.95]]] },
+    'RL.td_lambda': { cls: 'triple', fn: eligibilityTrace, sample: [[[[0, 1, 0], 0.9, 0.5], [[1, 1, 0], 0.8, 0.3]]] },
+    'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[[1, 5, 2], [3, 1, 4]]] },
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]] }};
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
     if (!s) throw new Error('batched: 无签名 ' + opCode);
@@ -2552,6 +2644,7 @@
     if (s.cls === 'pair') return batch.map(function (p) { return f(p[0], p[1]); });
     if (s.cls === 'triple') return batch.map(function (p) { return f(p[0], p[1], p[2]); });
     if (s.cls === 'shared') return batch.map(function (x) { return f.apply(null, [x].concat(s.shared)); });
+    if (s.cls === 'args') return batch.map(function (x) { return f.apply(null, x); });
     if (s.cls === 'special') return f(batch);
     throw new Error('batched: 未知 cls ' + s.cls);
   }
@@ -2614,6 +2707,7 @@
     if (s.cls === 'pair') return f(item[0], item[1]);
     if (s.cls === 'triple') return f(item[0], item[1], item[2]);
     if (s.cls === 'shared') return f.apply(null, [item].concat(s.shared));
+    if (s.cls === 'args') return f.apply(null, item);
     throw new Error('_applySig: 未知 cls ' + s.cls);
   }
   function _epilogue(dst, g) { // 就地单遍施加逐元素尾算子（不物化中间张量，单次分配）
@@ -2692,8 +2786,99 @@
     /* SYS：广播 ∘ ReLU */
     'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: _V, post: relu },
     /* SAMPLE：温度 softmax ∘ log（对数域损失输入） */
-    'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V, post: Math.log }
-  };
+    'SAMPLE.temperature': { cls: 'shared', fn: temperatureSoftmax, shared: [1], sample: _V, post: Math.log },
+    /* ——     /* —— v1.1.7 引擎规模化扩面（新增 91 条 fused 签名，样本经沙盒逐条验证）—— */
+    'TENSOR.create': { cls: 'args', fn: tensorCreate, sample: [[[2, 2], 1], [[3, 1], 0]], post: Math.abs },
+    'TENSOR.zeros': { cls: 'args', fn: tensorZeros, sample: [[[2, 2]], [[3, 1]]], post: Math.abs },
+    'TENSOR.ones': { cls: 'args', fn: tensorOnes, sample: [[[2, 2]], [[1, 3]]], post: Math.abs },
+    'TENSOR.arange': { cls: 'args', fn: arange, sample: [[0, 6, 2], [1, 5, 1], [0, 4, 1]], post: Math.abs },
+    'TENSOR.reshape': { cls: 'args', fn: reshape, sample: [[[1, 2, 3, 4], [2, 2]], [[1, 2, 3, 4, 5, 6], [3, 2]]], post: Math.abs },
+    'TENSOR.slice': { cls: 'args', fn: tensorSlice, sample: [[[1, 2, 3, 4], 0, 2], [[1, 2, 3, 4], 1, 3]], post: Math.abs },
+    'TENSOR.concat': { cls: 'args', fn: tensorConcat, sample: [[[[1, 2], [3, 4]]], [[[5, 6], [7, 8]]]], post: Math.abs },
+    'TENSOR.stack': { cls: 'args', fn: tensorStack, sample: [[[[1, 2], [3, 4]]], [[[5, 6], [7, 8]]]], post: Math.abs },
+    'TENSOR.split': { cls: 'args', fn: tensorSplit, sample: [[[1, 2, 3, 4], [2, 2]], [[1, 2, 3, 4, 5, 6], [3, 3]]], post: Math.abs },
+    'TENSOR.cast': { cls: 'args', fn: tensorCast, sample: [[[1, 2, 3]], [[4, 5]]], post: Math.abs },
+    'TENSOR.gather': { cls: 'args', fn: tensorGather, sample: [[[1, 2, 3, 4], [0, 2]], [[5, 6, 7, 8], [1, 3]]], post: Math.abs },
+    'TENSOR.scatter': { cls: 'args', fn: tensorScatter, sample: [[[1, 2, 3, 4], [0, 1], [9, 9]], [[5, 6, 7, 8], [2, 3], [1, 1]]], post: Math.abs },
+    'TENSOR.fill': { cls: 'args', fn: tensorFill, sample: [[[1, 2, 3], 7], [[4, 5], 0]], post: Math.abs },
+    'LINALG.qr': { cls: 'vec', fn: qrDecompose, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'LINALG.eigen': { cls: 'vec', fn: jacobiEigen, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'LINALG.power': { cls: 'vec', fn: powerIteration, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'LINALG.rank': { cls: 'vec', fn: matrixRank, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'LINALG.nullspace': { cls: 'vec', fn: nullspace, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'LINALG.orthonormalize': { cls: 'vec', fn: orthonormalize, sample: [[[[1, 0], [1, 1]], [[1, 2], [2, 4]]]], post: Math.abs },
+    'LINALG.cond': { cls: 'vec', fn: condEstimate, sample: [[[4, 1], [1, 3]], [[2, 0], [0, 2]], [[5, 2], [2, 4]]], post: Math.abs },
+    'NUMER.logsumexp': { cls: 'vec', fn: logsumexp, sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]], post: Math.abs },
+    'NUMER.clip': { cls: 'args', fn: clip, sample: [[[1.5, -1, 1], [-3, -1, 1], [0.2, -1, 1]]], post: Math.abs },
+    'NUMER.fma': { cls: 'triple', fn: fma, sample: [[[1, 2, 3], [4, 5, 6], [-1, 2, 0]]], post: Math.abs },
+    'PROB.normal_sample': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'PROB.categorical_sample': { cls: 'pair', fn: categoricalSample, sample: [[[[0.2, 0.3, 0.5], 7], [[0.1, 0.4, 0.5], 5]]], post: Math.abs },
+    'PROB.bernoulli_sample': { cls: 'triple', fn: bernoulliSample, sample: [[[0.5, 3, 1], [0.3, 4, 2]]], post: Math.abs },
+    'PROB.binomial_sample': { cls: 'args', fn: binomialSample, sample: [[[10, 0.5, 5, 1], [8, 0.3, 4, 2]]], post: Math.abs },
+    'PROB.uniform_sample': { cls: 'pair', fn: uniformSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'PROB.sample_stats': { cls: 'vec', fn: sampleStats, sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]], post: Math.abs },
+    'INFO.info_gain': { cls: 'pair', fn: infoGain, sample: [[[[0, 0, 1, 1], [[0, 1], [1, 1]]], [[1, 1, 0, 0], [[1, 0], [0, 1]]]]], post: Math.abs },
+    'INFO.perplexity': { cls: 'vec', fn: perplexity, sample: [[[[0.2, 0.3, 0.5]], [[0.5, 0.25, 0.25]]]], post: Math.abs },
+    'INFO.kl_reverse': { cls: 'pair', fn: klReverse, sample: [[[[0.5, 0.5], [0.4, 0.6]], [[0.3, 0.7], [0.5, 0.5]]]], post: Math.abs },
+    'METRIC.auc': { cls: 'pair', fn: auc, sample: [[[0, 1, 1], [0.1, 0.4, 0.8]], [[1, 0, 1], [0.3, 0.2, 0.9]]], post: Math.abs },
+    'METRIC.r2': { cls: 'pair', fn: r2, sample: [[[1, 2, 3], [1.1, 1.9, 3.2]], [[0, 1, 2], [0.1, 0.9, 2.1]]], post: Math.abs },
+    'METRIC.edit_distance': { cls: 'pair', fn: editDistance, sample: [["kitten", "sitting"], ["sunday", "saturday"]], post: Math.abs },
+    'METRIC.silhouette': { cls: 'pair', fn: silhouette, sample: [[[[1, 1], [2, 2], [8, 8], [9, 9]], [0, 0, 1, 1]], [[[1, 1], [1.5, 1.5], [9, 9]], [0, 0, 1]]], post: Math.abs },
+    'METRIC.bleu': { cls: 'triple', fn: bleu, sample: [[["a b", "a b", 2], ["cat sat", "cat sat", 3]]], post: Math.abs },
+    'METRIC.map': { cls: 'vec', fn: averagePrecision, sample: [[[1, 0, 1], [0, 1, 1]]], post: Math.abs },
+    'METRIC.confusion': { cls: 'triple', fn: confusionMatrix, sample: [[[0, 1, 1], [0, 1, 0], [0, 1]]], post: Math.abs },
+    'SYS.gather_all': { cls: 'vec', fn: gatherAll, sample: [[[[1, 2], [3]], [[4], [5, 6]]]], post: Math.abs },
+    'SYS.scatter_all': { cls: 'pair', fn: scatterAll, sample: [[[[1, 2, 3], [0, 1, 0]], [[4, 5], [1, 0]]]], post: Math.abs },
+    'SYS.checkpoint': { cls: 'vec', fn: checkpoint, sample: [[{"a":[1,2]}, {"b":[3,4]}]], post: Math.abs },
+    'SYS.prefetch': { cls: 'vec', fn: prefetch, sample: [[[1, 2, 3], [4, 5, 6]]], post: Math.abs },
+    'FWD.self_attn': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], false]], post: Math.abs },
+    'FWD.embedding_lookup': { cls: 'pair', fn: embeddingLookup, sample: [[[[1, 2], [3, 4]], [0, 1]], [[[5, 6], [7, 8]], [1, 0]]], post: Math.abs },
+    'FWD.flatten': { cls: 'vec', fn: flatten, sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]], post: Math.abs },
+    'FWD.residual_add': { cls: 'pair', fn: residualAdd, sample: [[[[1, 2], [3, 4]], [[0.1, 0.2], [0.3, 0.4]]], [[[5, 6], [7, 8]], [[0.5, 0.5], [0.5, 0.5]]]], post: Math.abs },
+    'FWD.concat_heads': { cls: 'vec', fn: concatHeads, sample: [[[[1, 2]], [[3, 4]]], [[[5, 6]], [[7, 8]]]], post: Math.abs },
+    'FWD.pool_max': { cls: 'pair', fn: poolMax, sample: [[[1, 5, 2, 8], 2], [[3, 1, 4, 2], 2]], post: Math.abs },
+    'FWD.conv1d': { cls: 'args', fn: conv1d, sample: [[[1, 2, 3, 4], [2, 4, 6]]], post: Math.abs },
+    'FWD.batchnorm': { cls: 'shared', fn: batchNorm, shared: [0.00001], sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]], post: Math.abs },
+    'FWD.dropout': { cls: 'args', fn: dropout, sample: [[[[1, 2, 3, 4], 0.5, 1], [[5, 6, 7, 8], 0.5, 2]]], post: Math.abs },
+    'BWD.grad_softmax_ce': { cls: 'pair', fn: gradSoftmaxCE, sample: [[[1, 2, 3], 1], [[0.5, 0.5, 1], 2]], post: Math.abs },
+    'BWD.grad_matmul': { cls: 'triple', fn: gradMatmul, sample: [[[[1, 2]], [[1], [2]], [[3]]], [[[3, 4]], [[1], [3]], [[2]]]], post: Math.abs },
+    'BWD.stop_grad': { cls: 'vec', fn: stopGrad, sample: [[[1, 2, 3], [0.5, 0.5, 1]]], post: Math.abs },
+    'BWD.detach': { cls: 'vec', fn: detach, sample: [[[1, 2, 3], [0.5, 0.5, 1]]], post: Math.abs },
+    'NORM.l2_reg': { cls: 'shared', fn: l2Reg, shared: [0.01], sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]], post: Math.abs },
+    'NORM.l1_reg': { cls: 'shared', fn: l1Reg, shared: [0.01], sample: [[1, 2, 3], [-1, 0, 2], [0.5, -0.5, 1]], post: Math.abs },
+    'NORM.group_norm': { cls: 'args', fn: groupNorm, sample: [[[[1, 2, 3, 4], 2, 0.00001], [[5, 6, 7, 8], 2, 0.00001]]], post: Math.abs },
+    'NORM.batch_norm': { cls: 'shared', fn: batchNorm, shared: [0.00001], sample: [[[1, 2], [3, 4]], [[5, 6], [7, 8]], [[2, 1], [0, 3]]], post: Math.abs },
+    'NORM.dropout_reg': { cls: 'args', fn: dropout, sample: [[[[1, 2, 3, 4], 0.5, 2], [[5, 6, 7, 8], 0.5, 3]]], post: Math.abs },
+    'ATTEN.qk_dot': { cls: 'pair', fn: qkDot, sample: [[[[1, 0], [0, 1]], [[2, 1], [1, 2]]]], post: Math.abs },
+    'ATTEN.rel_pos': { cls: 'pair', fn: relPosBias, sample: [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]], post: Math.abs },
+    'ATTEN.mha_split': { cls: 'pair', fn: splitHeads, sample: [[[[1, 2], [3, 4]], 2], [[[5, 6], [7, 8]], 2]], post: Math.abs },
+    'ATTEN.attn_entropy': { cls: 'vec', fn: attnEntropy, sample: [[[0, 1, 1], [1, 0, 1]]], post: Math.abs },
+    'ATTEN.softmax_attn': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], false]], post: Math.abs },
+    'ATTEN.causal_mask': { cls: 'args', fn: selfAttention, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], true]], post: Math.abs },
+    'ATTEN.multi_head': { cls: 'args', fn: multiHead, sample: [[[[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], 2, false]], post: Math.abs },
+    'SAMPLE.box_muller': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'SAMPLE.uniform': { cls: 'pair', fn: uniformSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'SAMPLE.bernoulli': { cls: 'triple', fn: bernoulliSample, sample: [[[0.5, 3, 1], [0.3, 4, 2]]], post: Math.abs },
+    'SAMPLE.multinomial': { cls: 'triple', fn: multinomialSample, sample: [[[[0.2, 0.3, 0.5], 3, 1], [[0.1, 0.4, 0.5], 4, 2]]], post: Math.abs },
+    'SAMPLE.antithetic': { cls: 'pair', fn: antitheticSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'SAMPLE.stratified': { cls: 'pair', fn: stratifiedSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'SAMPLE.systematic': { cls: 'pair', fn: systematicSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'SAMPLE.normal': { cls: 'pair', fn: normalSample, sample: [[[3, 1], [5, 2]]], post: Math.abs },
+    'DATA.shuffle': { cls: 'pair', fn: shuffle, sample: [[[[1, 2, 3, 4], 1], [[4, 3, 2, 1], 2]]], post: Math.abs },
+    'DATA.train_test': { cls: 'triple', fn: trainTestSplit, sample: [[[10, 0.8, 1], [8, 0.7, 2]]], post: Math.abs },
+    'DATA.kfold': { cls: 'triple', fn: kFold, sample: [[[10, 3, 1], [9, 3, 2]]], post: Math.abs },
+    'DATA.pad': { cls: 'triple', fn: padSeq, sample: [[[[1, 2], 4, 0], [[3, 4, 5], 2, -1]]], post: Math.abs },
+    'DATA.truncate': { cls: 'pair', fn: truncateSeq, sample: [[[[1, 2, 3, 4], 2], [[5, 6, 7], 3]]], post: Math.abs },
+    'DATA.bucket': { cls: 'pair', fn: bucketize, sample: [[[[1, 2, 3, 4], 2], [[5, 1, 3, 2], 3]]], post: Math.abs },
+    'DATA.dedup': { cls: 'vec', fn: dedup, sample: [[[1, 2, 2, 3], [4, 4, 5, 1]]], post: Math.abs },
+    'DATA.filter': { cls: 'shared', fn: filterOp, shared: [function () { return 1; }], sample: [[[1, 2, 3, 4], [0, 1, 2, 3]]], post: Math.abs },
+    'DATA.zip': { cls: 'pair', fn: zipOp, sample: [[[[1, 2], [3, 4]], [[5, 6], [7, 8]]]], post: Math.abs },
+    'DATA.batch': { cls: 'pair', fn: batchOp, sample: [[[[1, 2, 3, 4], 2], [[5, 6, 7, 8, 9], 3]]], post: Math.abs },
+    'DATA.augment': { cls: 'triple', fn: augment, sample: [[[[1, 2, 3], 1, 0.1], [[4, 5], 2, 0.2]]], post: Math.abs },
+    'RL.td0': { cls: 'pair', fn: td0Sweep, sample: [[[3, 0.9], [5, 0.95]]], post: Math.abs },
+    'RL.td_lambda': { cls: 'triple', fn: eligibilityTrace, sample: [[[[0, 1, 0], 0.9, 0.5], [[1, 1, 0], 0.8, 0.3]]], post: Math.abs },
+    'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[[1, 5, 2], [3, 1, 4]]], post: Math.abs },
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]], post: Math.abs }};
 
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
@@ -4265,6 +4450,7 @@
       else if (s.cls === 'pair') ref = sc.map(function (p) { return s.fn(p[0], p[1]); });
       else if (s.cls === 'triple') ref = sc.map(function (p) { return s.fn(p[0], p[1], p[2]); });
       else if (s.cls === 'shared') ref = sc.map(function (x) { return s.fn.apply(null, [x].concat(s.shared)); });
+      else if (s.cls === 'args') ref = sc.map(function (x) { return s.fn.apply(null, x); });
       else { bad++; continue; }
       if (arrMaxDiff(got, ref) > 1e-15) bad++;
     }
