@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.1.9';
+  var VERSION = '1.2.0';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2634,7 +2634,20 @@
     'RL.td0': { cls: 'pair', fn: td0Sweep, sample: [[[3, 0.9], [5, 0.95]]] },
     'RL.td_lambda': { cls: 'triple', fn: eligibilityTrace, sample: [[[[0, 1, 0], 0.9, 0.5], [[1, 1, 0], 0.8, 0.3]]] },
     'RL.greedy': { cls: 'vec', fn: greedyPolicy, sample: [[[1, 5, 2], [3, 1, 4]]] },
-    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]] }};
+    'RL.ucb': { cls: 'args', fn: ucb, sample: [[[[1, 2], [1, 1], 1.4, 10], [[3, 4], [2, 2], 1.2, 20]]] },
+
+    /* —— v1.2.0 变体层扩面（新增 10 条 batched，样本经沙盒逐条验证）—— */
+    'ATTEN.scale': { cls: 'pair', fn: attentionScale, sample: [[[[1,2],[3,4]],4],[[[5,6],[7,8]],2]] },
+    'ATTEN.alibi': { cls: 'pair', fn: alibiScores, sample: [[[[1,2],[3,4]],0.5],[[[5,6],[7,8]],0.3]] },
+    'ATTEN.rope': { cls: 'args', fn: ropeApply, sample: [[[1,0],1,10000],[[2,1],2,10000]] },
+    'ATTEN.mqa': { cls: 'args', fn: mqa, sample: [[[[[1,0],[0,1]],[[2,1],[1,2]]],[[1,0],[0,1]],[[1,0],[0,1]]],[[[[1,0],[0,1]],[[2,1],[1,2]]],[[1,0],[0,1]],[[1,0],[0,1]]]] },
+    'ATTEN.gqa': { cls: 'args', fn: gqa, sample: [[[[[1,0],[0,1]],[[2,1],[1,2]]],[[[1,0],[0,1]]],[[[1,0],[0,1]]],1],[[[[1,0],[0,1]],[[2,1],[1,2]]],[[[1,0],[0,1]]],[[[1,0],[0,1]]],1]] },
+    'SAMPLE.topp': { cls: 'pair', fn: topP, sample: [[[0.1,0.5,0.4],0.8],[[0.2,0.3,0.5],0.9]] },
+    'METRIC.logloss': { cls: 'pair', fn: logLoss, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]] },
+    'METRIC.perplexity': { cls: 'pair', fn: perplexityLM, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]] },
+    'DATA.map': { cls: 'shared', fn: mapOp, shared: [function (x) { return x * 2; }], sample: [[1,2,3],[4,5]] },
+    'NORM.weight_norm': { cls: 'pair', fn: weightNorm, sample: [[[3,4],2],[[1,2],3]] }
+  };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
     if (!s) throw new Error('batched: 无签名 ' + opCode);
@@ -2705,6 +2718,19 @@
     'FWD.dropout': { cls: 'args', fn: dropout, extra: [0.5, 1], sample: [1,2,3,4] },
     'NORM.dropout_reg': { cls: 'args', fn: dropout, extra: [0.5, 2], sample: [1,2,3,4] },
     'NORM.group_norm': { cls: 'args', fn: groupNorm, extra: [2, 0.00001], sample: [[1,2,3,4],[5,6,7,8]] }
+  ,
+
+    /* —— v1.2.0 变体层扩面（新增 10 条 inplace，样本经沙盒逐条验证）—— */
+    'NUMER.sqrt_guard': { cls: 'elem', fn: sqrtGuard, sample: [1,4,9,0] },
+    'BWD.grad_softmax_ce': { cls: 'pair', fn: gradSoftmaxCE, extra: [1], sample: [[1,2,3]] },
+    'ATTEN.qk_dot': { cls: 'pair', fn: qkDot, extra: [[[1,0],[0,1]]], sample: [[[1,0],[0,1]]] },
+    'LINALG.solve': { cls: 'pair', fn: solveLinear, extra: [[1,2]], sample: [[[4,1],[1,3]]] },
+    'PROB.bayes': { cls: 'pair', fn: bayesUpdate, extra: [[0.8,0.2]], sample: [[0.5,0.5]] },
+    'RL.reinforce': { cls: 'triple', fn: reinforceGradient, extra: [1, 0.5], sample: [[1,2,3]] },
+    'RL.gae': { cls: 'args', fn: gae, extra: [[0,0.5,0.8], 0.9, 0.95], sample: [[1,1,1]] },
+    'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: [[1,2,3]] },
+    'TENSOR.scatter': { cls: 'args', fn: tensorScatter, extra: [[0,2], [9,8]], sample: [[1,2,3,4]] },
+    'NORM.weight_norm': { cls: 'pair', fn: weightNorm, extra: [2], sample: [[3,4]] }
   };;
   function _writeBack(dst, src) { // 递归将 src 数值写回 dst 的既有结构（支持 1D 向量与 2D 矩阵）
     if (Array.isArray(src)) { for (var i = 0; i < src.length; i++) dst[i] = _writeBack(dst[i], src[i]); return dst; }
@@ -2922,6 +2948,19 @@
     'RL.epsilon_greedy': { cls: 'shared', fn: epsilonGreedy, shared: [0, mulberry32(99)], sample: [[1, 5, 2], [4, 1, 0]], post: Math.abs },
     'SAMPLE.categorical': { cls: 'pair', fn: categoricalSample, sample: [[[0.2,0.3,0.5],7],[[0.1,0.4,0.5],5]], post: Math.abs },
     'SAMPLE.topk': { cls: 'shared', fn: topK, shared: [2], sample: [[1,2,3],[-1,0,2],[0.5,-0.5,1]], post: Math.abs }
+  ,
+
+    /* —— v1.2.0 变体层扩面（新增 10 条 fused，样本经沙盒逐条验证）—— */
+    'ATTEN.scale': { cls: 'pair', fn: attentionScale, sample: [[[[1,2],[3,4]],4],[[[5,6],[7,8]],2]], post: Math.abs },
+    'ATTEN.alibi': { cls: 'pair', fn: alibiScores, sample: [[[[1,2],[3,4]],0.5],[[[5,6],[7,8]],0.3]], post: Math.abs },
+    'ATTEN.rope': { cls: 'args', fn: ropeApply, sample: [[[1,0],1,10000],[[2,1],2,10000]], post: Math.abs },
+    'ATTEN.mqa': { cls: 'args', fn: mqa, sample: [[[[[1,0],[0,1]],[[2,1],[1,2]]],[[1,0],[0,1]],[[1,0],[0,1]]],[[[[1,0],[0,1]],[[2,1],[1,2]]],[[1,0],[0,1]],[[1,0],[0,1]]]], post: Math.abs },
+    'ATTEN.gqa': { cls: 'args', fn: gqa, sample: [[[[[1,0],[0,1]],[[2,1],[1,2]]],[[[1,0],[0,1]]],[[[1,0],[0,1]]],1],[[[[1,0],[0,1]],[[2,1],[1,2]]],[[[1,0],[0,1]]],[[[1,0],[0,1]]],1]], post: Math.abs },
+    'SAMPLE.topp': { cls: 'pair', fn: topP, sample: [[[0.1,0.5,0.4],0.8],[[0.2,0.3,0.5],0.9]], post: Math.abs },
+    'METRIC.logloss': { cls: 'pair', fn: logLoss, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]], post: Math.abs },
+    'METRIC.perplexity': { cls: 'pair', fn: perplexityLM, sample: [[[1,0,0],[0.7,0.2,0.1]],[[0,1,0],[0.1,0.8,0.1]]], post: Math.abs },
+    'DATA.map': { cls: 'shared', fn: mapOp, shared: [function (x) { return x * 2; }], sample: [[1,2,3],[4,5]], post: Math.abs },
+    'NORM.weight_norm': { cls: 'pair', fn: weightNorm, sample: [[[3,4],2],[[1,2],3]], post: Math.abs }
   };
 
   var checks = [];

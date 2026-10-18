@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.2.0] - 2026-10-19
+
+### 变体层扩面 · 消化 spec（Variant Layer Scale-Out）
+- **盘点结论**：base 层 255/256 已满（仅 SYS.fence 诚实保留），spec 主体在变体层；本版按「首参写回 / 批维独立 / 尾算子融合」三语义继续消化
+- **inplace +10**（INPLACE_SIG 43→53）：`sqrt_guard`（elem）、`grad_softmax_ce`（梯度同形）、`qk_dot`（方阵打分）、`solve`（解向量同 b）、`bayes`（后验同先验）、`reinforce`（策略梯度）、`gae`（优势估计）、`broadcast`（恒等深拷贝）、`scatter`（同形散布）、`weight_norm`（同形缩放）
+- **batched +10**（BATCH_SIG 159→169）：`ATTEN.scale`/`ATTEN.alibi`（标量缩放参数，修正 v1.1.7 误用矩阵参数的 NaN 样本）、`ATTEN.rope`（逐 token 旋转）、`ATTEN.mqa`/`ATTEN.gqa`（多头同形输出）、`SAMPLE.topp`（核采样截断同长）、`METRIC.logloss`/`METRIC.perplexity`（逐样本标量）、`DATA.map`（1D 样本 + 映射函数，修正 v1.1.7 二维样本 NaN）、`NORM.weight_norm`
+- **fused 对齐 +10**（FUSE_SIG 156→166）：新 batched 键全部补齐融合条目（post 统一 `Math.abs`），通用引擎测试覆盖随之扩展
+- **诚实甄别（不计入）**：`eligibilityTrace(T,...)` 的 T 为整数长度、`ppoClip` 为标量级（inplace 首参须为目的地张量）；对象多返回类（`jacobian`/`vjp`/`jvp`/`grad_matmul`/优化器状态等）形状守恒不适用——全部保留 spec
+- 指标：verified **618 → 648 / 1024**（+30：inplace 46→56 / batched 159→169 / fused 158→168）；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 520.6 KB；三表幽灵键 0
+
 ## [1.1.9] - 2026-10-19
 
 ### 融合对齐扩面（FUSE_SIG 全谱对齐 BATCH_SIG）
