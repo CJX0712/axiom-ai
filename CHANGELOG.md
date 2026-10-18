@@ -1,5 +1,14 @@
 # 更新日志
 
+## [1.2.3] - 2026-10-19
+
+### 最后批次 · BWD/RL 收官（Final Batch）
+- **batched +12**（BATCH_SIG 230→242）：`NUMER.sqrt_guard`（elem）、`BWD.grad_clip`（pair，标量 maxNorm）、`BWD.grad_linear`（mlpGrad 参数对象 triple）、`BWD.grad_check`（args 4 参）、`BWD.grad_layernorm`（triple，1D 向量）、`BWD.chain_rule`（args，三函数用自包含字面量 DOUT/INNER/DIN）、`BWD.bptt`（rnnBPTT 标量核）、`RL.value_iter`/`RL.q_learn`/`RL.sarsa`（opts 对象 vec）、`RL.bellman_backup`（pair，MDP 对象）、`RL.policy_iter`（vec，MDP 对象）
+- **fused 对齐 +12**（FUSE_SIG 227→239）
+- **闭包对象序列化修复**：mdp（chainSetup 返回值）含闭包函数（trans/reward 捕获 stochastic），不可 String() 序列化——改为常量区构造 `MDP3/MDP4 = chainSetup(...)`，签名表引用标识符（与 mulberry32 工厂同模式）。注入器的 `sampleLit` 增加「对象标识符映射优先」分支（FNID.has 检查提前至函数判断前）
+- **诚实保留（spec 231 条的构成）**：SYS 系统语义系 10 条（arena/barrier/cache/stream 等——批处理语义不适用于对象 API）、`PROB/SAMPLE.seed_repro`（mulberry32 返回函数，无张量语义）、`DATA.tokenize`（字符串）、`ATTEN.self_attn`/`DATA.onehot`（special 多返回类）、`RL.monte_carlo`（policy 函数参数）
+- 指标：verified **770 → 793 / 1024**（+24：batched 230→242 / fused 229→240）；spec **254 → 231**；核心不变量 **178/178**；无头 **188/188** · UI 冒烟 **26/26**；axiom.html 548.6 KB；三表幽灵键 0
+
 ## [1.2.2] - 2026-10-19
 
 ### 图推断 + 优化器批次（GRAPH & OPTIM Batch）

@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.2';
+  var VERSION = '1.2.3';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2463,6 +2463,11 @@
   var GAUSS = function (x) { return Math.exp(-x * x / 2); };
   var UNIF = function (x) { return 1 / 2; };
   var CDFID = function (x) { return x; };
+  var DOUT = function (y) { return y; };
+  var INNER = function (x) { return x[0] * x[0]; };
+  var DIN = function (x) { return 2 * x[0]; };
+  var MDP3 = chainSetup(3, 0.9, false);
+  var MDP4 = chainSetup(4, 0.9, true);
   var BATCH_SIG = {
     /* TENSOR 张量变换（整张量算子） */
     'TENSOR.transpose': { cls: 'vec', fn: transpose, sample: _M },
@@ -2726,6 +2731,21 @@
     'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]] },
     'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]] },
     'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]] }
+  ,
+
+    /* —— v1.2.3 最后批次（新增 12 条 batched，样本经沙盒逐条验证）—— */
+    'NUMER.sqrt_guard': { cls: 'elem', fn: sqrtGuard, sample: [[1, 4, 9], [0, 2]] },
+    'BWD.grad_clip': { cls: 'pair', fn: gradClip, sample: [[[4, 1, 2], 3], [[1, 2], 1.5]] },
+    'BWD.grad_linear': { cls: 'triple', fn: mlpGrad, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]]]] },
+    'BWD.grad_check': { cls: 'args', fn: gradientCheck, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]], 0.00001]] },
+    'BWD.grad_layernorm': { cls: 'triple', fn: gradLayerNorm, sample: [[[1, 2, 3], [0.1, 0.2, 0.3], 0.00001]] },
+    'BWD.chain_rule': { cls: 'args', fn: chainRule, sample: [[DOUT, INNER, DIN, [3]], [DOUT, INNER, DIN, [-2]]] },
+    'BWD.bptt': { cls: 'triple', fn: rnnBPTT, sample: [[{ W: 0.5, U: 0.3, h0: 0 }, [1, 0.5], [0.8, 0.6]]] },
+    'RL.value_iter': { cls: 'vec', fn: valueIteration, sample: [{ n: 4, gamma: 0.9 }, { n: 3, gamma: 0.95 }] },
+    'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }] },
+    'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]] },
+    'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4] },
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
@@ -3112,6 +3132,21 @@
     'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]], post: Math.abs },
     'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]], post: Math.abs },
     'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]], post: Math.abs }
+  ,
+
+    /* —— v1.2.3 最后批次（新增 12 条 fused，样本经沙盒逐条验证）—— */
+    'NUMER.sqrt_guard': { cls: 'elem', fn: sqrtGuard, sample: [[1, 4, 9], [0, 2]], post: Math.abs },
+    'BWD.grad_clip': { cls: 'pair', fn: gradClip, sample: [[[4, 1, 2], 3], [[1, 2], 1.5]], post: Math.abs },
+    'BWD.grad_linear': { cls: 'triple', fn: mlpGrad, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]]]], post: Math.abs },
+    'BWD.grad_check': { cls: 'args', fn: gradientCheck, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]], 0.00001]], post: Math.abs },
+    'BWD.grad_layernorm': { cls: 'triple', fn: gradLayerNorm, sample: [[[1, 2, 3], [0.1, 0.2, 0.3], 0.00001]], post: Math.abs },
+    'BWD.chain_rule': { cls: 'args', fn: chainRule, sample: [[DOUT, INNER, DIN, [3]], [DOUT, INNER, DIN, [-2]]], post: Math.abs },
+    'BWD.bptt': { cls: 'triple', fn: rnnBPTT, sample: [[{ W: 0.5, U: 0.3, h0: 0 }, [1, 0.5], [0.8, 0.6]]], post: Math.abs },
+    'RL.value_iter': { cls: 'vec', fn: valueIteration, sample: [{ n: 4, gamma: 0.9 }, { n: 3, gamma: 0.95 }], post: Math.abs },
+    'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }], post: Math.abs },
+    'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]], post: Math.abs },
+    'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4], post: Math.abs },
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }], post: Math.abs }
   };
 
   var checks = [];

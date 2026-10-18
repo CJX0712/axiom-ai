@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.2';
+  var VERSION = '1.2.3';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2476,6 +2476,11 @@
   var GAUSS = function (x) { return Math.exp(-x * x / 2); };
   var UNIF = function (x) { return 1 / 2; };
   var CDFID = function (x) { return x; };
+  var DOUT = function (y) { return y; };
+  var INNER = function (x) { return x[0] * x[0]; };
+  var DIN = function (x) { return 2 * x[0]; };
+  var MDP3 = chainSetup(3, 0.9, false);
+  var MDP4 = chainSetup(4, 0.9, true);
   var BATCH_SIG = {
     /* TENSOR 张量变换（整张量算子） */
     'TENSOR.transpose': { cls: 'vec', fn: transpose, sample: _M },
@@ -2739,6 +2744,21 @@
     'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]] },
     'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]] },
     'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]] }
+  ,
+
+    /* —— v1.2.3 最后批次（新增 12 条 batched，样本经沙盒逐条验证）—— */
+    'NUMER.sqrt_guard': { cls: 'elem', fn: sqrtGuard, sample: [[1, 4, 9], [0, 2]] },
+    'BWD.grad_clip': { cls: 'pair', fn: gradClip, sample: [[[4, 1, 2], 3], [[1, 2], 1.5]] },
+    'BWD.grad_linear': { cls: 'triple', fn: mlpGrad, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]]]] },
+    'BWD.grad_check': { cls: 'args', fn: gradientCheck, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]], 0.00001]] },
+    'BWD.grad_layernorm': { cls: 'triple', fn: gradLayerNorm, sample: [[[1, 2, 3], [0.1, 0.2, 0.3], 0.00001]] },
+    'BWD.chain_rule': { cls: 'args', fn: chainRule, sample: [[DOUT, INNER, DIN, [3]], [DOUT, INNER, DIN, [-2]]] },
+    'BWD.bptt': { cls: 'triple', fn: rnnBPTT, sample: [[{ W: 0.5, U: 0.3, h0: 0 }, [1, 0.5], [0.8, 0.6]]] },
+    'RL.value_iter': { cls: 'vec', fn: valueIteration, sample: [{ n: 4, gamma: 0.9 }, { n: 3, gamma: 0.95 }] },
+    'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }] },
+    'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]] },
+    'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4] },
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
@@ -3125,6 +3145,21 @@
     'GRAPH.m_sep': { cls: 'args', fn: mSeparated, sample: [[{ 0: [], 1: [0], 2: [0] }, 1, 2, [0]], [{ 0: [], 1: [0], 2: [0] }, 1, 2, []]], post: Math.abs },
     'GRAPH.clique_tree': { cls: 'triple', fn: cliqueTreeCalibrate, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [1]], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }, [0]]], post: Math.abs },
     'GRAPH.factor_product': { cls: 'pair', fn: factorProduct, sample: [[{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [1, 2], shape: [2, 2], table: [0.2, 0.1, 0.4, 0.3] }], [{ vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }, { vars: [0, 1], shape: [2, 2], table: [0.1, 0.2, 0.3, 0.4] }]], post: Math.abs }
+  ,
+
+    /* —— v1.2.3 最后批次（新增 12 条 fused，样本经沙盒逐条验证）—— */
+    'NUMER.sqrt_guard': { cls: 'elem', fn: sqrtGuard, sample: [[1, 4, 9], [0, 2]], post: Math.abs },
+    'BWD.grad_clip': { cls: 'pair', fn: gradClip, sample: [[[4, 1, 2], 3], [[1, 2], 1.5]], post: Math.abs },
+    'BWD.grad_linear': { cls: 'triple', fn: mlpGrad, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]]]], post: Math.abs },
+    'BWD.grad_check': { cls: 'args', fn: gradientCheck, sample: [[{ W1: [[0.5, -0.2], [0.1, 0.3]], b1: [0, 0], W2: [[0.2, -0.4]], b2: [0] }, [[1, 2], [0, 1]], [[1], [0]], 0.00001]], post: Math.abs },
+    'BWD.grad_layernorm': { cls: 'triple', fn: gradLayerNorm, sample: [[[1, 2, 3], [0.1, 0.2, 0.3], 0.00001]], post: Math.abs },
+    'BWD.chain_rule': { cls: 'args', fn: chainRule, sample: [[DOUT, INNER, DIN, [3]], [DOUT, INNER, DIN, [-2]]], post: Math.abs },
+    'BWD.bptt': { cls: 'triple', fn: rnnBPTT, sample: [[{ W: 0.5, U: 0.3, h0: 0 }, [1, 0.5], [0.8, 0.6]]], post: Math.abs },
+    'RL.value_iter': { cls: 'vec', fn: valueIteration, sample: [{ n: 4, gamma: 0.9 }, { n: 3, gamma: 0.95 }], post: Math.abs },
+    'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }], post: Math.abs },
+    'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]], post: Math.abs },
+    'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4], post: Math.abs },
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }], post: Math.abs }
   };
 
   var checks = [];
@@ -5182,8 +5217,8 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0175","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"div_guard","opZh":"安全除法","variant":"fused","name":"div_guard.fused","semantics":"安全除法（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"|分母| < ε 时按 ε 处理","status":"verified","impl":"fused"},
   {"id":"L10.0176","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"div_guard","opZh":"安全除法","variant":"inplace","name":"div_guard.inplace","semantics":"安全除法（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"|分母| < ε 时按 ε 处理","status":"spec","impl":null},
   {"id":"L10.0177","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"base","name":"sqrt_guard.base","semantics":"安全开方（标量/单样本语义）","invariant":"负输入抛错","status":"verified","impl":"sqrtGuard"},
-  {"id":"L10.0178","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"batched","name":"sqrt_guard.batched","semantics":"安全开方（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"负输入抛错","status":"spec","impl":null},
-  {"id":"L10.0179","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"fused","name":"sqrt_guard.fused","semantics":"安全开方（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"负输入抛错","status":"spec","impl":null},
+  {"id":"L10.0178","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"batched","name":"sqrt_guard.batched","semantics":"安全开方（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"负输入抛错","status":"verified","impl":"batched"},
+  {"id":"L10.0179","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"fused","name":"sqrt_guard.fused","semantics":"安全开方（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"负输入抛错","status":"verified","impl":"fused"},
   {"id":"L10.0180","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"sqrt_guard","opZh":"安全开方","variant":"inplace","name":"sqrt_guard.inplace","semantics":"安全开方（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"负输入抛错","status":"verified","impl":"inplace"},
   {"id":"L10.0181","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"base","name":"reciprocal.base","semantics":"倒数（标量/单样本语义）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"reciprocal"},
   {"id":"L10.0182","layer":10,"group":"NUMER","groupName":"数值稳定指令","op":"reciprocal","opZh":"倒数","variant":"batched","name":"reciprocal.batched","semantics":"倒数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"x·(1/x) ≈ 1","status":"verified","impl":"batched"},
@@ -5454,12 +5489,12 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0447","layer":10,"group":"FWD","groupName":"前向传播指令","op":"dropout","opZh":"Dropout","variant":"fused","name":"dropout.fused","semantics":"Dropout（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"期望缩放保持不变","status":"verified","impl":"fused"},
   {"id":"L10.0448","layer":10,"group":"FWD","groupName":"前向传播指令","op":"dropout","opZh":"Dropout","variant":"inplace","name":"dropout.inplace","semantics":"Dropout（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"期望缩放保持不变","status":"verified","impl":"inplace"},
   {"id":"L10.0449","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"base","name":"grad_check.base","semantics":"梯度检验（标量/单样本语义）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"verified","impl":"gradientCheck"},
-  {"id":"L10.0450","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"batched","name":"grad_check.batched","semantics":"梯度检验（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"spec","impl":null},
-  {"id":"L10.0451","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"fused","name":"grad_check.fused","semantics":"梯度检验（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"spec","impl":null},
+  {"id":"L10.0450","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"batched","name":"grad_check.batched","semantics":"梯度检验（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"verified","impl":"batched"},
+  {"id":"L10.0451","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"fused","name":"grad_check.fused","semantics":"梯度检验（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"verified","impl":"fused"},
   {"id":"L10.0452","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_check","opZh":"梯度检验","variant":"inplace","name":"grad_check.inplace","semantics":"梯度检验（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"中心差分 vs 解析 ≤ 1e-6","status":"spec","impl":null},
   {"id":"L10.0453","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"base","name":"grad_linear.base","semantics":"线性层梯度（标量/单样本语义）","invariant":"∂L/∂W = δᵀX","status":"verified","impl":"mlpGrad"},
-  {"id":"L10.0454","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"batched","name":"grad_linear.batched","semantics":"线性层梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∂L/∂W = δᵀX","status":"spec","impl":null},
-  {"id":"L10.0455","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"fused","name":"grad_linear.fused","semantics":"线性层梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∂L/∂W = δᵀX","status":"spec","impl":null},
+  {"id":"L10.0454","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"batched","name":"grad_linear.batched","semantics":"线性层梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"∂L/∂W = δᵀX","status":"verified","impl":"batched"},
+  {"id":"L10.0455","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"fused","name":"grad_linear.fused","semantics":"线性层梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"∂L/∂W = δᵀX","status":"verified","impl":"fused"},
   {"id":"L10.0456","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_linear","opZh":"线性层梯度","variant":"inplace","name":"grad_linear.inplace","semantics":"线性层梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"∂L/∂W = δᵀX","status":"spec","impl":null},
   {"id":"L10.0457","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"base","name":"grad_relu.base","semantics":"ReLU 梯度（标量/单样本语义）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"gradRelu"},
   {"id":"L10.0458","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_relu","opZh":"ReLU 梯度","variant":"batched","name":"grad_relu.batched","semantics":"ReLU 梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"x < 0 处梯度 = 0","status":"verified","impl":"batched"},
@@ -5474,20 +5509,20 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0467","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_softmax_ce","opZh":"Softmax+CE 梯度","variant":"fused","name":"grad_softmax_ce.fused","semantics":"Softmax+CE 梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"p − y","status":"verified","impl":"fused"},
   {"id":"L10.0468","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_softmax_ce","opZh":"Softmax+CE 梯度","variant":"inplace","name":"grad_softmax_ce.inplace","semantics":"Softmax+CE 梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"p − y","status":"verified","impl":"inplace"},
   {"id":"L10.0469","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"base","name":"grad_layernorm.base","semantics":"层归一化梯度（标量/单样本语义）","invariant":"链式法则复合","status":"verified","impl":"gradLayerNorm"},
-  {"id":"L10.0470","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"batched","name":"grad_layernorm.batched","semantics":"层归一化梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"链式法则复合","status":"spec","impl":null},
-  {"id":"L10.0471","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"fused","name":"grad_layernorm.fused","semantics":"层归一化梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"链式法则复合","status":"spec","impl":null},
+  {"id":"L10.0470","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"batched","name":"grad_layernorm.batched","semantics":"层归一化梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"链式法则复合","status":"verified","impl":"batched"},
+  {"id":"L10.0471","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"fused","name":"grad_layernorm.fused","semantics":"层归一化梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"链式法则复合","status":"verified","impl":"fused"},
   {"id":"L10.0472","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_layernorm","opZh":"层归一化梯度","variant":"inplace","name":"grad_layernorm.inplace","semantics":"层归一化梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"链式法则复合","status":"spec","impl":null},
   {"id":"L10.0473","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_matmul","opZh":"矩阵乘梯度","variant":"base","name":"grad_matmul.base","semantics":"矩阵乘梯度（标量/单样本语义）","invariant":"dL/dA = dL·Bᵀ","status":"verified","impl":"gradMatmul"},
   {"id":"L10.0474","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_matmul","opZh":"矩阵乘梯度","variant":"batched","name":"grad_matmul.batched","semantics":"矩阵乘梯度（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"dL/dA = dL·Bᵀ","status":"verified","impl":"batched"},
   {"id":"L10.0475","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_matmul","opZh":"矩阵乘梯度","variant":"fused","name":"grad_matmul.fused","semantics":"矩阵乘梯度（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"dL/dA = dL·Bᵀ","status":"verified","impl":"fused"},
   {"id":"L10.0476","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_matmul","opZh":"矩阵乘梯度","variant":"inplace","name":"grad_matmul.inplace","semantics":"矩阵乘梯度（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"dL/dA = dL·Bᵀ","status":"spec","impl":null},
   {"id":"L10.0477","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"base","name":"chain_rule.base","semantics":"链式法则（标量/单样本语义）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"verified","impl":"chainRule"},
-  {"id":"L10.0478","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"batched","name":"chain_rule.batched","semantics":"链式法则（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"spec","impl":null},
-  {"id":"L10.0479","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"fused","name":"chain_rule.fused","semantics":"链式法则（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"spec","impl":null},
+  {"id":"L10.0478","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"batched","name":"chain_rule.batched","semantics":"链式法则（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"verified","impl":"batched"},
+  {"id":"L10.0479","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"fused","name":"chain_rule.fused","semantics":"链式法则（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"verified","impl":"fused"},
   {"id":"L10.0480","layer":10,"group":"BWD","groupName":"反向传播指令","op":"chain_rule","opZh":"链式法则","variant":"inplace","name":"chain_rule.inplace","semantics":"链式法则（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"d/dx f(g(x)) = f'(g)·g'","status":"spec","impl":null},
   {"id":"L10.0481","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"base","name":"grad_clip.base","semantics":"梯度裁剪（标量/单样本语义）","invariant":"全局范数 ≤ 阈值","status":"verified","impl":"gradClip"},
-  {"id":"L10.0482","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"batched","name":"grad_clip.batched","semantics":"梯度裁剪（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"全局范数 ≤ 阈值","status":"spec","impl":null},
-  {"id":"L10.0483","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"fused","name":"grad_clip.fused","semantics":"梯度裁剪（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"全局范数 ≤ 阈值","status":"spec","impl":null},
+  {"id":"L10.0482","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"batched","name":"grad_clip.batched","semantics":"梯度裁剪（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"全局范数 ≤ 阈值","status":"verified","impl":"batched"},
+  {"id":"L10.0483","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"fused","name":"grad_clip.fused","semantics":"梯度裁剪（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"全局范数 ≤ 阈值","status":"verified","impl":"fused"},
   {"id":"L10.0484","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_clip","opZh":"梯度裁剪","variant":"inplace","name":"grad_clip.inplace","semantics":"梯度裁剪（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"全局范数 ≤ 阈值","status":"verified","impl":"inplace"},
   {"id":"L10.0485","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_accum","opZh":"梯度累积","variant":"base","name":"grad_accum.base","semantics":"梯度累积（标量/单样本语义）","invariant":"Σ 批次梯度 = 全量梯度","status":"verified","impl":"gradAccum"},
   {"id":"L10.0486","layer":10,"group":"BWD","groupName":"反向传播指令","op":"grad_accum","opZh":"梯度累积","variant":"batched","name":"grad_accum.batched","semantics":"梯度累积（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Σ 批次梯度 = 全量梯度","status":"verified","impl":"batched"},
@@ -5514,8 +5549,8 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0507","layer":10,"group":"BWD","groupName":"反向传播指令","op":"jvp","opZh":"Jacobian-向量积","variant":"fused","name":"jvp.fused","semantics":"Jacobian-向量积（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"同上对偶恒等式","status":"verified","impl":"fused"},
   {"id":"L10.0508","layer":10,"group":"BWD","groupName":"反向传播指令","op":"jvp","opZh":"Jacobian-向量积","variant":"inplace","name":"jvp.inplace","semantics":"Jacobian-向量积（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"同上对偶恒等式","status":"spec","impl":null},
   {"id":"L10.0509","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"base","name":"bptt.base","semantics":"时间反向传播（标量/单样本语义）","invariant":"梯度沿时间步累加","status":"verified","impl":"rnnBPTT"},
-  {"id":"L10.0510","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"batched","name":"bptt.batched","semantics":"时间反向传播（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"梯度沿时间步累加","status":"spec","impl":null},
-  {"id":"L10.0511","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"fused","name":"bptt.fused","semantics":"时间反向传播（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"梯度沿时间步累加","status":"spec","impl":null},
+  {"id":"L10.0510","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"batched","name":"bptt.batched","semantics":"时间反向传播（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"梯度沿时间步累加","status":"verified","impl":"batched"},
+  {"id":"L10.0511","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"fused","name":"bptt.fused","semantics":"时间反向传播（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"梯度沿时间步累加","status":"verified","impl":"fused"},
   {"id":"L10.0512","layer":10,"group":"BWD","groupName":"反向传播指令","op":"bptt","opZh":"时间反向传播","variant":"inplace","name":"bptt.inplace","semantics":"时间反向传播（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"梯度沿时间步累加","status":"spec","impl":null},
   {"id":"L10.0513","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"base","name":"l1.base","semantics":"L1 范数（标量/单样本语义）","invariant":"Σ|xᵢ|","status":"verified","impl":"l1Norm"},
   {"id":"L10.0514","layer":10,"group":"NORM","groupName":"归一化正则指令","op":"l1","opZh":"L1 范数","variant":"batched","name":"l1.batched","semantics":"L1 范数（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Σ|xᵢ|","status":"verified","impl":"batched"},
@@ -5774,12 +5809,12 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0767","layer":10,"group":"GRAPH","groupName":"图推断指令","op":"factor_product","opZh":"因子乘积","variant":"fused","name":"factor_product.fused","semantics":"因子乘积（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"维度 = 各因子变量并集","status":"verified","impl":"fused"},
   {"id":"L10.0768","layer":10,"group":"GRAPH","groupName":"图推断指令","op":"factor_product","opZh":"因子乘积","variant":"inplace","name":"factor_product.inplace","semantics":"因子乘积（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"维度 = 各因子变量并集","status":"spec","impl":null},
   {"id":"L10.0769","layer":10,"group":"RL","groupName":"强化学习指令","op":"value_iter","opZh":"值迭代","variant":"base","name":"value_iter.base","semantics":"值迭代（标量/单样本语义）","invariant":"Bellman 残差 ≤ 1e-10；解析解 V* = 10","status":"verified","impl":"valueIteration"},
-  {"id":"L10.0770","layer":10,"group":"RL","groupName":"强化学习指令","op":"value_iter","opZh":"值迭代","variant":"batched","name":"value_iter.batched","semantics":"值迭代（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Bellman 残差 ≤ 1e-10；解析解 V* = 10","status":"spec","impl":null},
+  {"id":"L10.0770","layer":10,"group":"RL","groupName":"强化学习指令","op":"value_iter","opZh":"值迭代","variant":"batched","name":"value_iter.batched","semantics":"值迭代（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"Bellman 残差 ≤ 1e-10；解析解 V* = 10","status":"verified","impl":"batched"},
   {"id":"L10.0771","layer":10,"group":"RL","groupName":"强化学习指令","op":"value_iter","opZh":"值迭代","variant":"fused","name":"value_iter.fused","semantics":"值迭代（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"Bellman 残差 ≤ 1e-10；解析解 V* = 10","status":"verified","impl":"fused_value_greedy"},
   {"id":"L10.0772","layer":10,"group":"RL","groupName":"强化学习指令","op":"value_iter","opZh":"值迭代","variant":"inplace","name":"value_iter.inplace","semantics":"值迭代（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"Bellman 残差 ≤ 1e-10；解析解 V* = 10","status":"spec","impl":null},
   {"id":"L10.0773","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"base","name":"q_learn.base","semantics":"Q 学习（标量/单样本语义）","invariant":"训练后贪心成功率 ≥ 0.9","status":"verified","impl":"qLearning"},
-  {"id":"L10.0774","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"batched","name":"q_learn.batched","semantics":"Q 学习（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"训练后贪心成功率 ≥ 0.9","status":"spec","impl":null},
-  {"id":"L10.0775","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"fused","name":"q_learn.fused","semantics":"Q 学习（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"训练后贪心成功率 ≥ 0.9","status":"spec","impl":null},
+  {"id":"L10.0774","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"batched","name":"q_learn.batched","semantics":"Q 学习（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"训练后贪心成功率 ≥ 0.9","status":"verified","impl":"batched"},
+  {"id":"L10.0775","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"fused","name":"q_learn.fused","semantics":"Q 学习（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"训练后贪心成功率 ≥ 0.9","status":"verified","impl":"fused"},
   {"id":"L10.0776","layer":10,"group":"RL","groupName":"强化学习指令","op":"q_learn","opZh":"Q 学习","variant":"inplace","name":"q_learn.inplace","semantics":"Q 学习（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"训练后贪心成功率 ≥ 0.9","status":"spec","impl":null},
   {"id":"L10.0777","layer":10,"group":"RL","groupName":"强化学习指令","op":"td0","opZh":"TD(0)","variant":"base","name":"td0.base","semantics":"TD(0)（标量/单样本语义）","invariant":"α=1 确定性链一步扫描 = 解析解 ≤ 1e-12","status":"verified","impl":"td0Sweep"},
   {"id":"L10.0778","layer":10,"group":"RL","groupName":"强化学习指令","op":"td0","opZh":"TD(0)","variant":"batched","name":"td0.batched","semantics":"TD(0)（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"α=1 确定性链一步扫描 = 解析解 ≤ 1e-12","status":"verified","impl":"batched"},
@@ -5790,16 +5825,16 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0783","layer":10,"group":"RL","groupName":"强化学习指令","op":"epsilon_greedy","opZh":"ε-贪心","variant":"fused","name":"epsilon_greedy.fused","semantics":"ε-贪心（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"ε = 0 时严格 argmax","status":"verified","impl":"fused"},
   {"id":"L10.0784","layer":10,"group":"RL","groupName":"强化学习指令","op":"epsilon_greedy","opZh":"ε-贪心","variant":"inplace","name":"epsilon_greedy.inplace","semantics":"ε-贪心（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"ε = 0 时严格 argmax","status":"spec","impl":null},
   {"id":"L10.0785","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"base","name":"bellman_backup.base","semantics":"Bellman 备份（标量/单样本语义）","invariant":"V ← T(V) 压缩映射","status":"verified","impl":"bellmanBackup"},
-  {"id":"L10.0786","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"batched","name":"bellman_backup.batched","semantics":"Bellman 备份（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"V ← T(V) 压缩映射","status":"spec","impl":null},
-  {"id":"L10.0787","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"fused","name":"bellman_backup.fused","semantics":"Bellman 备份（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"V ← T(V) 压缩映射","status":"spec","impl":null},
+  {"id":"L10.0786","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"batched","name":"bellman_backup.batched","semantics":"Bellman 备份（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"V ← T(V) 压缩映射","status":"verified","impl":"batched"},
+  {"id":"L10.0787","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"fused","name":"bellman_backup.fused","semantics":"Bellman 备份（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"V ← T(V) 压缩映射","status":"verified","impl":"fused"},
   {"id":"L10.0788","layer":10,"group":"RL","groupName":"强化学习指令","op":"bellman_backup","opZh":"Bellman 备份","variant":"inplace","name":"bellman_backup.inplace","semantics":"Bellman 备份（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"V ← T(V) 压缩映射","status":"spec","impl":null},
   {"id":"L10.0789","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"base","name":"policy_iter.base","semantics":"策略迭代（标量/单样本语义）","invariant":"策略单调改进至最优","status":"verified","impl":"policyIteration"},
-  {"id":"L10.0790","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"batched","name":"policy_iter.batched","semantics":"策略迭代（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"策略单调改进至最优","status":"spec","impl":null},
-  {"id":"L10.0791","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"fused","name":"policy_iter.fused","semantics":"策略迭代（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"策略单调改进至最优","status":"spec","impl":null},
+  {"id":"L10.0790","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"batched","name":"policy_iter.batched","semantics":"策略迭代（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"策略单调改进至最优","status":"verified","impl":"batched"},
+  {"id":"L10.0791","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"fused","name":"policy_iter.fused","semantics":"策略迭代（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"策略单调改进至最优","status":"verified","impl":"fused"},
   {"id":"L10.0792","layer":10,"group":"RL","groupName":"强化学习指令","op":"policy_iter","opZh":"策略迭代","variant":"inplace","name":"policy_iter.inplace","semantics":"策略迭代（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"策略单调改进至最优","status":"spec","impl":null},
   {"id":"L10.0793","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"base","name":"sarsa.base","semantics":"SARSA（标量/单样本语义）","invariant":"同策略 TD 控制","status":"verified","impl":"sarsa"},
-  {"id":"L10.0794","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"batched","name":"sarsa.batched","semantics":"SARSA（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"同策略 TD 控制","status":"spec","impl":null},
-  {"id":"L10.0795","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"fused","name":"sarsa.fused","semantics":"SARSA（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"同策略 TD 控制","status":"spec","impl":null},
+  {"id":"L10.0794","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"batched","name":"sarsa.batched","semantics":"SARSA（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"同策略 TD 控制","status":"verified","impl":"batched"},
+  {"id":"L10.0795","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"fused","name":"sarsa.fused","semantics":"SARSA（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"同策略 TD 控制","status":"verified","impl":"fused"},
   {"id":"L10.0796","layer":10,"group":"RL","groupName":"强化学习指令","op":"sarsa","opZh":"SARSA","variant":"inplace","name":"sarsa.inplace","semantics":"SARSA（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"同策略 TD 控制","status":"spec","impl":null},
   {"id":"L10.0797","layer":10,"group":"RL","groupName":"强化学习指令","op":"td_lambda","opZh":"TD(λ)","variant":"base","name":"td_lambda.base","semantics":"TD(λ)（标量/单样本语义）","invariant":"资格迹指数衰减","status":"verified","impl":"eligibilityTrace"},
   {"id":"L10.0798","layer":10,"group":"RL","groupName":"强化学习指令","op":"td_lambda","opZh":"TD(λ)","variant":"batched","name":"td_lambda.batched","semantics":"TD(λ)（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"资格迹指数衰减","status":"verified","impl":"batched"},
