@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.6';
+  var VERSION = '1.3.7';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2748,7 +2748,11 @@
     'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }] },
     'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]] },
     'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4] },
-    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] }
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] },
+    'RL.monte_carlo': { cls: 'args', fn: monteCarloReturn, sample: [
+      [{ n: 3, gamma: 0.9, trans: function (s, a) { return [[(s + 1) % 3, 1]]; }, reward: function (s, sp) { return sp === 2 ? 1 : 0; } }, function (s, rng) { return 0; }, 30, 1],
+      [{ n: 3, gamma: 0.9, trans: function (s, a) { return [[(s + 1) % 3, 1]]; }, reward: function (s, sp) { return sp === 2 ? 1 : 0; } }, function (s, rng) { return 1; }, 30, 2]
+    ] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];

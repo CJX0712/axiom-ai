@@ -1,5 +1,15 @@
 # 更新日志
 
+## [1.3.7] - 2026-10-20
+
+### 批处理/融合 spec 甄别收口 + 诚实保留说明 + 文档升级
+- **batched(14)+fused(16) spec 逐一甄别**：结论——除唯一具备干净批语义的 `RL.monte_carlo` 外，其余全部为**诚实保留**（单线程 JS 运行时无可独立复算的可验证语义）。已转化 `monte_carlo.batched`（回报估计沿 batch 独立执行、标量输出、确定性可复算）→ verified **810 → 811**，spec **214 → 213**
+  - **诚实保留分类**：原地变体 183 条（标量输出 / 形状变换 / 函数参数类，无 dst 写回语义）；批处理 13 条（SYS 并发原语 arena_alloc/barrier/cache/ref_count/stream/event/profile/trace/dispatch 屏障同步语义单线程恒等 + seed_repro PRNG 控制 + tokenize 字符串 I/O）；融合 16 条（同上 SYS 并发 + tokenize 字符串输出无法套用数值 epilogue + onehot.fused 对象输出 FUSE 仅支持数值尾算子）；base 1 条（`SYS.fence` 内存屏障单线程恒等）
+  - **registry 完整性核实**：1024 条 ID 唯一、族计数 64、总数 1024；所谓「重复 name」实为同一工具算子（flatten/softmax/seed_repro/marginal/condition/perplexity/grad_clip/self_attn/map 等）被**有意复用于两指令族**，每条仍具唯一 `L10.xxxx` ID，非缺陷
+- **核心不变量套件复核**：304 项对「已实现函数」的覆盖已接近完备（pca/jacobiEigen/matrixRank/kalman 及 embedding/residualAdd/conv1d/weightNorm/labelSmooth/topK 等均有专属硬不变量），固定 1024 网格内 ③ 已无低风险扩展空间
+- **文档升级（路线图/架构图候选 ②）**：README 新增「诚实保留（spec）甄别」小节与甄别表，徽章/数字同步（verified 811/1024）；CHANGELOG/README/ARCHITECTURE/VERIFICATION 一致性核对
+- 指标：verified **810 → 811/1024**；核心不变量 **304/304 不变**；无头 **314/314** · UI 冒烟 **26/26**；axiom.html **590.0 KB**；三表幽灵键 0
+
 ## [1.3.6] - 2026-10-20
 
 ### 核心不变量扩容第十批（290 → 304，概率图精确推断 / 采样保真 / 强化控制 / 矩阵分解结构 / 指标端点）

@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-304%2F304-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-810%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-304%2F304-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
@@ -140,12 +140,25 @@ AXIOM.runChecks();                            // { total: 304, passed, results }
 - **为什么纯 JS 数组不用 Float64Array/BLAS**：单文件零依赖 + 简单数组作为 API 边界（与 @tangent.to/lina 同思路），规模定位在 n≤数百的教学/验证负载；算法选型偏向无条件稳定（Jacobi/Householder）而非速度。
 - **为什么确定性随机（mulberry32）**：一切蒙特卡洛类验证必须可复现——同种子同序列是检查项之一。
 - **为什么 1024 = 16×16×4**：指令集需要完备且可枚举；4 变体覆盖执行语义的三个正交维度（批/融合/原地），全部携带"与 base 逐位一致"的降级契约。
-- **为什么 verified 是 810 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 214 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base，以及三大通用执行变体引擎规模化覆盖的实例**：
+- **为什么 verified 是 811 条**：诚实优先——只标记真有参考实现且通过不变量自检的指令；其余 213 条规格已定义（语义+不变量+世界最优参考），作为路线图。已验证覆盖 **16 族代表算子的 base，以及三大通用执行变体引擎规模化覆盖的实例**：
   - **通用批处理引擎（v1.1.4，v1.1.7 扩面）**：`batched` 变体 **242 个**（沿 batch 维逐位一致，单一 `batched` 调度器 + `BATCH_SIG` 签名表；v1.1.7 新增 `args` 可变参数类并扩至全谱 14 族算子：TENSOR/LINALG/NUMER/PROB/INFO/METRIC/SYS/FWD/BWD/NORM/ATTEN/SAMPLE/DATA/RL）；
   - **通用原地引擎（v1.1.5，v1.1.8 扩面）**：`inplace` 变体 **73 个**（70 引擎实例 + 3 具名内核；v1.3.0 第四轮扩面 53→70）。原地覆盖输入、返回值与 out-of-place 逐位一致；v1.1.8 将 `INPLACE_SIG` 扩至全谱（17→43），引擎统一为「首参 dst 写回」：elem（逐元素标量，extra 可选标量参数）/ vec（整张量形状守恒，extra 可选，如映射类）/ pair / triple / args（多输入：其余参数经 extra 传入，如残差加、层归一化、谱归一化、温度采样、梯度裁剪、Mixup、权重衰减、Dropout）；
   - **通用 Epilogue 融合引擎（v1.1.6，v1.1.7/v1.1.9 扩面）**：`fused` 变体 **240 个**（224 个引擎实例 + 16 个具名代表内核；v1.1.9/v1.2.0 持续对齐 `FUSE_SIG` 与 `BATCH_SIG` 键集，通用引擎测试覆盖全部融合算子）。引擎锚定 **cuBLASLt / CUTLASS 的 GEMM epilogue 融合范式**：算子输出不物化中间张量，单遍就地施加逐元素尾算子，硬不变量 `fused ≡ post ∘ op`（≤1e-15）；v1.1.7 将 `FUSE_SIG` 扩至全谱（尾算子统一 `Math.abs` 保证域安全），全部 183 条新样本经沙盒逐条验证（无异常 + 输出全有限）；
   - 具名原地内核 3 个（fill / copy / normalize_l2，真正原地无中间数组）。
-  - 剩余 spec 214 条主要是系统语义系（SYS 10 条）/种子复现/字符串分词等诚实保留项（详见 ARCHITECTURE 甄别说明），以及 JS 单线程下无可验证语义的 `fence`（内存屏障在单线程运行时是恒等操作，无残差可测）。
+  - 剩余 spec 213 条全部为**诚实保留**（甄别结论见下文「诚实保留（spec）甄别」）：原地变体 183 条（标量输出 / 形状变换 / 函数参数类，单线程无 dst 覆盖语义）；批处理/融合变体 30 条（SYS 并发原语、PRNG 控制、字符串/对象 I/O，单线程无对应可验证语义）；base 1 条（`fence` 内存屏障在单线程运行时是恒等操作，无残差可测）。
+
+### 诚实保留（spec）甄别
+
+`spec` = 规格已定义但未标记 `verified`。本指令集固定为 1024 条（16 族 × 16 算子 × 4 变体），**已验证 811 条**，剩余 **213 条**经逐一甄别确认全部为诚实保留——并非遗漏，而是单线程 JavaScript 运行时下**无可独立复算的可验证语义**：
+
+| 变体 | spec 数 | 诚实保留原因 |
+|------|--------|--------------|
+| inplace | 183 | 语义为「输入被覆盖、返回值与 out-of-place 逐位一致」；但标量输出 / 形状变换 / 函数参数类算子没有可写回的 dst 张量，原地契约天然失效 |
+| batched | 13 | SYS 并发原语（arena_alloc/barrier/cache/ref_count/stream/event/profile/trace/dispatch）——屏障/同步/流保序等并发语义在单线程下是恒等；`seed_repro`/`tokenize` 为 PRNG 控制 / 字符串 I/O，无张量批语义 |
+| fused | 16 | 同上 SYS 并发原语 + `tokenize`（字符串输出无法套用数值 epilogue 融合）；`onehot.fused` 输出为对象、FUSE 引擎仅支持数值尾算子 |
+| base | 1 | `SYS.fence`（内存屏障）单线程下恒等，无残差可测 |
+
+> 已转化项：v1.3.7 将唯一具备干净批语义的 `RL.monte_carlo.batched`（回报估计沿 batch 独立执行、标量输出、确定性可复算）由 spec 转为 verified，verified 810 → 811。其余 213 条保持 spec，遵守「零重写 + 诚实」铁律——不为凑数虚构语义。
 
 ## 8. 路线图
 
@@ -158,6 +171,8 @@ AXIOM.runChecks();                            // { total: 304, passed, results }
 - [x] L5：Gibbs/MCMC 平稳分布收敛（解析平稳分布验证）
 - [x] L10 执行变体层：16 族代表算子的 base/batched/fused/inplace 全覆盖（fused=顺序组合、batched/inplace 逐位一致）
 - [ ] WASM 内核加速（保持 JS 回退，API 不变）
+- [x] L10 诚实保留甄别收口（v1.3.7）：213 条 spec 全部确认为诚实保留，唯一可转化项 `monte_carlo.batched` 已 verified（810→811）
+- [ ] 补充世界级算法验证模块（SVD / PageRank / Dijkstra / slice sampling 等；作为 v1.3.8+ 候选，扩展核心不变量覆盖，不改动固定 1024 网格）
 
 ## 9. 致谢
 

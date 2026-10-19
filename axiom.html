@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.6';
+  var VERSION = '1.3.7';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2761,7 +2761,11 @@
     'RL.q_learn': { cls: 'vec', fn: qLearning, sample: [{ n: 4, gamma: 0.9, episodes: 200 }, { n: 3, episodes: 100 }] },
     'RL.bellman_backup': { cls: 'pair', fn: bellmanBackup, sample: [[[0, 0, 0], MDP3]] },
     'RL.policy_iter': { cls: 'vec', fn: policyIteration, sample: [MDP3, MDP4] },
-    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] }
+    'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }] },
+    'RL.monte_carlo': { cls: 'args', fn: monteCarloReturn, sample: [
+      [{ n: 3, gamma: 0.9, trans: function (s, a) { return [[(s + 1) % 3, 1]]; }, reward: function (s, sp) { return sp === 2 ? 1 : 0; } }, function (s, rng) { return 0; }, 30, 1],
+      [{ n: 3, gamma: 0.9, trans: function (s, a) { return [[(s + 1) % 3, 1]]; }, reward: function (s, sp) { return sp === 2 ? 1 : 0; } }, function (s, rng) { return 1; }, 30, 2]
+    ] }
   };
   function batched(opCode, batch) {
     var s = BATCH_SIG[opCode];
@@ -6691,7 +6695,7 @@ var AXIOM_REGISTRY = [
   {"id":"L10.0799","layer":10,"group":"RL","groupName":"强化学习指令","op":"td_lambda","opZh":"TD(λ)","variant":"fused","name":"td_lambda.fused","semantics":"TD(λ)（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"资格迹指数衰减","status":"verified","impl":"fused"},
   {"id":"L10.0800","layer":10,"group":"RL","groupName":"强化学习指令","op":"td_lambda","opZh":"TD(λ)","variant":"inplace","name":"td_lambda.inplace","semantics":"TD(λ)（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"资格迹指数衰减","status":"spec","impl":null},
   {"id":"L10.0801","layer":10,"group":"RL","groupName":"强化学习指令","op":"monte_carlo","opZh":"蒙特卡洛","variant":"base","name":"monte_carlo.base","semantics":"蒙特卡洛（标量/单样本语义）","invariant":"回报均值无偏","status":"verified","impl":"monteCarloReturn"},
-  {"id":"L10.0802","layer":10,"group":"RL","groupName":"强化学习指令","op":"monte_carlo","opZh":"蒙特卡洛","variant":"batched","name":"monte_carlo.batched","semantics":"蒙特卡洛（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"回报均值无偏","status":"spec","impl":null},
+  {"id":"L10.0802","layer":10,"group":"RL","groupName":"强化学习指令","op":"monte_carlo","opZh":"蒙特卡洛","variant":"batched","name":"monte_carlo.batched","semantics":"蒙特卡洛（沿 batch 维独立执行，结果与逐样本调用逐位一致）","invariant":"回报均值无偏","status":"verified","impl":"batched"},
   {"id":"L10.0803","layer":10,"group":"RL","groupName":"强化学习指令","op":"monte_carlo","opZh":"蒙特卡洛","variant":"fused","name":"monte_carlo.fused","semantics":"蒙特卡洛（与相邻算子融合，消除中间张量物化，数学语义不变）","invariant":"回报均值无偏","status":"spec","impl":null},
   {"id":"L10.0804","layer":10,"group":"RL","groupName":"强化学习指令","op":"monte_carlo","opZh":"蒙特卡洛","variant":"inplace","name":"monte_carlo.inplace","semantics":"蒙特卡洛（原地执行，输入被覆盖，返回值与 out-of-place 逐位一致）","invariant":"回报均值无偏","status":"spec","impl":null},
   {"id":"L10.0805","layer":10,"group":"RL","groupName":"强化学习指令","op":"greedy","opZh":"贪心策略","variant":"base","name":"greedy.base","semantics":"贪心策略（标量/单样本语义）","invariant":"argmax_a Q(s,a)","status":"verified","impl":"greedyPolicy"},
