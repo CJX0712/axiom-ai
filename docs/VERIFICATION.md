@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 251/251 PASS · 注册表完整性 9/10 PASS · 总计 260/261 全绿**
+> 结果：**核心不变量 264/264 PASS · 注册表完整性 9/10 PASS · 总计 273/274 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -261,6 +261,19 @@
 | ✅ | silhouette：取值 ∈ [-1,1] 且单簇聚类 → 全 0 | 0 | 1.00e-15 |
 | ✅ | earlyStop：best = min(valHistory) · bestIndex = argmin · stopIndex ∈ [bestIndex, len-1] | 0 | 1.00e-15 |
 | ✅ | thompsonSample：Beta(α,β) 样本经验均值 ≡ α/(α+β)（蒙特卡洛 vs 解析一阶矩） | 3.00e-3 | 2.00e-2 |
+| ✅ | lrDecay：lr₀/(1+kt) 随 t 单调不增、且 lr(0)=lr₀（学习率衰减单调性） | 0 | 0 |
+| ✅ | weightDecay：闭式 w·(1−lr·λ)（L2 惩罚梯度步，无偏缩放） | 0 | 0 |
+| ✅ | polyakAvg：指数/窗口平均 = 算术平均（Polyak–Ruppert 平均） | 0 | 0 |
+| ✅ | splitHeads / concatHeads：多头分拆-拼接往返恒等（d 整除 H） | 0 | 0 |
+| ✅ | dropout：反向缩放 1/(1−p) 保持期望（p=0 恒等 + 蒙特卡洛均值→x） | 2.36e-2 | 8.00e-2 |
+| ✅ | conv1d：等价于 im2col Toeplitz 矩阵-向量乘法（stride=1, pad=0） | 0 | 0 |
+| ✅ | weightNorm：重新参数化后范数 ‖w‖ = |g|（方向保留、幅度由 g 控制） | 0 | 0 |
+| ✅ | ropeApply：旋转位置编码保持范数（2×2 旋转矩阵正交） | 0 | 1.00e-12 |
+| ✅ | groupNorm：逐组（group）内归一化后均值 = 0（与 layerNorm 同构） | 1.11e-16 | 1.00e-12 |
+| ✅ | labelSmooth：平滑后仍为合法分布（和 = 1）且 eps=0 退化为 one-hot | 0 | 0 |
+| ✅ | mixup：端点 λ=0→x₂、λ=1→x₁、且 mixup(x,x,λ)=x（凸组合恒等式） | 0 | 0 |
+| ✅ | mqa：输出形状守恒（H×T×d）且第 h 头 ≡ selfAttention(Qₕ,K,V)（定义一致性） | 0 | 0 |
+| ✅ | gqa：分组查询注意力输出形状守恒（H×T×d） | 0 | 0 |
 
 ## 2. 注册表完整性（9/10）
 
@@ -303,15 +316,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 145 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 202 | 矩阵分解/恒等式/精确算术 |
+| 精确 0 | = 0 | 156 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 214 | 矩阵分解/恒等式/精确算术 |
 | 算法收敛 | 1e-13 ~ 1e-6 | 24 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
-| 统计估计 | > 1e-6 | 25 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
+| 统计估计 | > 1e-6 | 26 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 261 项，失败退出码 1
+node test/run.js                  # 全量 274 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```

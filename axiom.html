@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.2';
+  var VERSION = '1.3.3';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5347,6 +5347,84 @@
     var alpha = 2, beta = 5, N = 4000, sum = 0;
     for (var s = 1; s <= N; s++) sum += thompsonSample(alpha, beta, s);
     return Math.abs(sum / N - alpha / (alpha + beta));
+  });
+
+  /* —— v1.3.3 不变量扩容第七批（优化器/正则/注意力结构/卷积/数据增强）—— */
+  check('lrDecay：lr₀/(1+kt) 随 t 单调不增、且 lr(0)=lr₀（学习率衰减单调性）', 0, function () {
+    var lr0 = 0.1, k = 0.05, prev = Infinity, ok = true;
+    for (var t = 0; t <= 50; t++) { var v = lrDecay(lr0, k, t); if (v > prev + 1e-15) ok = false; prev = v; }
+    return (ok ? 0 : 1) + Math.abs(lrDecay(lr0, k, 0) - lr0);
+  });
+  check('weightDecay：闭式 w·(1−lr·λ)（L2 惩罚梯度步，无偏缩放）', 0, function () {
+    var w = [1.2, -0.7, 3.3, 0.0], lr = 0.01, lam = 0.5;
+    return maxAbsDiff(weightDecay(w, lr, lam), w.map(function (v) { return v * (1 - lr * lam); }));
+  });
+  check('polyakAvg：指数/窗口平均 = 算术平均（Polyak–Ruppert 平均）', 0, function () {
+    var xs = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+    return maxAbsDiff(polyakAvg(xs), [4, 5, 6]);
+  });
+  check('splitHeads / concatHeads：多头分拆-拼接往返恒等（d 整除 H）', 0, function () {
+    var T = 4, d = 6, H = 3;
+    var X = Array.from({ length: T }, function (_, t) { return Array.from({ length: d }, function (_, j) { return t * 10 + j; }); });
+    return maxAbsDiff(concatHeads(splitHeads(X, H)), X);
+  });
+  check('dropout：反向缩放 1/(1−p) 保持期望（p=0 恒等 + 蒙特卡洛均值→x）', 0.08, function () {
+    var x = [1.5, -2.0, 3.0, 0.5, -1.0], id = dropout(x, 0, 7);
+    var p = 0.3, N = 2000, acc = x.map(function () { return 0; });
+    for (var s = 1; s <= N; s++) { var d = dropout(x, p, s); for (var i = 0; i < x.length; i++) acc[i] += d[i]; }
+    var mean = acc.map(function (v) { return v / N; });
+    var worst = maxAbsDiff(id, x);
+    mean.forEach(function (m, i) { worst = Math.max(worst, Math.abs(m - x[i])); });
+    return worst;
+  });
+  check('conv1d：等价于 im2col Toeplitz 矩阵-向量乘法（stride=1, pad=0）', 0, function () {
+    var x = [1, 2, 3, 4, 5], k = [0.5, -1, 2], out = conv1d(x, k, 1, 0);
+    var n = x.length, kk = k.length, m = n - kk + 1;
+    var T = Array.from({ length: m }, function (_, s) {
+      return Array.from({ length: n }, function (_, jj) { return (jj >= s && jj < s + kk) ? k[jj - s] : 0; });
+    });
+    var ref = T.map(function (row) { return row.reduce(function (a, v, j) { return a + v * x[j]; }, 0); });
+    return maxAbsDiff(out, ref);
+  });
+  check('weightNorm：重新参数化后范数 ‖w‖ = |g|（方向保留、幅度由 g 控制）', 0, function () {
+    var v = [3, 4, 0], g = 2.5;
+    return Math.abs(norm2(weightNorm(v, g)) - Math.abs(g));
+  });
+  check('ropeApply：旋转位置编码保持范数（2×2 旋转矩阵正交）', 1e-12, function () {
+    var x = [1, 2, 3, 4, 5, 6];
+    return Math.abs(norm2(ropeApply(x, 3, 10000)) - norm2(x));
+  });
+  check('groupNorm：逐组（group）内归一化后均值 = 0（与 layerNorm 同构）', 1e-12, function () {
+    var X = Array.from({ length: 5 }, function (_, i) { return Array.from({ length: 8 }, function (_, j) { return Math.sin(i + j) * 3 + 1; }); });
+    var out = groupNorm(X, 2), g = 2, maxMean = 0;
+    out.forEach(function (row) { for (var gr = 0; gr < g; gr++) { var s = 0; for (var j = gr * 4; j < (gr + 1) * 4; j++) s += row[j]; maxMean = Math.max(maxMean, Math.abs(s / 4)); } });
+    return maxMean;
+  });
+  check('labelSmooth：平滑后仍为合法分布（和 = 1）且 eps=0 退化为 one-hot', 0, function () {
+    var oh = [1, 0, 0, 0];
+    var a = labelSmooth(oh, 0), b = labelSmooth(oh, 0.1);
+    return Math.abs(a.reduce(function (x, y) { return x + y; }, 0) - 1) + Math.abs(b.reduce(function (x, y) { return x + y; }, 0) - 1) + maxAbsDiff(a, oh);
+  });
+  check('mixup：端点 λ=0→x₂、λ=1→x₁、且 mixup(x,x,λ)=x（凸组合恒等式）', 0, function () {
+    var x1 = [1, 2, 3], x2 = [4, 5, 6];
+    return maxAbsDiff(mixup(x1, x2, 0), x2) + maxAbsDiff(mixup(x1, x2, 1), x1) + maxAbsDiff(mixup(x1, x1, 0.7), x1);
+  });
+  check('mqa：输出形状守恒（H×T×d）且第 h 头 ≡ selfAttention(Qₕ,K,V)（定义一致性）', 0, function () {
+    var T = 3, d = 4, rng = mulberry32(42);
+    var Q = Array.from({ length: 2 }, function () { return Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); }); });
+    var K = Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); });
+    var V = Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); });
+    var out = mqa(Q, K, V), worst = (out.length !== Q.length) ? 1 : 0;
+    for (var h = 0; h < Q.length; h++) worst = Math.max(worst, maxAbsDiff(out[h], selfAttention(Q[h], K, V, false).output));
+    return worst;
+  });
+  check('gqa：分组查询注意力输出形状守恒（H×T×d）', 0, function () {
+    var T = 3, d = 4, rng = mulberry32(7);
+    var Q = Array.from({ length: 4 }, function () { return Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); }); });
+    var K = Array.from({ length: 2 }, function () { return Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); }); });
+    var V = Array.from({ length: 2 }, function () { return Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); }); });
+    var out = gqa(Q, K, V, 2);
+    return (out.length !== Q.length) + (out[0].length !== T) + (out[0][0].length !== d);
   });
 
   function runChecks() {
