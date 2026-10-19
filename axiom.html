@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.8';
+  var VERSION = '1.3.9';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3381,6 +3381,245 @@
     return x;
   }
 
+  /* ==========================================================================
+   * 算法库扩展（v1.3.9）—— 二叉堆 / 堆优化 Dijkstra / A* / FFT 卷积 /
+   *   CSR 稀疏矩阵 / Prim+Kruskal MST / 二分求根 / Kadane
+   *   铁律同上：每条携带可独立复算硬不变量
+   * ======================================================================== */
+
+  /* 二叉堆（小顶堆）—— ⚠️ 数组元素间 < / <= 会走字符串强制转换，必须传显式 less */
+  function heapPush(h, x, less) {
+    less = less || function (a, b) { return a < b; };
+    h.push(x);
+    var i = h.length - 1;
+    while (i > 0) {
+      var p = (i - 1) >> 1;
+      if (!less(h[i], h[p])) break;
+      var t = h[p]; h[p] = h[i]; h[i] = t;
+      i = p;
+    }
+  }
+  function heapPop(h, less) {
+    less = less || function (a, b) { return a < b; };
+    var top = h[0], last = h.pop();
+    if (h.length) {
+      h[0] = last;
+      var i = 0, n = h.length;
+      for (; ;) {
+        var l = 2 * i + 1, r = l + 1, s = i;
+        if (l < n && less(h[l], h[s])) s = l;
+        if (r < n && less(h[r], h[s])) s = r;
+        if (s === i) break;
+        var t = h[s]; h[s] = h[i]; h[i] = t;
+        i = s;
+      }
+    }
+    return top;
+  }
+  /* 堆排序 —— 全部入堆后依次弹出得升序（O(n log n)，原地外排序） */
+  function heapSort(a) {
+    var h = [];
+    for (var i = 0; i < a.length; i++) heapPush(h, a[i]);
+    var out = [];
+    while (h.length) out.push(heapPop(h));
+    return out;
+  }
+
+  /* 堆优化 Dijkstra —— 二叉堆优先队列 + 过期条目惰性删除（O((V+E)·logV)） */
+  function dijkstraHeap(n, edges, src) {
+    var adj = [];
+    for (var i = 0; i < n; i++) adj.push([]);
+    for (var k = 0; k < edges.length; k++) adj[edges[k][0]].push([edges[k][1], edges[k][2]]);
+    var dist = new Array(n).fill(Infinity);
+    dist[src] = 0;
+    var lessF = function (a, b) { return a[0] < b[0]; };   // 按距离键比较（禁字符串 coercion）
+    var h = [];
+    heapPush(h, [0, src], lessF);
+    while (h.length) {
+      var top = heapPop(h, lessF), d = top[0], u = top[1];
+      if (d > dist[u]) continue;                       // 过期条目
+      for (var j = 0; j < adj[u].length; j++) {
+        var v = adj[u][j][0], w = adj[u][j][1];
+        if (d + w < dist[v]) { dist[v] = d + w; heapPush(h, [dist[v], v], lessF); }
+      }
+    }
+    return dist;
+  }
+
+  /* A* —— 启发式搜索；可采纳启发（h ≤ 真实代价）保证最优性；返回距离与扩展节点数 */
+  function aStar(n, edges, src, goal, h) {
+    var adj = [];
+    for (var i = 0; i < n; i++) adj.push([]);
+    for (var k = 0; k < edges.length; k++) adj[edges[k][0]].push([edges[k][1], edges[k][2]]);
+    var dist = new Array(n).fill(Infinity);
+    dist[src] = 0;
+    var lessF = function (a, b) { return a[0] < b[0]; };
+    var open = [];
+    heapPush(open, [h(src), src], lessF);
+    var expanded = 0;
+    while (open.length) {
+      var top = heapPop(open, lessF), u = top[1];
+      if (u === goal) return { dist: dist[goal], expanded: expanded };
+      expanded++;
+      for (var j = 0; j < adj[u].length; j++) {
+        var v = adj[u][j][0], w = adj[u][j][1], nd = dist[u] + w;
+        if (nd < dist[v]) { dist[v] = nd; heapPush(open, [nd + h(v), v], lessF); }
+      }
+    }
+    return { dist: dist[goal], expanded: expanded };
+  }
+
+  /* FFT 卷积 —— 循环卷积定理 c = IFFT(FFT(a)·FFT(b))（n 为 2 的幂，复数 {re,im}） */
+  function ifft(X) {
+    var n = X.length;
+    var c = X.map(function (v) { return { re: v.re, im: -v.im }; });
+    var F = fft(c);
+    return F.map(function (v) { return { re: v.re / n, im: -v.im / n }; });
+  }
+  function fftConvolve(a, b) {
+    var FA = fft(a.map(function (x) { return { re: x, im: 0 }; }));
+    var FB = fft(b.map(function (x) { return { re: x, im: 0 }; }));
+    var FC = FA.map(function (v, i) {
+      return { re: v.re * FB[i].re - v.im * FB[i].im, im: v.re * FB[i].im + v.im * FB[i].re };
+    });
+    return ifft(FC).map(function (v) { return v.re; });
+  }
+
+  /* CSR 稀疏矩阵 —— 行压缩存储（indptr 行指针 / indices 列下标 / data 值，零省略） */
+  function denseToCSR(M) {
+    var m = M.length, n = M[0].length;
+    var indptr = [0], indices = [], data = [];
+    for (var i = 0; i < m; i++) {
+      for (var j = 0; j < n; j++) {
+        if (M[i][j] !== 0) { indices.push(j); data.push(M[i][j]); }
+      }
+      indptr.push(data.length);
+    }
+    return { m: m, n: n, indptr: indptr, indices: indices, data: data };
+  }
+  function csrMatVec(S, x) {
+    var y = new Array(S.m).fill(0);
+    for (var i = 0; i < S.m; i++) {
+      var s = 0;
+      for (var k = S.indptr[i]; k < S.indptr[i + 1]; k++) s += S.data[k] * x[S.indices[k]];
+      y[i] = s;
+    }
+    return y;
+  }
+  function csrTranspose(S) {
+    var counts = new Array(S.n).fill(0);
+    for (var t = 0; t < S.indices.length; t++) counts[S.indices[t]]++;
+    var indptr = new Array(S.n + 1).fill(0);
+    for (var j = 0; j < S.n; j++) indptr[j + 1] = indptr[j] + counts[j];
+    var next = indptr.slice(0, S.n), indices = new Array(S.data.length), data = new Array(S.data.length);
+    for (var i2 = 0; i2 < S.m; i2++) {
+      for (var k2 = S.indptr[i2]; k2 < S.indptr[i2 + 1]; k2++) {
+        var j2 = S.indices[k2], p = next[j2]++;
+        indices[p] = i2;
+        data[p] = S.data[k2];
+      }
+    }
+    return { m: S.n, n: S.m, indptr: indptr, indices: indices, data: data };
+  }
+  function csrToDense(S) {
+    var M = [];
+    for (var i = 0; i < S.m; i++) M.push(new Array(S.n).fill(0));
+    for (var i2 = 0; i2 < S.m; i2++) {
+      for (var k = S.indptr[i2]; k < S.indptr[i2 + 1]; k++) M[i2][S.indices[k]] = S.data[k];
+    }
+    return M;
+  }
+
+  /* Prim MST（稠密 O(V²)） + Kruskal MST（并查集 O(E logE)） + 暴力枚举生成树参照 */
+  function primMST(n, edges) {
+    var adj = [];
+    for (var i = 0; i < n; i++) adj.push([]);
+    for (var k = 0; k < edges.length; k++) {
+      adj[edges[k][0]].push([edges[k][1], edges[k][2]]);
+      adj[edges[k][1]].push([edges[k][0], edges[k][2]]);
+    }
+    var inT = new Array(n).fill(false), key = new Array(n).fill(Infinity);
+    key[0] = 0;
+    var total = 0;
+    for (var it = 0; it < n; it++) {
+      var u = -1, best = Infinity;
+      for (var i2 = 0; i2 < n; i2++) if (!inT[i2] && key[i2] < best) { best = key[i2]; u = i2; }
+      if (u === -1) break;                    // 不连通：提前收尾
+      inT[u] = true;
+      total += key[u];
+      for (var j = 0; j < adj[u].length; j++) {
+        var v = adj[u][j][0], w = adj[u][j][1];
+        if (!inT[v] && w < key[v]) key[v] = w;
+      }
+    }
+    return total;
+  }
+  function kruskalMST(n, edges) {
+    var parent = [];
+    for (var i = 0; i < n; i++) parent.push(i);
+    var find = function (x) {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }   // 路径压缩
+      return x;
+    };
+    var sorted = edges.slice().sort(function (a, b) { return a[2] - b[2]; });
+    var total = 0, count = 0;
+    for (var k = 0; k < sorted.length; k++) {
+      var ru = find(sorted[k][0]), rv = find(sorted[k][1]);
+      if (ru !== rv) { parent[ru] = rv; total += sorted[k][2]; count++; }
+    }
+    return { total: total, count: count };
+  }
+  /* 暴力枚举所有 (n−1) 边子集的生成树（小图 n≤6 独立参照，O(E^{n−1})） */
+  function bruteForceMST(n, edges) {
+    var E = edges.length, need = n - 1, best = Infinity;
+    var combos = function (start, chosen, w) {
+      if (chosen === need) {
+        var parent = [];
+        for (var i = 0; i < n; i++) parent.push(i);
+        var find = function (x) {
+          while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+          return x;
+        };
+        var ok = true;
+        for (var k = 0; k < w.length; k++) {
+          var ru = find(w[k][0]), rv = find(w[k][1]);
+          if (ru === rv) { ok = false; break; }
+          parent[ru] = rv;
+        }
+        if (ok) {
+          var roots = {}, cnt = 0;
+          for (var i2 = 0; i2 < n; i2++) { var r = find(i2); if (!roots[r]) { roots[r] = 1; cnt++; } }
+          if (cnt === 1) best = Math.min(best, w.reduce(function (s, e) { return s + e[2]; }, 0));
+        }
+        return;
+      }
+      for (var i3 = start; i3 < E; i3++) { w.push(edges[i3]); combos(i3 + 1, chosen + 1, w); w.pop(); }
+    };
+    combos(0, 0, []);
+    return best;
+  }
+
+  /* 二分求根 —— 括号区间 [lo,hi]（f(lo)·f(hi)<0）逐次折半（线性收敛，绝对可靠） */
+  function bisect(f, lo, hi, tol, maxIter) {
+    var flo = f(lo), fhi = f(hi);
+    for (var i = 0; i < maxIter; i++) {
+      var mid = (lo + hi) / 2, fm = f(mid);
+      if (Math.abs(fm) < tol || (hi - lo) < 1e-16) return mid;
+      if (flo * fm < 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+    }
+    return (lo + hi) / 2;
+  }
+
+  /* Kadane 最大子数组 —— 线性 DP：cur = max(aᵢ, cur + aᵢ)（O(n)） */
+  function kadane(a) {
+    var best = a[0], cur = a[0];
+    for (var i = 1; i < a.length; i++) {
+      cur = Math.max(a[i], cur + a[i]);
+      best = Math.max(best, cur);
+    }
+    return best;
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -6031,6 +6270,114 @@
     return Math.abs(x - Math.exp(lambda));
   });
 
+  /* —— 算法库扩展硬不变量（v1.3.9，9 条）—— */
+  check('heapSort：二叉堆 push/pop 序 ≡ Array.sort 升序（200 元素，显式比较器）', 0, function () {
+    var rng = mulberry32(301);
+    var a = Array.from({ length: 200 }, function () { return Math.round((rng() * 2 - 1) * 1000); });
+    var ref = a.slice().sort(function (x, y) { return x - y; });
+    var hs = heapSort(a), d = 0;
+    for (var i = 0; i < a.length; i++) d = Math.max(d, Math.abs(hs[i] - ref[i]));
+    return d;
+  });
+  check('dijkstraHeap：堆优先队列 ≡ Bellman–Ford ≡ 线性扫描 Dijkstra（含不可达 ∞）', 1e-12, function () {
+    var rng = mulberry32(302), n = 14, edges = [];
+    for (var u = 0; u < n; u++) for (var v = 0; v < n; v++) if (rng() < 0.35) edges.push([u, v, 0.5 + rng() * 3]);
+    var d1 = dijkstraHeap(n, edges, 3), d2 = bellmanFord(n, edges, 3), d0 = dijkstra(n, edges, 3), worst = 0;
+    for (var i = 0; i < n; i++) {
+      if (d1[i] !== d2[i]) worst = Math.max(worst, Math.abs(d1[i] - d2[i]));   // ∞−∞ = NaN 已由 !== 短路
+      if (d1[i] !== d0[i]) worst = Math.max(worst, Math.abs(d1[i] - d0[i]));
+    }
+    return worst;
+  });
+  /* A* 网格探针：10 个 6×6 随机阻挡网格（seed 固定 ⇒ 完全可复现） */
+  function aStarGridProbe(seed, useHeuristic) {
+    var rng = mulberry32(seed), W = 6, H = 6, worst = 0, expanded = 0, grids = 0;
+    for (var g = 0; g < 10; g++) {
+      var blocked = Array.from({ length: W * H }, function () { return rng() < 0.22; });
+      var src = 0, goal = W * H - 1;
+      blocked[src] = false; blocked[goal] = false;
+      var n = W * H, edges = [];
+      for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+        if (blocked[y * W + x]) continue;
+        if (x + 1 < W && !blocked[y * W + x + 1]) edges.push([y * W + x, y * W + x + 1, 1]);
+        if (y + 1 < H && !blocked[(y + 1) * W + x]) edges.push([y * W + x, (y + 1) * W + x, 1]);
+      }
+      var gx = function (i) { return i % W; }, gy = function (i) { return Math.floor(i / W); };
+      var h = useHeuristic
+        ? function (i) { return Math.hypot(gx(i) - gx(goal), gy(i) - gy(goal)); }
+        : function () { return 0; };
+      var aR = aStar(n, edges, src, goal, h), dR = dijkstra(n, edges, src);
+      if (aR.dist === Infinity && dR[goal] === Infinity) continue;
+      grids++;
+      if (aR.dist !== dR[goal]) worst = Math.max(worst, Math.abs(aR.dist - dR[goal]));
+      expanded += aR.expanded;
+    }
+    return { worst: worst, expanded: expanded, grids: grids };
+  }
+  check('aStar：可采纳欧氏启发下最优距离 ≡ Dijkstra（10 个 6×6 网格）', 1e-12, function () {
+    return aStarGridProbe(303, true).worst;
+  });
+  check('aStar：欧氏启发严格剪枝（扩展节点数 < h≡0 一致代价搜索）', 0, function () {
+    var e = aStarGridProbe(303, true).expanded, z = aStarGridProbe(303, false).expanded;
+    return e < z ? 0 : 1;
+  });
+  check('fftConvolve：FFT 循环卷积 ≡ 朴素 O(n²)（卷积定理，n=16）', 1e-9, function () {
+    var rng = mulberry32(304), n = 16;
+    var a = Array.from({ length: n }, function () { return rng() * 2 - 1; });
+    var b = Array.from({ length: n }, function () { return rng() * 2 - 1; });
+    var c = fftConvolve(a, b), d = 0;
+    for (var k = 0; k < n; k++) {
+      var s = 0;
+      for (var j = 0; j < n; j++) s += a[j] * b[(k - j + n) % n];
+      d = Math.max(d, Math.abs(c[k] - s));
+    }
+    return d;
+  });
+  check('csr：稀疏 matVec ≡ 稠密 matVec + 转置 ≡ 稠密 transpose（结构守恒）', 1e-12, function () {
+    var rng = mulberry32(305);
+    var M = Array.from({ length: 9 }, function (_, i) { return Array.from({ length: 7 }, function (_, j) { return rng() < 0.3 ? Math.round((rng() * 2 - 1) * 100) / 10 : 0; }); });
+    var S = denseToCSR(M), x = Array.from({ length: 7 }, function () { return rng() * 2 - 1; });
+    var y1 = csrMatVec(S, x), y2 = matVec(M, x), e1 = 0;
+    for (var i = 0; i < 9; i++) e1 = Math.max(e1, Math.abs(y1[i] - y2[i]));
+    var e2 = maxAbsDiff2(csrToDense(csrTranspose(S)), transpose(M));
+    return Math.max(e1, e2);
+  });
+  check('mst：Prim ≡ Kruskal ≡ 暴力枚举生成树（12 小图全枚举 + 连通大图边数 n−1）', 1e-9, function () {
+    var rng = mulberry32(306), worst = 0;
+    for (var t = 0; t < 12; t++) {
+      var n = 6, edges = [];
+      for (var u = 0; u < n; u++) for (var v = u + 1; v < n; v++) if (rng() < 0.55) edges.push([u, v, Math.round((0.5 + rng() * 4) * 10) / 10]);
+      var bf = bruteForceMST(n, edges);
+      if (bf === Infinity) continue;
+      worst = Math.max(worst, Math.abs(primMST(n, edges) - bf), Math.abs(kruskalMST(n, edges).total - bf));
+    }
+    var n2 = 12, edges2 = [];
+    for (var v = 1; v < n2; v++) edges2.push([v, Math.floor(rng() * v), Math.round((0.5 + rng() * 5) * 100) / 100]);   // 随机生成树 ⇒ 必然连通
+    for (var u2 = 0; u2 < n2; u2++) for (var v2 = u2 + 1; v2 < n2; v2++) if (rng() < 0.3) edges2.push([u2, v2, Math.round((0.5 + rng() * 5) * 100) / 100]);
+    var k2 = kruskalMST(n2, edges2);
+    worst = Math.max(worst, Math.abs(primMST(n2, edges2) - k2.total), Math.abs(k2.count - (n2 - 1)));
+    return worst;
+  });
+  check('bisect：括号二分根 ≡ Newton 根（x³−2x−5 = 0 于 [2,3]，|f(x*)|=0）', 1e-12, function () {
+    var f = function (x) { return x * x * x - 2 * x - 5; };
+    var df = function (x) { return 3 * x * x - 2; };
+    var rB = bisect(f, 2, 3, 1e-16, 200), rN = newton(f, df, 2, 1e-15, 100);
+    return Math.max(Math.abs(rB - rN), Math.abs(f(rB)));
+  });
+  check('kadane：最大子数组和 ≡ 暴力枚举 O(n²)（20 实例整数精确）', 0, function () {
+    var rng = mulberry32(307), worst = 0;
+    for (var t = 0; t < 20; t++) {
+      var a = Array.from({ length: 40 }, function () { return Math.round((rng() * 2 - 1) * 100); });
+      var best = -Infinity;
+      for (var i = 0; i < a.length; i++) {
+        var s = 0;
+        for (var j = i; j < a.length; j++) { s += a[j]; if (s > best) best = s; }
+      }
+      worst = Math.max(worst, Math.abs(kadane(a) - best));
+    }
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -6145,6 +6492,12 @@
     svd: svd, luDecompose: luDecompose, fft: fft, dft: dft,
     pageRank: pageRank, dijkstra: dijkstra, bellmanFord: bellmanFord,
     sliceSample: sliceSample, newton: newton, rk4: rk4,
+    /* 算法库扩展（v1.3.9）—— 二叉堆/堆优化 Dijkstra/A星/FFT 卷积/CSR/MST/二分/Kadane */
+    heapPush: heapPush, heapPop: heapPop, heapSort: heapSort,
+    dijkstraHeap: dijkstraHeap, aStar: aStar, ifft: ifft, fftConvolve: fftConvolve,
+    denseToCSR: denseToCSR, csrMatVec: csrMatVec, csrTranspose: csrTranspose, csrToDense: csrToDense,
+    primMST: primMST, kruskalMST: kruskalMST, bruteForceMST: bruteForceMST,
+    bisect: bisect, kadane: kadane,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
