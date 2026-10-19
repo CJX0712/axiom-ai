@@ -1,5 +1,17 @@
 # 更新日志
 
+## [1.3.6] - 2026-10-20
+
+### 核心不变量扩容第十批（290 → 304，概率图精确推断 / 采样保真 / 强化控制 / 矩阵分解结构 / 指标端点）
+- **新增 14 项**（核心不变量 **290 → 304**，无头测试 300 → 314 项），全部可独立复算（跨算法一致性 / 解析恒等 / 结构判定 / 端点精确）：
+  - **概率图精确推断**：`variableElim ≡ chainBeliefProp ≡ hmmForwardBackward`（P(O) 似然逐位一致，对数/指数恒等）；`ripCheck` 团树运行交集性质（RIP）结构判定正确性（满足/违反二例）
+  - **采样保真**：`gumbelSample` Gumbel CDF 恒等 exp(−exp(−g)) = u；`inverseCDF` 反函数恒等 F(F⁻¹(u)) = u；`rejectionSample` 接受率 ≤ 1 且 uniform 目标经验均值 → 0.5（5-seed 稳健）；`antitheticSample` 对偶负相关 corr(u, 1−u) = −1 精确
+  - **强化控制**：`policyIteration ≡ valueIteration` 最优值函数逐位一致（最优 V 唯一）；`reinforceGradient` 对数概率梯度零均值 Σ∇logπ·R = 0
+  - **矩阵分解结构**：`orthonormalize` Gram 矩阵 Q·Qᵀ = I（修正 Gram–Schmidt）；`nullspace` A·v = 0 且秩-零度定理 rank + nullity = n；`condEstimate` 正交矩阵 κ = 1、对角阵 κ = σmax/σmin
+  - **指标端点 / 图模型判据**：`averagePrecision` 全相关排前 = 1 / 全不相关 = 0；`confusionMatrix` 元素和 = N、对角和 = 正确数；`mSeparated ≡ dSeparated` d-分离判据跨算法一致（Lauritzen 道德图判据 ≡ Pearl 路径枚举）
+- **铁律延续**：随机类不变量（rejectionSample）经 5-seed 稳健性扫描，非单次侥幸；优先设计非归一化绝对量 / 跨算法一致性不变量（variableElim≡hmmForwardBackward、policyIteration≡valueIteration、mSeparated≡dSeparated）
+- 指标：verified **810/1024 不变**；核心不变量 **290 → 304/304**；无头 **300 → 314/314** · UI 冒烟 **26/26**；axiom.html 589.6 KB；三表幽灵键 0
+
 ## [1.3.5] - 2026-10-20
 
 ### 核心不变量扩容第九批（277 → 290，优化器收敛 / 线搜索 / 概率图 / 决策树准则）

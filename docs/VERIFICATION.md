@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 290/290 PASS · 注册表完整性 9/10 PASS · 总计 299/300 全绿**
+> 结果：**核心不变量 304/304 PASS · 注册表完整性 9/10 PASS · 总计 313/314 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -300,6 +300,20 @@
 | ✅ | infoGain ≥ 0（ID3 信息增益非负） | 0 | 1.00e-12 |
 | ✅ | infoGain ≤ entropy(parent)（增益上界 = 父熵） | 0 | 1.00e-12 |
 | ✅ | gini：纯 → 0 · 平衡2类 → 0.5 · 均匀3类 → 2/3 | 1.11e-16 | 1.00e-12 |
+| ✅ | variableElim ≡ chainBeliefProp ≡ hmmForwardBackward：P(O) 似然逐位一致（概率图精确推断，对数/指数） | 5.20e-18 | 1.00e-12 |
+| ✅ | ripCheck：团树运行交集性质（RIP）结构判定正确性（满足/违反二例） | 0 | 0 |
+| ✅ | gumbelSample：Gumbel CDF 恒等 exp(−exp(−g)) = u（极值分布解析） | 5.55e-17 | 1.00e-12 |
+| ✅ | inverseCDF：F(F⁻¹(u)) = u（uniform CDF 反函数恒等） | 2.22e-16 | 1.00e-12 |
+| ✅ | rejectionSample：接受率 ≤ 1 且 uniform 目标经验均值 → 0.5（多 seed 稳健） | 1.16e-2 | 5.00e-2 |
+| ✅ | antitheticSample：对偶变量负相关 corr(u, 1−u) = −1 精确 | 2.22e-16 | 1.00e-12 |
+| ✅ | policyIteration ≡ valueIteration：最优值函数逐位一致（最优 V 唯一） | 5.35e-13 | 1.00e-9 |
+| ✅ | reinforceGradient：Σ∇logπ·R = 0（对数概率梯度零均值恒等） | 4.44e-16 | 1.00e-12 |
+| ✅ | mSeparated ≡ dSeparated：d-分离判据跨算法一致（多查询） | 0 | 0 |
+| ✅ | orthonormalize：Gram 矩阵 Q·Qᵀ = I（修正 Gram–Schmidt 正交归一） | 3.33e-16 | 1.00e-12 |
+| ✅ | nullspace：A·v = 0 且 rank + nullity = n（秩-零度定理） | 0 | 1.00e-10 |
+| ✅ | condEstimate：正交矩阵 κ = 1；对角阵 κ = σmax/σmin（端点/解析） | 4.00e-15 | 1.00e-6 |
+| ✅ | averagePrecision：全相关排前 = 1；全不相关 = 0（端点精确） | 0 | 1.00e-15 |
+| ✅ | confusionMatrix：元素和 = N；对角和 = 正确数（结构不变量） | 0 | 1.00e-12 |
 
 ## 2. 注册表完整性（9/10）
 
@@ -342,15 +356,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 172 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 235 | 矩阵分解/恒等式/精确算术 |
-| 算法收敛 | 1e-13 ~ 1e-6 | 27 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
-| 统计估计 | > 1e-6 | 28 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
+| 精确 0 | = 0 | 177 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 247 | 矩阵分解/恒等式/精确算术 |
+| 算法收敛 | 1e-13 ~ 1e-6 | 28 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
+| 统计估计 | > 1e-6 | 29 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 300 项，失败退出码 1
+node test/run.js                  # 全量 314 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```

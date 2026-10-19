@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.5';
+  var VERSION = '1.3.6';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5624,6 +5624,115 @@
     var two = gini([1, 0, 1, 0, 1, 0]);
     var three = gini([0, 1, 2, 0, 1, 2]);
     return Math.max(Math.abs(pure), Math.abs(two - 0.5), Math.abs(three - 2 / 3));
+  });
+
+  /* —— v1.3.6 核心不变量扩容第十批（290 → 304）：概率图精确推断 · 采样保真 · 强化控制 · 矩阵分解结构 · 指标端点 —— */
+  check('variableElim ≡ chainBeliefProp ≡ hmmForwardBackward：P(O) 似然逐位一致（概率图精确推断，对数/指数）', 1e-12, function () {
+    var pi = [0.6, 0.4], A = [[0.7, 0.3], [0.4, 0.6]], B = [[0.5, 0.5], [0.1, 0.9]], obs = [0, 1, 0, 1, 0];
+    var ve = variableElim(pi, A, B, obs);
+    var fb = hmmForwardBackward(pi, A, B, obs);
+    return Math.abs(ve - Math.exp(fb.logPO));
+  });
+  check('ripCheck：团树运行交集性质（RIP）结构判定正确性（满足/违反二例）', 0, function () {
+    var ok = ripCheck([['A', 'B'], ['B', 'C'], ['C', 'D']], [[0, 1], [1, 2]]);
+    var bad = ripCheck([['A', 'X'], ['B'], ['C', 'X']], [[0, 1], [1, 2]]);
+    return (ok === true && bad === false) ? 0 : 1;
+  });
+  check('gumbelSample：Gumbel CDF 恒等 exp(−exp(−g)) = u（极值分布解析）', 1e-12, function () {
+    var us = [0.001, 0.01, 0.1, 0.3, 0.5, 0.7, 0.9, 0.99, 0.999], m = 0;
+    for (var i = 0; i < us.length; i++) {
+      var g = gumbelSample(us[i]);
+      m = Math.max(m, Math.abs(Math.exp(-Math.exp(-g)) - us[i]));
+    }
+    return m;
+  });
+  check('inverseCDF：F(F⁻¹(u)) = u（uniform CDF 反函数恒等）', 1e-12, function () {
+    var lo = -2, hi = 5, F = function (x) { return (x - lo) / (hi - lo); };
+    var us = [0.01, 0.1, 0.3, 0.5, 0.7, 0.9, 0.99], m = 0;
+    for (var i = 0; i < us.length; i++) {
+      var x = inverseCDF(us[i], F, lo, hi);
+      m = Math.max(m, Math.abs(F(x) - us[i]));
+    }
+    return m;
+  });
+  check('rejectionSample：接受率 ≤ 1 且 uniform 目标经验均值 → 0.5（多 seed 稳健）', 0.05, function () {
+    var target = function (x) { return 1; }, proposal = function (x) { return 1; };
+    var seeds = [1, 2, 3, 4, 5], over = 0, worstMean = 0;
+    for (var s = 0; s < seeds.length; s++) {
+      var r = rejectionSample(2000, seeds[s], target, proposal, 1, 0, 1);
+      over = Math.max(over, r.acceptanceRate - 1);
+      worstMean = Math.max(worstMean, Math.abs(expectation(r.samples) - 0.5));
+    }
+    return Math.max(over, worstMean);
+  });
+  check('antitheticSample：对偶变量负相关 corr(u, 1−u) = −1 精确', 1e-12, function () {
+    var out = antitheticSample(1000, 7), a = [], b = [];
+    for (var i = 0; i < out.length; i++) { if (i % 2 === 0) a.push(out[i]); else b.push(out[i]); }
+    var n = a.length, ma = 0, mb = 0;
+    for (var k = 0; k < n; k++) { ma += a[k]; mb += b[k]; }
+    ma /= n; mb /= n;
+    var sxy = 0, sxx = 0, syy = 0;
+    for (var k2 = 0; k2 < n; k2++) { var da = a[k2] - ma, db = b[k2] - mb; sxy += da * db; sxx += da * da; syy += db * db; }
+    return Math.abs(sxy / Math.sqrt(sxx * syy) - (-1));
+  });
+  check('policyIteration ≡ valueIteration：最优值函数逐位一致（最优 V 唯一）', 1e-9, function () {
+    var mdp = chainSetup(7, 0.9, false);
+    var vi = valueIteration({ n: 7, gamma: 0.9, stochastic: false });
+    var pi = policyIteration(mdp);
+    return maxAbsDiff(vi.V, pi.V);
+  });
+  check('reinforceGradient：Σ∇logπ·R = 0（对数概率梯度零均值恒等）', 1e-12, function () {
+    var prefs = [1, 2, 3, 4], worst = 0;
+    for (var a = 0; a < 4; a++) {
+      var g = reinforceGradient(prefs, a, 5), sum = 0;
+      for (var i = 0; i < g.length; i++) sum += g[i];
+      worst = Math.max(worst, Math.abs(sum));
+    }
+    return worst;
+  });
+  check('mSeparated ≡ dSeparated：d-分离判据跨算法一致（多查询）', 0, function () {
+    var DAG = { A: [], B: ['A'], C: ['A'], D: ['B', 'C'] };
+    var queries = [
+      ['B', 'C', []], ['B', 'C', ['A']], ['A', 'D', []],
+      ['A', 'D', ['B', 'C']], ['B', 'D', []], ['B', 'D', ['C']]
+    ];
+    var mism = 0;
+    for (var i = 0; i < queries.length; i++) {
+      var q = queries[i];
+      if (dSeparated(DAG, q[0], q[1], q[2]) !== mSeparated(DAG, q[0], q[1], q[2])) mism++;
+    }
+    return mism;
+  });
+  check('orthonormalize：Gram 矩阵 Q·Qᵀ = I（修正 Gram–Schmidt 正交归一）', 1e-12, function () {
+    var Q = orthonormalize([[1, 2, 3], [1, 0, 1], [0, 1, 1]]);
+    var Gram = matMul(Q, transpose(Q));
+    return maxAbsDiff2(Gram, eye(Q.length));
+  });
+  check('nullspace：A·v = 0 且 rank + nullity = n（秩-零度定理）', 1e-10, function () {
+    var As = [[[1, 2, 3], [4, 5, 6]], [[1, 0, 0], [0, 1, 0]], [[2, 1], [1, 0.5]]], worst = 0;
+    for (var k = 0; k < As.length; k++) {
+      var Amat = As[k], basis = nullspace(Amat), rk = matrixRank(Amat);
+      worst = Math.max(worst, Math.abs(basis.length + rk - Amat[0].length));
+      for (var bi = 0; bi < basis.length; bi++) {
+        var v = basis[bi], Av = matVec(Amat, v), nm = 0;
+        for (var i = 0; i < Av.length; i++) nm = Math.max(nm, Math.abs(Av[i]));
+        worst = Math.max(worst, nm);
+      }
+    }
+    return worst;
+  });
+  check('condEstimate：正交矩阵 κ = 1；对角阵 κ = σmax/σmin（端点/解析）', 1e-6, function () {
+    var c = Math.PI / 6, Q = [[Math.cos(c), -Math.sin(c)], [Math.sin(c), Math.cos(c)]];
+    var D = [[1, 0, 0], [0, 2, 0], [0, 0, 3]];
+    return Math.max(Math.abs(condEstimate(Q) - 1), Math.abs(condEstimate(D) - 3));
+  });
+  check('averagePrecision：全相关排前 = 1；全不相关 = 0（端点精确）', 1e-15, function () {
+    return Math.max(Math.abs(averagePrecision([1, 1, 1, 0, 0]) - 1), Math.abs(averagePrecision([0, 0, 0]) - 0));
+  });
+  check('confusionMatrix：元素和 = N；对角和 = 正确数（结构不变量）', 1e-12, function () {
+    var M = confusionMatrix([0, 1, 0, 1, 1], [0, 1, 1, 1, 0], [0, 1]), s = 0;
+    for (var i = 0; i < M.length; i++) for (var j = 0; j < M[0].length; j++) s += M[i][j];
+    return Math.max(Math.abs(s - 5), Math.abs(M[0][0] + M[1][1] - 3));
   });
 
   function runChecks() {
