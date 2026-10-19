@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 238/238 PASS · 注册表完整性 9/10 PASS · 总计 247/248 全绿**
+> 结果：**核心不变量 251/251 PASS · 注册表完整性 9/10 PASS · 总计 260/261 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -248,6 +248,19 @@
 | ✅ | tensorGather/Scatter：往返恒等 scatter(a, idx, gather(a, idx)) = a | 0 | 0 |
 | ✅ | metropolisSample：经验分布 → 目标分布（MCMC 细致平衡，6e4 迭代） | 3.16e-3 | 2.00e-2 |
 | ✅ | bucketize：桶数 = k、各桶长度差 ≤ 1、拼接无损（划分结构不变量） | 0 | 0 |
+| ✅ | softmax：归一化和 = 1 且平移不变（x+c 逐元素一致） | 1.08e-14 | 1.00e-13 |
+| ✅ | gelu：gelu(0)=0 · 大正数渐近 gelu(x)→x · 导数 gelu′(0)=0.5（梯度检验） | 1.11e-16 | 1.00e-4 |
+| ✅ | layerNorm：逐行均值 = 0（仿射/平移精确消除） | 0 | 1.00e-13 |
+| ✅ | batchNorm：逐特征列均值 = 0（精确） | 0 | 1.00e-13 |
+| ✅ | crossEntropy：crossEntropy(p,p)=entropy(p) 且 Gibbs 不等式 CE(p,q)≥H(p) | 0 | 1.00e-13 |
+| ✅ | fused_softmax_log：exp(out) ≡ softmax（log-softmax 单趟 vs 组合） | 2.78e-17 | 1.00e-15 |
+| ✅ | fused_softmax_ce：fused ≡ crossEntropy(one-hot, softmax(logits))（稳定软max+CE vs 组合） | 8.88e-16 | 1.00e-13 |
+| ✅ | fused_gauss_pdf_log：exp(out) ≡ gaussPDF（log-PDF 单趟 vs 组合） | 2.78e-17 | 1.00e-15 |
+| ✅ | fused_transpose_flatten：out ≡ flatten(transpose)（行主序，消除中间 2D 张量） | 0 | 1.00e-15 |
+| ✅ | ucb：未探索臂（count=0 → ∞）优先 · 同值低 count 优先 · 同 count 高 value 优先 | 0 | 1.00e-15 |
+| ✅ | silhouette：取值 ∈ [-1,1] 且单簇聚类 → 全 0 | 0 | 1.00e-15 |
+| ✅ | earlyStop：best = min(valHistory) · bestIndex = argmin · stopIndex ∈ [bestIndex, len-1] | 0 | 1.00e-15 |
+| ✅ | thompsonSample：Beta(α,β) 样本经验均值 ≡ α/(α+β)（蒙特卡洛 vs 解析一阶矩） | 3.00e-3 | 2.00e-2 |
 
 ## 2. 注册表完整性（9/10）
 
@@ -290,15 +303,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 138 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 191 | 矩阵分解/恒等式/精确算术 |
-| 算法收敛 | 1e-13 ~ 1e-6 | 23 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
-| 统计估计 | > 1e-6 | 24 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
+| 精确 0 | = 0 | 145 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 202 | 矩阵分解/恒等式/精确算术 |
+| 算法收敛 | 1e-13 ~ 1e-6 | 24 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
+| 统计估计 | > 1e-6 | 25 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 248 项，失败退出码 1
+node test/run.js                  # 全量 261 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```

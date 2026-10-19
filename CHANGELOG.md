@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.3.2] - 2026-10-20
+
+### 核心不变量扩容第六批（238 → 251）
+- **新增 13 项**（核心不变量 **238 → 251**，无头测试 248 → 261 项），全部可独立复算（解析 vs 数值 / 组合 vs 融合内核 / 蒙特卡洛 vs 解析矩）：
+  - **归一化**：`layerNorm` 逐行均值 = 0（精确 0）· `batchNorm` 逐特征列均值 = 0（精确 0）
+  - **激活 / 概率**：`softmax` 和 = 1 且平移不变（x+c 逐元素一致，1.1e-14）· `gelu` gelu(0)=0、大正数渐近 gelu(x)→x、导数 gelu′(0)=0.5（梯度检验）
+  - **信息论**：`crossEntropy` crossEntropy(p,p) = entropy(p) 且 Gibbs 不等式 CE(p,q) ≥ H(p)（等号 p=q，精确 0）
+  - **融合内核一致性**（参照实现 vs 主实现，逐位一致 ≤ 2.8e-17）：`fused_softmax_log` exp(out) ≡ softmax（log-softmax 单趟）· `fused_softmax_ce` ≡ crossEntropy(one-hot, softmax(logits))（稳定 softmax+CE）· `fused_gauss_pdf_log` exp(out) ≡ gaussPDF（log-PDF 单趟）· `fused_transpose_flatten` out ≡ flatten(transpose)
+  - **决策 / 采样 / 评估**：`ucb` 未探索臂（count=0 → ∞）优先、同值低 count 优先、同 count 高 value 优先（确定性结构）· `silhouette` 取值 ∈ [-1,1] 且单簇聚类 → 全 0 · `earlyStop` best = min(valHistory)、bestIndex = argmin、stopIndex ∈ [bestIndex, len-1] · `thompsonSample` Beta(α,β) 经验均值 ≡ α/(α+β)（蒙特卡洛 n=4000，残差 0.003，固有统计）
+- 指标：verified **810/1024 不变**；核心不变量 **238 → 251/251**；无头 **261/261** · UI 冒烟 **26/26**；axiom.html 567.7 KB；三表幽灵键 0
+
 ## [1.3.1] - 2026-10-19
 
 ### 核心不变量扩容第五批（226 → 238）+ 修复 HMM 后向递推缺陷

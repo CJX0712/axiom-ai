@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.1';
+  var VERSION = '1.3.2';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5259,6 +5259,81 @@
     var sizes = b.map(function (x) { return x.length; }), flat = [].concat.apply([], b);
     return (b.length !== 3) + (Math.max.apply(null, sizes) - Math.min.apply(null, sizes) > 1)
          + arrMaxDiff(flat, arr) + (flat.length !== arr.length);
+  });
+
+  /* —— v1.3.2 不变量扩容第六批（与数值/概率/优化/采样/融合内核交叉验证）—— */
+  check('softmax：归一化和 = 1 且平移不变（x+c 逐元素一致）', 1e-13, function () {
+    var x = [0.1, 2.3, -1.7, 4.2, 0.5];
+    var s = softmax(x), sum = s.reduce(function (a, b) { return a + b; }, 0);
+    var s2 = softmax(x.map(function (v) { return v + 1000; }));
+    return Math.max(Math.abs(sum - 1), maxAbsDiff(s, s2));
+  });
+  check('gelu：gelu(0)=0 · 大正数渐近 gelu(x)→x · 导数 gelu′(0)=0.5（梯度检验）', 1e-4, function () {
+    var g0 = gelu(0), g20 = gelu(20), eps = 1e-6;
+    var deriv = (gelu(eps) - gelu(-eps)) / (2 * eps);
+    return Math.max(Math.abs(g0 - 0), Math.abs(g20 - 20), Math.abs(deriv - 0.5));
+  });
+  check('layerNorm：逐行均值 = 0（仿射/平移精确消除）', 1e-13, function () {
+    var X = [[1, 2, 3, 4], [-1, 0, 1, 2], [5, 5, 5, 5]];
+    var out = layerNorm(X), m = 0;
+    out.forEach(function (r) { m = Math.max(m, Math.abs(r.reduce(function (a, b) { return a + b; }, 0))); });
+    return m;
+  });
+  check('batchNorm：逐特征列均值 = 0（精确）', 1e-13, function () {
+    var X = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [-1, 0, 2]];
+    var out = batchNorm(X), d = X[0].length, m = 0;
+    for (var j = 0; j < d; j++) { var s = 0; for (var i = 0; i < X.length; i++) s += out[i][j]; m = Math.max(m, Math.abs(s)); }
+    return m;
+  });
+  check('crossEntropy：crossEntropy(p,p)=entropy(p) 且 Gibbs 不等式 CE(p,q)≥H(p)', 1e-13, function () {
+    var p = [0.2, 0.3, 0.5], q = [0.4, 0.4, 0.2];
+    var cepp = crossEntropy(p, p), H = entropy(p), cepq = crossEntropy(p, q);
+    return Math.max(Math.abs(cepp - H), (H - cepq));
+  });
+  check('fused_softmax_log：exp(out) ≡ softmax（log-softmax 单趟 vs 组合）', 1e-15, function () {
+    var x = [0.5, 2.0, -1.0, 3.3], out = fused_softmax_log(x), sm = softmax(x), m = 0;
+    for (var i = 0; i < x.length; i++) m = Math.max(m, Math.abs(Math.exp(out[i]) - sm[i]));
+    return m;
+  });
+  check('fused_softmax_ce：fused ≡ crossEntropy(one-hot, softmax(logits))（稳定软max+CE vs 组合）', 1e-13, function () {
+    var logits = [1.0, 2.5, -0.5, 3.0], cls = 2;
+    var y = new Array(logits.length).fill(0); y[cls] = 1;
+    return Math.abs(fused_softmax_ce(logits, y) - crossEntropy(y, softmax(logits)));
+  });
+  check('fused_gauss_pdf_log：exp(out) ≡ gaussPDF（log-PDF 单趟 vs 组合）', 1e-15, function () {
+    var xs = [-1, 0, 0.5, 2], mu = 0.3, sigma = 1.2, out = fused_gauss_pdf_log(xs, mu, sigma), m = 0;
+    for (var i = 0; i < xs.length; i++) m = Math.max(m, Math.abs(Math.exp(out[i]) - gaussPDF(xs[i], mu, sigma)));
+    return m;
+  });
+  check('fused_transpose_flatten：out ≡ flatten(transpose)（行主序，消除中间 2D 张量）', 1e-15, function () {
+    var M = [[1, 2, 3], [4, 5, 6]], out = fused_transpose_flatten(M), T = transpose(M), ref = [];
+    for (var r = 0; r < T.length; r++) for (var c = 0; c < T[0].length; c++) ref.push(T[r][c]);
+    return maxAbsDiff(out, ref);
+  });
+  check('ucb：未探索臂（count=0 → ∞）优先 · 同值低 count 优先 · 同 count 高 value 优先', 1e-15, function () {
+    var v1 = ucb([0.5, 0.5], [5, 0], 1, 10), v2 = ucb([0, 0], [1, 100], 1, 10);
+    var v3 = ucb([0, 0], [100, 1], 1, 10), v4 = ucb([0.9, 0.1], [10, 10], 1, 10);
+    return (v1 !== 1 || v2 !== 0 || v3 !== 1 || v4 !== 0) ? 1 : 0;
+  });
+  check('silhouette：取值 ∈ [-1,1] 且单簇聚类 → 全 0', 1e-15, function () {
+    var s = silhouette([[0, 0], [0.1, 0.1], [5, 5], [5.1, 5.0]], [0, 0, 1, 1]);
+    var bound = 0; s.forEach(function (v) { bound = Math.max(bound, Math.abs(v) - 1); });
+    var s2 = silhouette([[1, 2], [3, 4], [5, 6]], [0, 0, 0]);
+    var single = s2.reduce(function (a, b) { return Math.max(a, Math.abs(b)); }, 0);
+    return Math.max(bound, single);
+  });
+  check('earlyStop：best = min(valHistory) · bestIndex = argmin · stopIndex ∈ [bestIndex, len-1]', 1e-15, function () {
+    var h = [1.0, 0.8, 0.5, 0.6, 0.4, 0.45, 0.5], r = earlyStop(h, 2);
+    var mn = Math.min.apply(null, h), idx = h.indexOf(mn), bad = 0;
+    if (Math.abs(r.best - mn) > 1e-15) bad = 1;
+    if (r.bestIndex !== idx) bad = 1;
+    if (r.stopIndex < r.bestIndex || r.stopIndex > h.length - 1) bad = 1;
+    return bad;
+  });
+  check('thompsonSample：Beta(α,β) 样本经验均值 ≡ α/(α+β)（蒙特卡洛 vs 解析一阶矩）', 0.02, function () {
+    var alpha = 2, beta = 5, N = 4000, sum = 0;
+    for (var s = 1; s <= N; s++) sum += thompsonSample(alpha, beta, s);
+    return Math.abs(sum / N - alpha / (alpha + beta));
   });
 
   function runChecks() {
