@@ -1,5 +1,18 @@
 # 更新日志
 
+## [1.3.5] - 2026-10-20
+
+### 核心不变量扩容第九批（277 → 290，优化器收敛 / 线搜索 / 概率图 / 决策树准则）
+- **新增 13 项**（核心不变量 **277 → 290**，无头测试 287 → 300 项），全部可独立复算（收敛性 / 充分条件 / 平稳分布 / 信息论界）：
+  - **线性求解器**：`conjugateGradient` 解 SPD 系统 Ax=b 残差 → 0（2.0e-16）；`conjugateGradient` ≡ `solveLinear` 闭式对照（2.2e-16）
+  - **拟牛顿收敛**：`bfgs` 对凸二次目标 ≤30 步收敛到全局最优（‖∇f(x*)‖ 7.1e-9）
+  - **回归**：`linearRegression` 残差 ⊥ X（正规方程 Xᵀr=0，3.9e-15）；`linearRegression` predict ≡ 闭式 Xw（4.4e-16）
+  - **分类器**：`logisticRegression` 收敛到驻点 ‖∇L/n‖ → 0（3.7e-3，凸损失一阶最优）；`logisticRegression` predictProba ∈ [0,1]（sigmoid 值域闭区间，域安全）
+  - **线搜索**：`lineSearch` 满足 Armijo 充分下降（f(x+αd) ≤ f(x)+c1·α·∇f·d）；`wolfeLineSearch` 满足强 Wolfe 双条件（Armijo + 曲率，Nocedal–Wright 算法 3.5/3.6）
+  - **概率图 / MCMC**：`gibbsSampler` 平稳分布 ≈ 解析 π（πP=π，多 seed 稳健，worst|Δ| 4.8e-3）
+  - **决策树准则**：`infoGain` ≥ 0（ID3 增益非负）；`infoGain` ≤ entropy(parent)（增益上界 = 父熵）；`gini` 纯→0 · 平衡2类→0.5 · 均匀3类→2/3
+- 指标：verified **810/1024 不变**；核心不变量 **290/290**；无头 **300/300** · UI 冒烟 **26/26**；axiom.html 584.4 KB；三表幽灵键 0
+
 ## [1.3.4] - 2026-10-20
 
 ### 核心不变量扩容第八批（264 → 277，优化器收敛 / 聚类收敛 / 强化收敛 / 注意力结构 / 采样保真）

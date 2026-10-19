@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.4';
+  var VERSION = '1.3.5';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5497,6 +5497,133 @@
     var X = [[0, 0], [5, 0], [0, 5], [5, 5], [10, 10]], y = [0, 1, 2, 3, 4], bad = 0;
     for (var i = 0; i < X.length; i++) if (knn(X, y, X[i], 1) !== y[i]) bad++;
     return bad;
+  });
+
+  /* —— v1.3.5 不变量扩容第九批（优化器收敛 / 线搜索 / 概率图 / 决策树准则）—— */
+  check('conjugateGradient：解 Ax=b 残差 → 0', 1e-9, function () {
+    var rng = mulberry32(1), n = 6, i, j, k;
+    var M = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) M[i][j] = rng() - 0.5;
+    var Amat = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) { var s = 0; for (k = 0; k < n; k++) s += M[i][k] * M[j][k]; Amat[i][j] = s + (i === j ? 1 : 0); }
+    var b = []; for (i = 0; i < n; i++) b.push(rng() * 2 - 1);
+    var r = conjugateGradient(Amat, b, { tol: 1e-12, maxIter: n + 5 });
+    var Ax = matVec(Amat, r.x), res = 0;
+    for (i = 0; i < n; i++) res += (Ax[i] - b[i]) * (Ax[i] - b[i]);
+    return Math.sqrt(res);
+  });
+  check('conjugateGradient ≡ solveLinear（闭式对照）', 1e-9, function () {
+    var rng = mulberry32(2), n = 6, i, j, k;
+    var M = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) M[i][j] = rng() - 0.5;
+    var Amat = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) { var s = 0; for (k = 0; k < n; k++) s += M[i][k] * M[j][k]; Amat[i][j] = s + (i === j ? 1 : 0); }
+    var b = []; for (i = 0; i < n; i++) b.push(rng() * 2 - 1);
+    var rcg = conjugateGradient(Amat, b, { tol: 1e-12, maxIter: n + 5 });
+    var xlu = solveLinear(Amat, b);
+    return maxAbsDiff(rcg.x, xlu);
+  });
+  check('bfgs：凸二次收敛到全局最优（‖∇f(x*)‖ → 0）', 1e-6, function () {
+    var rng = mulberry32(3), n = 5, i, j, k;
+    var M = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) M[i][j] = rng() - 0.5;
+    var Q = zeros2(n, n);
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) { var s = 0; for (k = 0; k < n; k++) s += M[i][k] * M[j][k]; Q[i][j] = s + (i === j ? 2 : 0); }
+    var bb = []; for (i = 0; i < n; i++) bb.push(rng() * 2 - 1);
+    function f(x) { var v = 0, ii, jj; for (ii = 0; ii < n; ii++) { var si = 0; for (jj = 0; jj < n; jj++) si += Q[ii][jj] * x[jj]; v += 0.5 * si * x[ii]; } var l = 0; for (ii = 0; ii < n; ii++) l -= bb[ii] * x[ii]; return v + l; }
+    function grad(x) { var g = [], ii, jj; for (ii = 0; ii < n; ii++) { var s = 0; for (jj = 0; jj < n; jj++) s += Q[ii][jj] * x[jj]; g.push(s - bb[ii]); } return g; }
+    var x0 = []; for (i = 0; i < n; i++) x0.push(rng());
+    var r = bfgs(f, grad, x0, { maxIter: 300, tol: 1e-10 });
+    var g = r.g, gn = 0; for (i = 0; i < g.length; i++) gn += g[i] * g[i];
+    return Math.sqrt(gn);
+  });
+  check('linearRegression：残差 ⊥ X（正规方程 Xᵀr = 0）', 1e-8, function () {
+    var rng = mulberry32(4), n = 40, d = 4, i, j;
+    var X = [], wt = []; for (j = 0; j < d; j++) wt.push(rng() * 3 - 1);
+    for (i = 0; i < n; i++) { var row = []; for (j = 0; j < d; j++) row.push(rng() * 2 - 1); X.push(row); }
+    var y = X.map(function (r) { return r.reduce(function (s, v, k) { return s + v * wt[k]; }, 0) + 0.01 * (rng() - 0.5); });
+    var r = linearRegression(X, y), yhat = X.map(r.predict), res = y.map(function (v, t) { return v - yhat[t]; }), mx = 0;
+    for (j = 0; j < d; j++) { var s = 0; for (i = 0; i < n; i++) s += X[i][j] * res[i]; mx = Math.max(mx, Math.abs(s)); }
+    return mx;
+  });
+  check('linearRegression：predict ≡ 闭式 Xw', 1e-9, function () {
+    var rng = mulberry32(5), n = 30, d = 3, i, j;
+    var X = [], wt = []; for (j = 0; j < d; j++) wt.push(rng() * 3 - 1);
+    for (i = 0; i < n; i++) { var row = []; for (j = 0; j < d; j++) row.push(rng() * 2 - 1); X.push(row); }
+    var y = X.map(function (r) { return r.reduce(function (s, v, k) { return s + v * wt[k]; }, 0); });
+    var r = linearRegression(X, y);
+    var yhat = X.map(r.predict), Xw = X.map(function (r) { return dot(r, wt); });
+    return maxAbsDiff(yhat, Xw);
+  });
+  check('logisticRegression：收敛到驻点（‖∇L/n‖ → 0）', 1e-2, function () {
+    var rng = mulberry32(6), n = 60, d = 3, i, j;
+    var wt = [], bt = rng();
+    for (j = 0; j < d; j++) wt.push(rng() * 2 - 1);
+    var X = [], y = [];
+    for (i = 0; i < n; i++) { var row = []; for (j = 0; j < d; j++) row.push(rng() * 2 - 1); X.push(row); var z = bt + row.reduce(function (s, v, k) { return s + v * wt[k]; }, 0); y.push(z > 0 ? 1 : 0); }
+    var r = logisticRegression(X, y, { lr: 0.5, iters: 3000 });
+    var gw = new Array(d).fill(0), gb = 0, ii, jj;
+    for (ii = 0; ii < n; ii++) { var z = r.b + dot(r.w, X[ii]); var p = sigmoid(z), e = p - y[ii]; for (jj = 0; jj < d; jj++) gw[jj] += e * X[ii][jj]; gb += e; }
+    var gn = 0; for (jj = 0; jj < d; jj++) gn += gw[jj] * gw[jj]; gn += gb * gb;
+    return Math.sqrt(gn) / n;
+  });
+  check('logisticRegression：predictProba ∈ [0,1]（sigmoid 值域闭区间）', 1e-12, function () {
+    var rng = mulberry32(7), n = 40, d = 2, i, j;
+    var X = [], y = [];
+    for (i = 0; i < n; i++) { var row = [rng() * 4 - 2, rng() * 4 - 2]; X.push(row); y.push(row[0] + row[1] > 0 ? 1 : 0); }
+    var r = logisticRegression(X, y, { lr: 0.5, iters: 2000 });
+    var lo = 1, hi = 0;
+    for (i = 0; i < 10; i++) { var p = sigmoid(dot(r.w, [rng() * 10 - 5, rng() * 10 - 5]) + r.b); lo = Math.min(lo, p); hi = Math.max(hi, p); }
+    return Math.max(lo < -1e-15 ? -lo : 0, hi > 1 + 1e-15 ? hi - 1 : 0);
+  });
+  check('lineSearch：Armijo 充分下降 f(x+αd) ≤ f(x)+c1·α·∇f·d', 1e-12, function () {
+    function f(x) { return 0.5 * (x[0] * x[0] + 2 * x[1] * x[1]); }
+    function g(x) { return [x[0], 2 * x[1]]; }
+    var x = [-2, 1], d = [2, -1];
+    var gd = dot(g(x), d), r = lineSearch(f, g, x, d, { alpha0: 1, c1: 1e-4, rho: 0.5, maxIter: 60 });
+    var lhs = f(r.x), rhs = f(x) + 1e-4 * r.alpha * gd;
+    return r.alpha === 0 ? 0 : Math.max(0, lhs - rhs);
+  });
+  check('wolfeLineSearch：强 Wolfe（Armijo + 曲率）双条件满足', 1e-10, function () {
+    function f(x) { return 0.5 * (x[0] * x[0] + 3 * x[1] * x[1]); }
+    function g(x) { return [x[0], 3 * x[1]]; }
+    var x = [-3, 2], p = [3, -1], gx = g(x), gd = dot(gx, p);
+    var r = wolfeLineSearch(f, g, x, p, gx, { c1: 1e-4, c2: 0.9, alphaMax: 1e3 });
+    if (r.alpha === 0) return 0;
+    var fn = f(r.x), armijo = fn - (f(x) + 1e-4 * r.alpha * gd);
+    var gn = g(r.x), curv = Math.abs(dot(gn, p)) + 0.9 * gd;
+    return Math.max(armijo > 0 ? armijo : 0, curv > 0 ? curv : 0);
+  });
+  check('gibbsSampler：平稳分布 ≈ 解析 π（πP=π，多 seed 稳健）', 0.02, function () {
+    var P = [[0.7, 0.3], [0.4, 0.6]];
+    var pi1 = P[0][1] / (P[0][1] + P[1][0]), pi0 = P[1][0] / (P[0][1] + P[1][0]), worst = 0, s;
+    for (s = 1; s <= 12; s++) { var r = gibbsSampler(P, 60000, 10000, s); worst = Math.max(worst, Math.abs(r.stationary[1] - pi1), Math.abs(r.stationary[0] - pi0)); }
+    return worst;
+  });
+  check('infoGain ≥ 0（ID3 信息增益非负）', 1e-12, function () {
+    var tests = [
+      [[0, 0, 1, 1], [[0, 0], [1, 1]]],
+      [[0, 1, 0, 1, 1, 0], [[0, 1, 1], [0, 1]]],
+      [[1, 1, 1, 0, 0, 0], [[1, 1, 1], [0, 0, 0]]],
+      [[0, 0, 0, 1, 1, 1, 2, 2, 2], [[0, 0, 0, 1, 1], [1, 2, 2, 2]]]
+    ], mn = 1;
+    tests.forEach(function (t) { mn = Math.min(mn, infoGain(t[0], t[1])); });
+    return mn < 0 ? -mn : 0;
+  });
+  check('infoGain ≤ entropy(parent)（增益上界 = 父熵）', 1e-12, function () {
+    var tests = [
+      [[0, 0, 1, 1], [[0, 0], [1, 1]]],
+      [[0, 1, 0, 1, 1, 0], [[0, 1, 1], [0, 1]]],
+      [[1, 1, 1, 0, 0, 0], [[1, 1, 1], [0, 0, 0]]]
+    ], mx = 0;
+    tests.forEach(function (t) { var g = infoGain(t[0], t[1]), h = entropy(labelDist(t[0])); if (g > h) mx = Math.max(mx, g - h); });
+    return mx;
+  });
+  check('gini：纯 → 0 · 平衡2类 → 0.5 · 均匀3类 → 2/3', 1e-12, function () {
+    var pure = gini([3, 3, 3, 3, 3]);
+    var two = gini([1, 0, 1, 0, 1, 0]);
+    var three = gini([0, 1, 2, 0, 1, 2]);
+    return Math.max(Math.abs(pure), Math.abs(two - 0.5), Math.abs(three - 2 / 3));
   });
 
   function runChecks() {

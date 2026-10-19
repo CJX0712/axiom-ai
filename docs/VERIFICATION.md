@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 277/277 PASS · 注册表完整性 9/10 PASS · 总计 286/287 全绿**
+> 结果：**核心不变量 290/290 PASS · 注册表完整性 9/10 PASS · 总计 299/300 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -287,6 +287,19 @@
 | ✅ | gradClip：输出梯度范数 ≤ maxNorm（当原范数超界时恰为 maxNorm） | 0 | 1.00e-12 |
 | ✅ | gmmEM：混合权重 Σ=1（概率单纯形） | 0 | 1.00e-12 |
 | ✅ | knn：1-NN 在训练点上自返（查询点距离为 0 必命中自身） | 0 | 0 |
+| ✅ | conjugateGradient：解 Ax=b 残差 → 0 | 2.02e-16 | 1.00e-9 |
+| ✅ | conjugateGradient ≡ solveLinear（闭式对照） | 2.22e-16 | 1.00e-9 |
+| ✅ | bfgs：凸二次收敛到全局最优（‖∇f(x*)‖ → 0） | 7.10e-9 | 1.00e-6 |
+| ✅ | linearRegression：残差 ⊥ X（正规方程 Xᵀr = 0） | 1.32e-14 | 1.00e-8 |
+| ✅ | linearRegression：predict ≡ 闭式 Xw | 4.44e-16 | 1.00e-9 |
+| ✅ | logisticRegression：收敛到驻点（‖∇L/n‖ → 0） | 2.65e-3 | 1.00e-2 |
+| ✅ | logisticRegression：predictProba ∈ [0,1]（sigmoid 值域闭区间） | 0 | 1.00e-12 |
+| ✅ | lineSearch：Armijo 充分下降 f(x+αd) ≤ f(x)+c1·α·∇f·d | 0 | 1.00e-12 |
+| ✅ | wolfeLineSearch：强 Wolfe（Armijo + 曲率）双条件满足 | 0 | 1.00e-10 |
+| ✅ | gibbsSampler：平稳分布 ≈ 解析 π（πP=π，多 seed 稳健） | 4.83e-3 | 2.00e-2 |
+| ✅ | infoGain ≥ 0（ID3 信息增益非负） | 0 | 1.00e-12 |
+| ✅ | infoGain ≤ entropy(parent)（增益上界 = 父熵） | 0 | 1.00e-12 |
+| ✅ | gini：纯 → 0 · 平衡2类 → 0.5 · 均匀3类 → 2/3 | 1.11e-16 | 1.00e-12 |
 
 ## 2. 注册表完整性（9/10）
 
@@ -329,15 +342,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 167 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 226 | 矩阵分解/恒等式/精确算术 |
-| 算法收敛 | 1e-13 ~ 1e-6 | 25 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
-| 统计估计 | > 1e-6 | 26 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
+| 精确 0 | = 0 | 172 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 235 | 矩阵分解/恒等式/精确算术 |
+| 算法收敛 | 1e-13 ~ 1e-6 | 27 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
+| 统计估计 | > 1e-6 | 28 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 287 项，失败退出码 1
+node test/run.js                  # 全量 300 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```
