@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.5';
+  var VERSION = '1.2.6';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4883,6 +4883,83 @@
     if (arrMaxDiff(fused_label_onehot(labels), oneHot(labelEncode(labels).codes).matrix) > 0) bad++;
     if (Math.abs(fused_allreduce([1, 2, 3, 4]) - reduceAll(broadcast([1, 2, 3, 4]))) > 0) bad++;
     return bad + (n < 40 ? 1e6 : 0); // 守卫：至少覆盖 40 个融合样本
+  });
+  /* —— v1.2.6 不变量扩容第三批：谱定理 / 解析方差 / 结构律 / 复合律 —— */
+  check('trace：幂迹谱定理 tr(A²) = Σλᵢ²', 1e-9, function () {
+    var A = [[4, 1], [1, 3]], A2 = matMul(A, A);
+    var tr = trace(A2), eig = jacobiEigen(A);
+    var sum = eig.values.reduce(function (a, b) { return a + b * b; }, 0);
+    return Math.abs(tr - sum);
+  });
+  check('eigen：重构 A = Σλᵢ·vᵢvᵢᵀ（最强分解一致性，行存储）', 1e-10, function () {
+    var A = [[4, 1], [1, 3]], eig = jacobiEigen(A);
+    var R = [[0, 0], [0, 0]];
+    for (var i = 0; i < 2; i++)
+      for (var j = 0; j < 2; j++)
+        for (var k = 0; k < 2; k++) R[i][j] += eig.values[k] * eig.vectors[k][i] * eig.vectors[k][j];
+    return arrMaxDiff(R, A);
+  });
+  check('binomial：样本方差 ≈ np(1−p)（解析 n=10, p=0.5）', 0.08, function () {
+    var s = binomialSample(10, 0.5, 20000, 1);
+    var m = s.reduce(function (a, b) { return a + b; }, 0) / s.length;
+    var v = s.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / s.length;
+    return Math.abs(v - 2.5);
+  });
+  check('gumbel：样本方差 ≈ π²/6（解析）', 0.06, function () {
+    var us = [0.05, 0.11, 0.23, 0.37, 0.41, 0.53, 0.59, 0.67, 0.71, 0.83, 0.91, 0.97];
+    var s = [];
+    for (var r = 0; r < 2000; r++) for (var i = 0; i < us.length; i++) s.push(gumbelSample(us[(i + r * 7) % us.length]));
+    var m = s.reduce(function (a, b) { return a + b; }, 0) / s.length;
+    var v = s.reduce(function (a, b) { return a + (b - m) * (b - m); }, 0) / s.length;
+    return Math.abs(v - Math.PI * Math.PI / 6);
+  });
+  check('editDistance：三角不等式 d(a,c) ≤ d(a,b) + d(b,c)', 0, function () {
+    var bad = 0, tri = [['kitten', 'sitting', 'sitting'], ['abc', 'abd', 'xyz'], ['', 'a', 'ab']];
+    for (var i = 0; i < tri.length; i++) if (editDistance(tri[i][0], tri[i][2]) > editDistance(tri[i][0], tri[i][1]) + editDistance(tri[i][1], tri[i][2]) + 1e-15) bad++;
+    return bad;
+  });
+  check('conv1d：线性性 conv(αx+βy) = α·conv(x) + β·conv(y)', 1e-12, function () {
+    var x = [1, 2, 3, 4], y = [0.5, -1, 2, 0], k = [1, -1, 2];
+    var lhs = conv1d(x.map(function (v, i) { return 2 * v + 3 * y[i]; }), k),
+        rhs = conv1d(x, k).map(function (v, i) { return 2 * v + 3 * conv1d(y, k)[i]; });
+    return arrMaxDiff(lhs, rhs);
+  });
+  check('rope：复合律 R_n(R_m x) = R_{m+n} x（旋转角可加）', 1e-12, function () {
+    var x = [1, 0, 2, 3];
+    return arrMaxDiff(ropeApply(ropeApply(x, 3, 10000), 5, 10000), ropeApply(x, 8, 10000));
+  });
+  check('qkDot：√d 缩放有效性（未缩放方差 ≈ d 倍）', 20, function () {
+    var d = 64, rng = mulberry32(77), rawVar = 0, scVar = 0, n = 200;
+    function rnd() { return rng() * 2 - 1; }
+    for (var t = 0; t < n; t++) {
+      var q = [], k = [];
+      for (var i = 0; i < d; i++) { q.push(rnd()); k.push(rnd()); }
+      var dot = 0; for (var i2 = 0; i2 < d; i2++) dot += q[i2] * k[i2];
+      rawVar += dot * dot; scVar += (dot / Math.sqrt(d)) * (dot / Math.sqrt(d));
+    }
+    rawVar /= n; scVar /= n;
+    return Math.abs(rawVar / scVar - d);
+  });
+  check('batchnorm：通道独立（改列 0 不影响列 1 输出）', 0, function () {
+    var X = [[1, 10], [3, 20], [5, 30]];
+    var X2 = [[100, 10], [200, 20], [300, 30]];
+    var b1 = batchNorm(X, 1e-5), b2 = batchNorm(X2, 1e-5);
+    return arrMaxDiff(b1.map(function (r) { return [r[1]]; }), b2.map(function (r) { return [r[1]]; }));
+  });
+  check('kFold：折规模均衡（max−min ≤ 1）', 0, function () {
+    var f = kFold(10, 3), sizes = f.map(function (x) { return x.length; });
+    return Math.max.apply(null, sizes) - Math.min.apply(null, sizes) > 1 ? 1 : 0;
+  });
+  check('td0：γ=0 退化为立即结构（V 恰一处 = 1，其余 = 0）', 0, function () {
+    var V = td0Sweep(5, 0), ones = 0;
+    for (var i = 0; i < V.length; i++) if (Math.abs(V[i] - 1) < 1e-12) ones++;
+    return Math.abs(ones - 1) + (V.some(function (v) { return v !== 0 && Math.abs(v - 1) > 1e-12; }) ? 1 : 0);
+  });
+  check('dropout：非零元素 = x/(1−p)（缩放精确）', 0, function () {
+    var x = [1, 2, 3, 4, 5], p = 0.5;
+    var d = dropout(x, p, 42), bad = 0;
+    for (var i = 0; i < x.length; i++) { var want = Math.abs(d[i]) < 1e-15 ? 0 : x[i] / (1 - p); bad += Math.abs(d[i] - want); }
+    return bad;
   });
   /* —— v1.2.5 不变量扩容第二批：谱/结构/收敛/不等式/恒等式 —— */
   check('jacobi：谱不变量 Πλᵢ = det(A)', 1e-9, function () {

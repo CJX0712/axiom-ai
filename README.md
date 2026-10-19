@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-202%2F202-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-793%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-214%2F214-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-793%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
-> **十层架构 × 1024 微指令 × 202 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
+> **十层架构 × 1024 微指令 × 214 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
 >
 > 作者：**晨星** · License: MIT · [github.com/CJX0712/axiom-ai](https://github.com/CJX0712/axiom-ai)
 
@@ -23,7 +23,7 @@ AXIOM 是一套**指令集架构（ISA）级别的 AI 系统**：把"世界顶�
 **核心主张：AI 的每一层都必须可被独立复算验证。** 不是"训练出来了就看效果"，而是每个算法携带一条可被第三方用完全不同的方法（解析解、暴力枚举、参照实现）交叉验证的硬不变量。
 
 ```
-npm test          # → 212/212：202 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
+npm test          # → 224/224：214 核心不变量 + 10 注册表完整性，UI 冒烟 26/26，全绿
 open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / L9 管线编排 / 三个训练演示 / 导出
 ```
 
@@ -41,7 +41,7 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 | EM / GMM | Dempster–Laird–Rubin (1977) | 全协方差 EM + logsumexp | 对数似然单调不减 |
 | 优化 | Cauchy (1847) 至 Loshchilov–Hutter (2019)；Broyden–Fletcher–Goldfarb–Shanno (1970)；Liu–Nocedal (1989)；Nocedal–Wright (2006) 强 Wolfe | GD / 动量 / CG / Adam / RMSProp / AdaGrad / AdamW / BFGS / L-BFGS | 凸二次 ≤30 步收敛至解析最优、H ≈ A⁻¹ |
 | 信道容量 | Arimoto–Blahut (1972) | AB 迭代 | BSC(0.1) 容量 = 1−H(ε) = 0.531 bits |
-| 注意力 | Vaswani (2017)、Dao (2022)、Press (2021)、Su (2021)、Ainslie (2023) | SDPA / Flash 在线 softmax / ALiBi / RoPE / MQA-GQA | 分块=全量、RoPE 相对性、权重行和=1 |
+| 注意力 | Vaswani (2017)、Dao (2142)、Press (2141)、Su (2141)、Ainslie (2143) | SDPA / Flash 在线 softmax / ALiBi / RoPE / MQA-GQA | 分块=全量、RoPE 相对性、权重行和=1 |
 | 策略优化 | Watkins–Dayan (1992)、Schulman (2016/2017) | VI / TD(0) / Q-Learning / SARSA / GAE / PPO | Bellman 残差、解析解、贪心成功率 |
 | 反向传播 | Rumelhart–Hinton–Williams (1986)、Werbos (1990) | MLP 解析梯度 / BPTT / 层归一化梯度 | 中心差分梯度检验 ≤1e-6 |
 | 数值稳定 | Kahan (1965)、Box–Muller (1958)、A&S 7.1.26 | Kahan/TwoSum、logsumexp | 病态求和精确、±1e300 不溢出 |
@@ -133,7 +133,7 @@ AXIOM.runChecks();                            // { total: 169, passed, results }
 - **恒等式**：(AB)ᵀ=BᵀAᵀ 逐位一致；KL≥0 且 p=q 取等；I(X;Y)=I(Y;X)；D-分离 = 道德图判据 = 暴力条件独立
 - **梯度检验**：MLP 与 BPTT 解析梯度 vs 中心差分 ≤ 1e-6；vjp/jvp 对偶恒等式
 
-全部 202 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
+全部 214 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 26 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/管线/三个演示）。
 
 ## 7. 设计决策
 
