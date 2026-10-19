@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.7';
+  var VERSION = '1.3.0';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -2829,8 +2829,27 @@
     'RL.gae': { cls: 'args', fn: gae, extra: [[0,0.5,0.8], 0.9, 0.95], sample: [[1,1,1]] },
     'SYS.broadcast': { cls: 'vec', fn: broadcast, sample: [[1,2,3]] },
     'TENSOR.scatter': { cls: 'args', fn: tensorScatter, extra: [[0,2], [9,8]], sample: [[1,2,3,4]] },
-    'NORM.weight_norm': { cls: 'pair', fn: weightNorm, extra: [2], sample: [[3,4]] }
-  };;
+    'NORM.weight_norm': { cls: 'pair', fn: weightNorm, extra: [2], sample: [[3,4]] },
+
+    /* —— v1.3.0 原地引擎第四轮扩面（新增 17 条；沙盒逐条验证：不抛异常 + 输出全有限 + 形状守恒 + 与 out-of-place 逐位一致）—— */
+    'LINALG.matmul': { cls: 'pair', fn: matMul, extra: [[[5,6],[7,8]]], sample: [[1,2],[3,4]] },
+    'INFO.surprisal': { cls: 'elem', fn: surprisal, sample: [0.5,0.25,0.1] },
+    'INFO.bits': { cls: 'elem', fn: bits, sample: [1,2,3] },
+    'OPTIM.grad_clip': { cls: 'pair', fn: gradClip, extra: [1], sample: [1,2,3] },
+    'FWD.linear': { cls: 'triple', fn: linear, extra: [[[1,0],[0,1]],[0,0]], sample: [[1,2],[3,4]] },
+    'FWD.embedding_lookup': { cls: 'pair', fn: embeddingLookup, extra: [[0,1]], sample: [[1,2],[3,4]] },
+    'BWD.grad_layernorm': { cls: 'triple', fn: gradLayerNorm, extra: [[0.1,0.2,0.3],0.00001], sample: [1,2,3] },
+    'BWD.stop_grad': { cls: 'vec', fn: stopGrad, sample: [1,2,3] },
+    'BWD.detach': { cls: 'vec', fn: detach, sample: [1,2,3] },
+    'ATTEN.rope': { cls: 'triple', fn: ropeApply, extra: [1,10000], sample: [1,0] },
+    'ATTEN.mqa': { cls: 'triple', fn: mqa, extra: [[[1,0],[0,1]],[[1,0],[0,1]]], sample: [[[1,0],[0,1]],[[2,1],[1,2]]] },
+    'ATTEN.gqa': { cls: 'args', fn: gqa, extra: [[[[1,0],[0,1]]],[[[1,0],[0,1]]],1], sample: [[[1,0],[0,1]],[[2,1],[1,2]]] },
+    'SAMPLE.topk': { cls: 'pair', fn: topK, extra: [2], sample: [1,2,3] },
+    'SAMPLE.topp': { cls: 'pair', fn: topP, extra: [0.8], sample: [0.1,0.5,0.4] },
+    'DATA.dedup': { cls: 'vec', fn: dedup, sample: [[1,2,2,3],[4,4,5,1]] },
+    'TENSOR.stack': { cls: 'vec', fn: tensorStack, sample: [[1,2],[3,4]] },
+    'FWD.conv1d': { cls: 'pair', fn: conv1d, extra: [[2]], sample: [1,2,3] },
+  };
   function _writeBack(dst, src) { // 递归将 src 数值写回 dst 的既有结构（支持 1D 向量与 2D 矩阵）
     if (Array.isArray(src)) { for (var i = 0; i < src.length; i++) dst[i] = _writeBack(dst[i], src[i]); return dst; }
     return src;

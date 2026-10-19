@@ -1,5 +1,16 @@
 # 更新日志
 
+## [1.3.0] - 2026-10-19
+
+### 通用原地引擎第四轮扩面（INPLACE_SIG 53 → 70，verified 793 → 810）
+- **自动化候选发掘**：新写候选探测器，从已验证的 `BATCH_SIG` 样本出发，对每个 spec `inplace` 算子自动检验「形状守恒 + 输出全有限 + 与 out-of-place 逐位一致」，200 条 spec 中筛出可原地化的非平凡算子（184 条被诚实排除：**75 条输出标量**（reduce/范数/行列式/秩类，天然不可原地）、**47 条含函数参数**（优化器 f/grad）、**62 条形状变换**（reshape/slice/flatten/concat/池化/采样类，输出形状 ≠ 输入形状）、14 条无批样本的系统语义系）
+- **新增 17 条原地签名**（沙盒逐条验证，diff=0 且输出全有限）：
+  - `LINALG.matmul`（方阵乘，pair）· `FWD.linear`（方阵权，triple）· `FWD.embedding_lookup`（pair）· `FWD.conv1d`（k=1 核，pair）
+  - `INFO.surprisal` / `INFO.bits`（elem 逐元素）· `OPTIM.grad_clip`（pair）· `BWD.grad_layernorm`（triple）· `BWD.stop_grad` / `BWD.detach`（vec，语义即恒等透传）
+  - `ATTEN.rope`（triple）· `ATTEN.mqa`（triple）· `ATTEN.gqa`（args）· `SAMPLE.topk` / `SAMPLE.topp`（pair）· `DATA.dedup`（vec）· `TENSOR.stack`（vec）
+- **诚实边界**：`FWD.pool_max`（窗口=1 恒等）等纯构造性守恒已剔除，不因凑数牺牲语义纯度
+- 指标：verified **793 → 810 / 1024**（inplace 56 → 73）；spec **231 → 214**；核心不变量 **226/226**；无头 **236/236** · UI 冒烟 **26/26**；axiom.html 559.6 KB；三表幽灵键 **0**（BATCH 242 / FUSE 239 / INPLACE 70 全部命中真实微指令）
+
 ## [1.2.7] - 2026-10-19
 
 ### 核心不变量扩容第四批（条件数 / 策略评估解析解 / 分块无关 / 结构定理）
