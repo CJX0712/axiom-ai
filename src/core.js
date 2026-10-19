@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.6';
+  var VERSION = '1.2.7';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5083,6 +5083,88 @@
   });
   check('gaussPDF：峰值 = 1/(σ√2π)（解析精确）', 1e-15, function () {
     return Math.abs(gaussPDF(0, 0, 1) - 1 / Math.sqrt(2 * Math.PI));
+  });
+
+  /* —— v1.2.7 不变量扩容第四批：条件数 / 策略评估解析解 / 分块无关 / 结构定理 —— */
+  check('condEstimate：κ₂(A) = λmax/λmin（对称正定谱定义，与 Jacobi 解析解一致）', 1e-9, function () {
+    var M = [[4, 1], [1, 3]], vs = jacobiEigen(M).values.slice().sort(function (a, b) { return a - b; });
+    return Math.abs(condEstimate(M) - vs[vs.length - 1] / vs[0]);
+  });
+  check('policyEval：迭代策略评估 ≡ 解析解 V = (I−γP_π)⁻¹ r_π（线性方程组交叉验证）', 1e-11, function () {
+    var mdp = chainSetup(5, 0.9, true), nn = mdp.n, g = mdp.gamma;
+    var P = Array.from({ length: nn }, function () { return new Array(nn).fill(0); }), r = new Array(nn).fill(0);
+    for (var s = 0; s < nn; s++) {
+      mdp.trans(s, 1).forEach(function (tr) { P[s][tr[0]] += tr[1]; r[s] += tr[1] * mdp.reward(s, tr[0]); });
+    }
+    var M = Array.from({ length: nn }, function (_, i) {
+      return Array.from({ length: nn }, function (_, j) { return (i === j ? 1 : 0) - g * P[i][j]; });
+    });
+    return arrMaxDiff(solveLinear(M, r), policyEval(mdp, function () { return 1; }));
+  });
+  check('flashAttention：分块大小无关 — chunk=1/2/T ≡ 朴素 selfAttention（在线 softmax 逐位一致）', 1e-12, function () {
+    var Q = [[1, 0.5, -1, 2], [0, 1, 0.3, 1], [-1, 2, 1, 0]],
+        K = [[1, 0, 1, 0], [0, 1, 0, 1], [2, -1, 0, 1]], V = [[1, 0], [0, 1], [1, 1]];
+    var ref = selfAttention(Q, K, V, false).output, bad = 0;
+    for (var c = 1; c <= 3; c++) bad = Math.max(bad, arrMaxDiff(flashAttention(Q, K, V, c).output, ref));
+    return bad;
+  });
+  check('orthonormalize：Gram–Schmidt 正交归一 QᵀQ = I', 1e-12, function () {
+    var Q = orthonormalize([[1, 1, 0], [1, 0, 1], [0, 1, 1]]), bad = 0;
+    for (var i = 0; i < Q.length; i++)
+      for (var j = 0; j < Q.length; j++) bad = Math.max(bad, Math.abs(dot(Q[i], Q[j]) - (i === j ? 1 : 0)));
+    return bad;
+  });
+  check('hmmViterbi：DP 最优路径对数概率 ≡ 暴力枚举 2ᵀ 路径最大值', 1e-12, function () {
+    var pi = [0.6, 0.4], Tr = [[0.7, 0.3], [0.4, 0.6]], B = [[0.5, 0.5], [0.1, 0.9]], obs = [0, 1, 0];
+    var best = -Infinity;
+    for (var m = 0; m < 8; m++) {
+      var path = [m & 1, (m >> 1) & 1, (m >> 2) & 1];
+      var lp = Math.log(pi[path[0]]) + Math.log(B[path[0]][obs[0]]);
+      for (var t2 = 1; t2 < 3; t2++) lp += Math.log(Tr[path[t2 - 1]][path[t2]]) + Math.log(B[path[t2]][obs[t2]]);
+      if (lp > best) best = lp;
+    }
+    return Math.abs(hmmViterbi(pi, Tr, B, obs).logprob - best);
+  });
+  check('matrixRank：秩-零度定理 rank(A) + dim N(A) = n', 0, function () {
+    var M = [[1, 2, 3], [2, 4, 6], [0, 1, 1]];
+    return Math.abs(matrixRank(M) + nullspace(M).length - 3);
+  });
+  check('spectralNorm：谱归一化后主奇异值 = 1（Miyato 2018，幂迭代复算）', 1e-9, function () {
+    var Ws = spectralNorm([[3, 1], [1, 2]]);
+    return Math.abs(Math.sqrt(powerIteration(matMul(transpose(Ws), Ws), { iters: 5000 }).value) - 1);
+  });
+  check('topP：核采样支撑最小性 — 累计 ≥ cutoff 且去尾元素即 < cutoff', 0, function () {
+    var s = topP([0.5, 0.3, 0.1, 0.06, 0.04], 0.9);
+    var keep = s.filter(function (v) { return v > 0; }).sort(function (a, b) { return b - a; });
+    var acc = keep.reduce(function (a, b) { return a + b; }, 0);
+    return (acc >= 0.9 - 1e-15 && acc - keep[keep.length - 1] < 0.9) ? 0 : 1;
+  });
+  check('gae：λ=0 退化为 TD 残差 δ_t；λ=1 退化为 Monte-Carlo 优势（端点恒等式）', 1e-12, function () {
+    var r = [1, 2, 3], vv = [0.5, 1.5, 2.5], g = 0.9;
+    var a0 = gae(r, vv, g, 0), a1 = gae(r, vv, g, 1), bad = 0;
+    for (var t = 0; t < 3; t++) {
+      var nv = t === 2 ? 0 : vv[t + 1];
+      bad = Math.max(bad, Math.abs(a0[t] - (r[t] + g * nv - vv[t])));
+      var mc = 0;
+      for (var k = t; k < 3; k++) mc += Math.pow(g, k - t) * r[k];
+      bad = Math.max(bad, Math.abs(a1[t] - (mc - vv[t])));
+    }
+    return bad;
+  });
+  check('kalmanFilter1d：卡尔曼增益收敛 ≡ Riccati 解析不动点（一维稳态解）', 1e-10, function () {
+    var Q = 0.1, R = 1;
+    var zs = Array.from({ length: 300 }, function (_, i) { return Math.sin(i * 0.3); });
+    var f = kalmanFilter1d(zs, 1, 1, Q, R, 0, 1);
+    var P = (-Q + Math.sqrt(Q * Q + 4 * R * Q)) / 2;
+    return Math.abs(f[f.length - 1].K - (P + Q) / (P + Q + R));
+  });
+  check('bleu：自比对 BLEU(ref, ref) = 1（上界精确，简短惩罚 = 1）', 1e-12, function () {
+    var ref = ['the', 'cat', 'sat', 'on', 'the', 'mat'];
+    return Math.abs(bleu(ref, ref.slice(), 2) - 1);
+  });
+  check('decisionTree：无剪枝训练准确率 = 1（CART 叶纯度，Gini 收敛到 0）', 0, function () {
+    var X = [[0], [1], [2], [3], [4], [5]], y = [0, 0, 0, 1, 1, 1];
+    return 1 - accuracy(y, decisionTree(X, y, { maxDepth: 10 }).predictAll(X));
   });
 
   function runChecks() {

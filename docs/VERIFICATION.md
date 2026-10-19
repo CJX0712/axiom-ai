@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 214/214 PASS · 注册表完整性 9/10 PASS · 总计 223/224 全绿**
+> 结果：**核心不变量 226/226 PASS · 注册表完整性 9/10 PASS · 总计 235/236 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -224,6 +224,18 @@
 | ✅ | layernorm：仿射不变 LN(αx+β) = LN(x)（eps→0 极限） | 4.03e-13 | 1.00e-9 |
 | ✅ | temperature：T→0⁺ 趋于 argmax one-hot；T→∞ 趋于均匀 | 3.33e-7 | 1.00e-6 |
 | ✅ | gaussPDF：峰值 = 1/(σ√2π)（解析精确） | 0 | 1.00e-15 |
+| ✅ | condEstimate：κ₂(A) = λmax/λmin（对称正定谱定义，与 Jacobi 解析解一致） | 6.66e-16 | 1.00e-9 |
+| ✅ | policyEval：迭代策略评估 ≡ 解析解 V = (I−γP_π)⁻¹ r_π（线性方程组交叉验证） | 8.86e-13 | 1.00e-11 |
+| ✅ | flashAttention：分块大小无关 — chunk=1/2/T ≡ 朴素 selfAttention（在线 softmax 逐位一致） | 1.11e-16 | 1.00e-12 |
+| ✅ | orthonormalize：Gram–Schmidt 正交归一 QᵀQ = I | 2.22e-16 | 1.00e-12 |
+| ✅ | hmmViterbi：DP 最优路径对数概率 ≡ 暴力枚举 2ᵀ 路径最大值 | 0 | 1.00e-12 |
+| ✅ | matrixRank：秩-零度定理 rank(A) + dim N(A) = n | 0 | 0 |
+| ✅ | spectralNorm：谱归一化后主奇异值 = 1（Miyato 2018，幂迭代复算） | 1.55e-15 | 1.00e-9 |
+| ✅ | topP：核采样支撑最小性 — 累计 ≥ cutoff 且去尾元素即 < cutoff | 0 | 0 |
+| ✅ | gae：λ=0 退化为 TD 残差 δ_t；λ=1 退化为 Monte-Carlo 优势（端点恒等式） | 0 | 1.00e-12 |
+| ✅ | kalmanFilter1d：卡尔曼增益收敛 ≡ Riccati 解析不动点（一维稳态解） | 0 | 1.00e-10 |
+| ✅ | bleu：自比对 BLEU(ref, ref) = 1（上界精确，简短惩罚 = 1） | 0 | 1.00e-12 |
+| ✅ | decisionTree：无剪枝训练准确率 = 1（CART 叶纯度，Gini 收敛到 0） | 0 | 0 |
 
 ## 2. 注册表完整性（9/10）
 
@@ -266,15 +278,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 125 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 171 | 矩阵分解/恒等式/精确算术 |
-| 算法收敛 | 1e-13 ~ 1e-6 | 21 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
+| 精确 0 | = 0 | 132 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 182 | 矩阵分解/恒等式/精确算术 |
+| 算法收敛 | 1e-13 ~ 1e-6 | 22 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
 | 统计估计 | > 1e-6 | 22 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 224 项，失败退出码 1
+node test/run.js                  # 全量 236 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```
