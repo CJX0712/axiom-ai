@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.3';
+  var VERSION = '1.3.4';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -5412,6 +5412,91 @@
     var V = Array.from({ length: 2 }, function () { return Array.from({ length: T }, function () { return Array.from({ length: d }, function () { return rng() - 0.5; }); }); });
     var out = gqa(Q, K, V, 2);
     return (out.length !== Q.length) + (out[0].length !== T) + (out[0][0].length !== d);
+  });
+
+  /* —— v1.3.4 不变量扩容第八批（优化器收敛 / 聚类收敛 / 强化收敛 / 注意力结构 / 采样保真）—— */
+  check('gradientDescent：凸二次函数 history 单调不增（f=½‖x‖²）', 1e-12, function () {
+    var f = function (x) { var s = 0; for (var i = 0; i < x.length; i++) s += 0.5 * x[i] * x[i]; return s; };
+    var grad = function (x) { return x.slice(); };
+    var r = gradientDescent(f, grad, [3, 3], { lr: 0.1, iters: 200 });
+    var bad = 0;
+    for (var i = 1; i < r.history.length; i++) if (r.history[i] > r.history[i - 1] + 1e-12) bad++;
+    return bad;
+  });
+  check('adamw：λ=0 时逐位退化为 adam（解耦衰减恒等式）', 1e-12, function () {
+    var f = function (x) { var s = 0; for (var i = 0; i < x.length; i++) s += 0.5 * x[i] * x[i]; return s; };
+    var grad = function (x) { return x.slice(); };
+    var opts = { lr: 0.05, iters: 300 };
+    var a = adam(f, grad, [2, -1, 0.5], opts);
+    var w = adamw(f, grad, [2, -1, 0.5], Object.assign({}, opts, { lambda: 0 }));
+    return maxAbsDiff(a.x, w.x);
+  });
+  check('kmeans：Lloyd SSE 单调不增（收敛性）', 1e-9, function () {
+    var rng = mulberry32(7), X = [];
+    for (var i = 0; i < 60; i++) X.push([rng() * 2, rng() * 2]);
+    var r = kmeans(X, 3, { iters: 30, seed: 7 });
+    var bad = 0;
+    for (var k = 1; k < r.history.length; k++) if (r.history[k] > r.history[k - 1] + 1e-9) bad++;
+    return bad;
+  });
+  check('gmmEM：对数似然单调不减（1D 强分离数据，协方差远离奇异→正则不影响，机器精度级）', 1e-10, function () {
+    var rng = mulberry32(42), X = [];
+    for (var c = 0; c < 3; c++) for (var i = 0; i < 60; i++) X.push([c * 10 + (rng() - 0.5)]); // 1D, 簇间距 10, 方差 ~0.5
+    var r = gmmEM(X, 3, { iters: 40, seed: 42 });
+    var bad = 0;
+    for (var k = 1; k < r.llHistory.length; k++) if (r.llHistory[k] < r.llHistory[k - 1] - 1e-10) bad++;
+    return bad;
+  });
+  check('gmmEM：责任度每行 Σ=1（概率归一）', 1e-12, function () {
+    var rng = mulberry32(11), X = [];
+    for (var c = 0; c < 2; c++) for (var i = 0; i < 30; i++) X.push([c * 8 + (rng() - 0.5), c * 8 + (rng() - 0.5)]);
+    var r = gmmEM(X, 2, { iters: 20, seed: 11 });
+    var worst = 0;
+    for (var m = 0; m < r.responsibilities.length; m++) { var s = 0; for (var j = 0; j < r.responsibilities[m].length; j++) s += r.responsibilities[m][j]; worst = Math.max(worst, Math.abs(s - 1)); }
+    return worst;
+  });
+  check('valueIteration：Bellman 残差 → 0（动态规划收敛）', 1e-9, function () {
+    var r = valueIteration({ n: 6, gamma: 0.9, stochastic: false });
+    return r.residual;
+  });
+  check('crossAttention：输出形状守恒（m×dv）', 0, function () {
+    var Q = [[1, 2, 3], [4, 5, 6]], K = [[1, 0, 0], [0, 1, 0], [0, 0, 1]], V = [[1, 1], [2, 2], [3, 3]];
+    var r = crossAttention(Q, K, V);
+    return (r.output.length !== 2) + (r.output[0].length !== 2) + (r.weights.length !== 2) + (r.weights[0].length !== 3);
+  });
+  check('residualAdd：fx = 全 0 时退化为恒等（残差流基线）', 0, function () {
+    var x = [[1, 2, 3], [4, 5, 6]], z = x.map(function (row) { return row.map(function () { return 0; }); });
+    return maxAbsDiff(residualAdd(x, z), x);
+  });
+  check('multiHead：causal=true 时注意力权重上三角（j>i）严格 = 0（因果掩码）', 1e-15, function () {
+    var Q = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]], K = Q, V = Q;
+    var r = multiHead(Q, K, V, 1, true);
+    var worst = 0;
+    for (var h = 0; h < r.weights.length; h++) for (var i = 0; i < r.weights[h].length; i++) for (var j = i + 1; j < r.weights[h][i].length; j++) worst = Math.max(worst, r.weights[h][i][j]);
+    return worst;
+  });
+  check('lbfgs：凸二次目标收敛到全局最优（f(x)→0, ‖g‖→0）', 1e-8, function () {
+    var f = function (x) { var s = 0; for (var i = 0; i < x.length; i++) s += 0.5 * x[i] * x[i]; return s; };
+    var grad = function (x) { return x.slice(); };
+    var r = lbfgs(f, grad, [3, -2, 1], { maxIter: 200, tol: 1e-12 });
+    return f(r.x);
+  });
+  check('gradClip：输出梯度范数 ≤ maxNorm（当原范数超界时恰为 maxNorm）', 1e-12, function () {
+    var out = gradClip([3, 4], 2);
+    var n = Math.sqrt(out[0] * out[0] + out[1] * out[1]);
+    return Math.max(0, n - 2) + Math.abs(n - 2);
+  });
+  check('gmmEM：混合权重 Σ=1（概率单纯形）', 1e-12, function () {
+    var rng = mulberry32(99), X = [];
+    for (var c = 0; c < 3; c++) for (var i = 0; i < 30; i++) X.push([c * 6 + (rng() - 0.5), c * 6 + (rng() - 0.5)]);
+    var r = gmmEM(X, 3, { iters: 15, seed: 99 });
+    var s = 0; for (var j = 0; j < r.weights.length; j++) s += r.weights[j];
+    return Math.abs(s - 1);
+  });
+  check('knn：1-NN 在训练点上自返（查询点距离为 0 必命中自身）', 0, function () {
+    var X = [[0, 0], [5, 0], [0, 5], [5, 5], [10, 10]], y = [0, 1, 2, 3, 4], bad = 0;
+    for (var i = 0; i < X.length; i++) if (knn(X, y, X[i], 1) !== y[i]) bad++;
+    return bad;
   });
 
   function runChecks() {
