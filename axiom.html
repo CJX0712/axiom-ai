@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.9';
+  var VERSION = '1.3.10';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3620,6 +3620,247 @@
     return best;
   }
 
+  /* ==========================================================================
+   * 算法库扩展（v1.3.10）—— QR 迭代特征值 / 最大流（Edmonds–Karp + Dinic）/
+   *   强连通分量（Tarjan + Kosaraju）/ Kahn 拓扑排序 / Kuhn 二分匹配
+   *   铁律同上：每条携带可独立复算硬不变量（定理级 / 跨算法一致 / 结构）
+   * ======================================================================== */
+
+  /* QR 迭代特征值 —— Householder QR 每步 + Wilkinson 位移 + 块 deflation（对称阵）
+   * 与 jacobiEigen（旋转法）构成两条完全独立的特征值路径；Wilkinson 位移 ⇒ 三次收敛 */
+  function qrEigenvalues(Am, tol) {
+    tol = tol || 1e-13;
+    var n = Am.length, M = clone2(Am), scale = 0;
+    for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) scale = Math.max(scale, Math.abs(M[i][j]));
+    if (scale === 0) return { values: new Array(n).fill(0), iters: 0, off: 0 };
+    var hi = n - 1, iter = 0;
+    while (hi > 0 && iter < 300 * n) {
+      iter++;
+      if (Math.abs(M[hi][hi - 1]) <= tol * scale) { hi--; continue; }   // 底子对角可忽略 → 已收敛出一个特征值
+      var l = hi - 1;
+      while (l > 0 && Math.abs(M[l][l - 1]) > tol * scale) l--;         // 活跃不可约块 [l..hi]，size ≥ 2
+      var a = M[hi - 1][hi - 1], b = M[hi - 1][hi], c = M[hi][hi];      // Wilkinson 位移（块尾 2×2）
+      var d = (a - c) / 2, sgn = d >= 0 ? 1 : -1;
+      var den = Math.abs(d) + Math.sqrt(d * d + b * b);
+      var mu = den > 0 ? c - sgn * b * b / den : c;
+      var sz = hi - l + 1, sub = [];
+      for (var i2 = l; i2 <= hi; i2++) {
+        var row = [];
+        for (var j2 = l; j2 <= hi; j2++) row.push(M[i2][j2] - (i2 === j2 ? mu : 0));
+        sub.push(row);
+      }
+      var res = qrDecompose(sub);
+      var RQ = matMul(res.R, res.Q);
+      for (var i3 = l; i3 <= hi; i3++) for (var j3 = l; j3 <= hi; j3++) M[i3][j3] = RQ[i3 - l][j3 - l] + (i3 === j3 ? mu : 0);
+      for (var j4 = 0; j4 < l; j4++) {                                   // 块外列：Qᵀ·col（保相似）
+        var col = [];
+        for (var i4 = l; i4 <= hi; i4++) col.push(M[i4][j4]);
+        for (var i5 = l; i5 <= hi; i5++) {
+          var s = 0;
+          for (var k = 0; k < sz; k++) s += res.Q[k][i5 - l] * col[k];
+          M[i5][j4] = s;
+        }
+      }
+      for (var i6 = 0; i6 < l; i6++) {                                   // 块外行：row·Q（保相似）
+        var rowv = [];
+        for (var j5 = l; j5 <= hi; j5++) rowv.push(M[i6][j5]);
+        for (var j6 = l; j6 <= hi; j6++) {
+          var s2 = 0;
+          for (var k2 = 0; k2 < sz; k2++) s2 += rowv[k2] * res.Q[k2][j6 - l];
+          M[i6][j6] = s2;
+        }
+      }
+    }
+    var off = 0;
+    for (var i7 = 1; i7 < n; i7++) off += Math.abs(M[i7][i7 - 1]);
+    var eigs = [];
+    for (var i8 = 0; i8 < n; i8++) eigs.push(M[i8][i8]);
+    return { values: eigs.sort(function (x, y) { return y - x; }), iters: iter, off: off };
+  }
+
+  /* Edmonds–Karp 最大流 —— BFS 最短增广路（O(V·E²)）；cap 为 n×n 容量邻接矩阵 */
+  function maxFlowEK(n, cap, s, t) {
+    var res = cap.map(function (r) { return r.slice(); }), flow = 0;
+    for (; ;) {
+      var parent = new Array(n).fill(-1);
+      parent[s] = s;
+      var queue = [s], qi = 0;
+      while (qi < queue.length && parent[t] === -1) {
+        var u = queue[qi++];
+        for (var v = 0; v < n; v++) if (parent[v] === -1 && res[u][v] > 1e-15) { parent[v] = u; queue.push(v); }
+      }
+      if (parent[t] === -1) break;
+      var b = Infinity, v2 = t;
+      while (v2 !== s) { b = Math.min(b, res[parent[v2]][v2]); v2 = parent[v2]; }
+      v2 = t;
+      while (v2 !== s) { res[parent[v2]][v2] -= b; res[v2][parent[v2]] += b; v2 = parent[v2]; }
+      flow += b;
+    }
+    return flow;
+  }
+
+  /* Dinic 最大流 —— 层次图 + 多路增广阻塞流（O(V²E)） */
+  function maxFlowDinic(n, cap, s, t) {
+    var res = cap.map(function (r) { return r.slice(); }), flow = 0;
+    var dfs = function (u, pushed, level, iter) {
+      if (u === t) return pushed;
+      while (iter[u] < n) {
+        var v = iter[u];
+        if (res[u][v] > 1e-15 && level[v] === level[u] + 1) {
+          var tr = dfs(v, Math.min(pushed, res[u][v]), level, iter);
+          if (tr > 1e-15) { res[u][v] -= tr; res[v][u] += tr; return tr; }
+        }
+        iter[u]++;
+      }
+      return 0;
+    };
+    for (; ;) {
+      var level = new Array(n).fill(-1);
+      level[s] = 0;
+      var queue = [s], qi = 0;
+      while (qi < queue.length) {
+        var u2 = queue[qi++];
+        for (var v2 = 0; v2 < n; v2++) if (level[v2] === -1 && res[u2][v2] > 1e-15) { level[v2] = level[u2] + 1; queue.push(v2); }
+      }
+      if (level[t] === -1) break;
+      var iter = new Array(n).fill(0);
+      for (; ;) {
+        var f = dfs(s, Infinity, level, iter);
+        if (f <= 1e-15) break;
+        flow += f;
+      }
+    }
+    return flow;
+  }
+
+  /* 暴力枚举最小割（独立参照：枚举全部 2^(n−2) 个含 s 不含 t 的顶点子集） */
+  function minCutBrute(n, cap, s, t) {
+    var best = Infinity, others = [];
+    for (var v = 0; v < n; v++) if (v !== s && v !== t) others.push(v);
+    for (var mask = 0; mask < (1 << others.length); mask++) {
+      var inS = new Array(n).fill(false);
+      inS[s] = true;
+      for (var i = 0; i < others.length; i++) if (mask & (1 << i)) inS[others[i]] = true;
+      var cut = 0;
+      for (var i2 = 0; i2 < n; i2++) if (inS[i2]) for (var j = 0; j < n; j++) if (!inS[j]) cut += cap[i2][j];
+      best = Math.min(best, cut);
+    }
+    return best;
+  }
+
+  /* Tarjan 强连通分量 —— 单 DFS + low-link（一次遍历出全部分量） */
+  function tarjanSCC(n, edges) {
+    var adj = Array.from({ length: n }, function () { return []; });
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); });
+    var idx = 0, index = new Array(n).fill(-1), low = new Array(n).fill(0), on = new Array(n).fill(false), st = [], comps = [];
+    var strong = function (v) {
+      index[v] = low[v] = idx++;
+      st.push(v);
+      on[v] = true;
+      for (var k = 0; k < adj[v].length; k++) {
+        var w = adj[v][k];
+        if (index[w] === -1) { strong(w); low[v] = Math.min(low[v], low[w]); }
+        else if (on[w]) low[v] = Math.min(low[v], index[w]);
+      }
+      if (low[v] === index[v]) {
+        var comp = [];
+        for (; ;) {
+          var w2 = st.pop();
+          on[w2] = false;
+          comp.push(w2);
+          if (w2 === v) break;
+        }
+        comps.push(comp.sort(function (x, y) { return x - y; }));
+      }
+    };
+    for (var v2 = 0; v2 < n; v2++) if (index[v2] === -1) strong(v2);
+    return comps.sort(function (a, b) { return a[0] - b[0]; });
+  }
+
+  /* Kosaraju 强连通分量 —— 正序 DFS 完成时间 + 反向图 DFS（两遍遍历） */
+  function kosarajuSCC(n, edges) {
+    var adj = Array.from({ length: n }, function () { return []; }), radj = Array.from({ length: n }, function () { return []; });
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); radj[e[1]].push(e[0]); });
+    var vis = new Array(n).fill(false), order = [];
+    var dfs1 = function (v) {
+      vis[v] = true;
+      for (var k = 0; k < adj[v].length; k++) if (!vis[adj[v][k]]) dfs1(adj[v][k]);
+      order.push(v);
+    };
+    for (var v = 0; v < n; v++) if (!vis[v]) dfs1(v);
+    var vis2 = new Array(n).fill(false), comps = [];
+    var dfs2 = function (v, comp) {
+      vis2[v] = true;
+      comp.push(v);
+      for (var k = 0; k < radj[v].length; k++) if (!vis2[radj[v][k]]) dfs2(radj[v][k], comp);
+    };
+    for (var i = n - 1; i >= 0; i--) {
+      var v2 = order[i];
+      if (!vis2[v2]) {
+        var comp = [];
+        dfs2(v2, comp);
+        comps.push(comp.sort(function (x, y) { return x - y; }));
+      }
+    }
+    return comps.sort(function (a, b) { return a[0] - b[0]; });
+  }
+
+  /* Kahn 拓扑排序 —— 入度队列入队；有环返回 null */
+  function kahnTopo(n, edges) {
+    var adj = Array.from({ length: n }, function () { return []; }), indeg = new Array(n).fill(0);
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); indeg[e[1]]++; });
+    var q = [];
+    for (var v = 0; v < n; v++) if (indeg[v] === 0) q.push(v);
+    var order = [];
+    while (q.length) {
+      var u = q.shift();
+      order.push(u);
+      for (var k = 0; k < adj[u].length; k++) if (--indeg[adj[u][k]] === 0) q.push(adj[u][k]);
+    }
+    return order.length === n ? order : null;
+  }
+
+  /* Kuhn 二分图最大匹配 —— 匈牙利增广路；König 定理：最大匹配 = 最小顶点覆盖 */
+  function kuhnMatching(lCount, rCount, edges) {
+    var adjL = Array.from({ length: lCount }, function () { return []; });
+    edges.forEach(function (e) { adjL[e[0]].push(e[1]); });
+    var matchR = new Array(rCount).fill(-1);
+    var tryK = function (u, used) {
+      for (var k = 0; k < adjL[u].length; k++) {
+        var v = adjL[u][k];
+        if (!used[v]) {
+          used[v] = true;
+          if (matchR[v] === -1 || tryK(matchR[v], used)) { matchR[v] = u; return true; }
+        }
+      }
+      return false;
+    };
+    var size = 0;
+    for (var u = 0; u < lCount; u++) {
+      var used = new Array(rCount).fill(false);
+      if (tryK(u, used)) size++;
+    }
+    return { size: size, matchR: matchR };
+  }
+  /* 暴力枚举最小顶点覆盖（独立参照，l+r ≤ 10） */
+  function minVertexCoverBrute(lCount, rCount, edges) {
+    var total = lCount + rCount, best = Infinity;
+    for (var mask = 0; mask < (1 << total); mask++) {
+      var inC = [];
+      for (var v = 0; v < total; v++) inC.push(!!(mask & (1 << v)));
+      var ok = true;
+      for (var k = 0; k < edges.length; k++) {
+        if (!inC[edges[k][0]] && !inC[lCount + edges[k][1]]) { ok = false; break; }
+      }
+      if (ok) {
+        var c = 0;
+        for (var v2 = 0; v2 < total; v2++) if (inC[v2]) c++;
+        best = Math.min(best, c);
+      }
+    }
+    return best;
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -6378,6 +6619,103 @@
     return worst;
   });
 
+  /* —— 算法库扩展硬不变量（v1.3.10，7 条）—— */
+  check('qrEigenvalues：QR 迭代 + Wilkinson 位移 ≡ Jacobi（8 个 6×6 随机对称阵，两条独立路径）+ 重根/2×2/1×1 退化用例', 1e-9, function () {
+    var rng = mulberry32(401), worst = 0, maxIter = 0, maxOff = 0;
+    for (var t = 0; t < 8; t++) {
+      var n = 6, B = Array.from({ length: n }, function () { return Array.from({ length: n }, function () { return rng() * 2 - 1; }); });
+      var M = Array.from({ length: n }, function (_, i) { return Array.from({ length: n }, function (_, j) { return i <= j ? B[i][j] : B[j][i]; }); });
+      var r = qrEigenvalues(M), ej = jacobiEigen(M).values;
+      for (var i = 0; i < n; i++) worst = Math.max(worst, Math.abs(r.values[i] - ej[i]));
+      maxIter = Math.max(maxIter, r.iters);
+      maxOff = Math.max(maxOff, r.off);
+    }
+    var deg = Math.abs(qrEigenvalues([[2, 0, 0], [0, 2, 0], [0, 0, 5]]).values[1] - 2)
+      + Math.abs(qrEigenvalues([[2, 1], [1, 2]]).values[0] - 3)
+      + Math.abs(qrEigenvalues([[7]]).values[0] - 7);
+    return Math.max(worst, deg);
+  });
+  check('qrEigenvalues：tr(A) = Σλᵢ（谱不变量，QR 迭代相似变换保迹）', 1e-9, function () {
+    var rng = mulberry32(402), worst = 0;
+    for (var t = 0; t < 10; t++) {
+      var n = t < 8 ? 6 : 8, B = Array.from({ length: n }, function () { return Array.from({ length: n }, function () { return rng() * 2 - 1; }); });
+      var M = Array.from({ length: n }, function (_, i) { return Array.from({ length: n }, function (_, j) { return i <= j ? B[i][j] : B[j][i]; }); });
+      var r = qrEigenvalues(M), tr = 0, se = 0;
+      for (var i = 0; i < n; i++) { tr += M[i][i]; se += r.values[i]; }
+      worst = Math.max(worst, Math.abs(tr - se));
+    }
+    return worst;
+  });
+  check('maxFlow：Edmonds–Karp = 最小割（max-flow = min-cut 定理，暴力枚举 2^(n−2) 个割）', 1e-9, function () {
+    var rng = mulberry32(403), worst = 0, graphs = 0;
+    for (var t = 0; t < 10; t++) {
+      var n = 8, cap = Array.from({ length: n }, function () { return new Array(n).fill(0); });
+      for (var u = 0; u < n; u++) for (var v = 0; v < n; v++) if (u !== v && rng() < 0.4) cap[u][v] = 1 + Math.floor(rng() * 9);
+      var mc = minCutBrute(n, cap, 0, n - 1);
+      if (mc === Infinity) continue;
+      graphs++;
+      worst = Math.max(worst, Math.abs(maxFlowEK(n, cap, 0, n - 1) - mc));
+    }
+    return worst;
+  });
+  check('maxFlow：Dinic ≡ Edmonds–Karp（层次图多路增广 vs BFS 增广，跨算法一致）', 1e-12, function () {
+    var rng = mulberry32(404), worst = 0;
+    for (var t = 0; t < 12; t++) {
+      var n = 8, cap = Array.from({ length: n }, function () { return new Array(n).fill(0); });
+      for (var u = 0; u < n; u++) for (var v = 0; v < n; v++) if (u !== v && rng() < 0.4) cap[u][v] = 1 + Math.floor(rng() * 9);
+      worst = Math.max(worst, Math.abs(maxFlowDinic(n, cap, 0, n - 1) - maxFlowEK(n, cap, 0, n - 1)));
+    }
+    return worst;
+  });
+  check('scc：Tarjan ≡ Kosaraju（15 个随机有向图，强连通分量划分逐分量一致）', 0, function () {
+    var rng = mulberry32(405), worst = 0;
+    for (var t = 0; t < 15; t++) {
+      var n = 10, edges = [];
+      for (var u = 0; u < n; u++) for (var v = 0; v < n; v++) if (u !== v && rng() < 0.2) edges.push([u, v]);
+      var c1 = tarjanSCC(n, edges), c2 = kosarajuSCC(n, edges);
+      if (c1.length !== c2.length) { worst = 1; continue; }
+      for (var i = 0; i < c1.length; i++) {
+        if (c1[i].length !== c2[i].length || c1[i].some(function (x, k) { return x !== c2[i][k]; })) { worst = 1; break; }
+      }
+    }
+    return worst;
+  });
+  check('kahnTopo：所有边前向 + 全节点覆盖 + 有环返回 null（结构不变量，15 个 DAG + 环图）', 0, function () {
+    var rng = mulberry32(406), worst = 0;
+    for (var t = 0; t < 15; t++) {
+      var n = 8, edges = [];
+      for (var u = 0; u < n; u++) for (var v = u + 1; v < n; v++) if (rng() < 0.3) edges.push([u, v]);
+      var ord = kahnTopo(n, edges);
+      if (!ord) { worst = 1; continue; }
+      var pos = new Array(n);
+      ord.forEach(function (v, i) { pos[v] = i; });
+      for (var k = 0; k < edges.length; k++) if (pos[edges[k][0]] >= pos[edges[k][1]]) worst = 1;
+      if (new Set(ord).size !== n) worst = 1;
+    }
+    if (kahnTopo(4, [[0, 1], [1, 2], [2, 3], [3, 1]]) !== null) worst = 1;   // 有环必须返回 null
+    return worst;
+  });
+  check('kuhnMatching：König 定理 最大匹配 = 最小顶点覆盖（12 个随机二部图，暴力枚举 2^8）+ 匹配合法性', 0, function () {
+    var rng = mulberry32(407), worst = 0;
+    for (var t = 0; t < 12; t++) {
+      var l = 4, r = 4, edges = [];
+      for (var u = 0; u < l; u++) for (var v = 0; v < r; v++) if (rng() < 0.5) edges.push([u, v]);
+      var mm = kuhnMatching(l, r, edges);
+      worst = Math.max(worst, Math.abs(mm.size - minVertexCoverBrute(l, r, edges)));
+      var usedL = {}, usedR = {};
+      for (var v2 = 0; v2 < r; v2++) {
+        if (mm.matchR[v2] !== -1) {
+          if (usedR[v2] || usedL[mm.matchR[v2]]) worst = 1;
+          var ok = edges.some(function (e) { return e[0] === mm.matchR[v2] && e[1] === v2; });
+          if (!ok) worst = 1;
+          usedR[v2] = true;
+          usedL[mm.matchR[v2]] = true;
+        }
+      }
+    }
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -6498,6 +6836,11 @@
     denseToCSR: denseToCSR, csrMatVec: csrMatVec, csrTranspose: csrTranspose, csrToDense: csrToDense,
     primMST: primMST, kruskalMST: kruskalMST, bruteForceMST: bruteForceMST,
     bisect: bisect, kadane: kadane,
+    /* 算法库扩展（v1.3.10）—— QR 特征值/最大流/SCC/拓扑/二分匹配 */
+    qrEigenvalues: qrEigenvalues,
+    maxFlowEK: maxFlowEK, maxFlowDinic: maxFlowDinic, minCutBrute: minCutBrute,
+    tarjanSCC: tarjanSCC, kosarajuSCC: kosarajuSCC,
+    kahnTopo: kahnTopo, kuhnMatching: kuhnMatching, minVertexCoverBrute: minVertexCoverBrute,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

@@ -1,5 +1,20 @@
 # 更新日志
 
+## [1.3.10] - 2026-10-20
+
+### 算法库扩展二（QR 迭代特征值 / 最大流 / 强连通分量 / 拓扑排序 / 二分匹配）
+- **新增 6 组算法 + 7 条硬不变量**（核心不变量 **321 → 328**，无头测试 331 → 338 项），锚定世界顶级成果，不占 1024 网格：
+  - **QR 迭代特征值**（Francis–Wilkinson 位移）：Householder QR 每步 + Wilkinson 位移 + 块 deflation；**两条独立路径** QR 迭代 ≡ Jacobi 旋转法（8 个 6×6 随机对称阵 + 重根/2×2/1×1 退化用例），残差 3.2e-14（25-seed 最坏 3.15e-14，最多 27 步三次收敛）；tr(A) = Σλᵢ 谱不变量 1.7e-14
+  - **最大流 Edmonds–Karp**（1972，BFS 最短增广路）：**定理级不变量** max-flow = min-cut（暴力枚举全部 2^(n−2) 个 s-t 割，10 图），残差 0（整数容量精确）
+  - **最大流 Dinic**（1970，层次图 + 多路增广阻塞流）：**跨算法一致** ≡ Edmonds–Karp，残差 0
+  - **强连通分量 Tarjan（1972）≡ Kosaraju（1978）**：low-link 单遍 vs 两遍反向图，15 个随机有向图划分逐分量一致，残差 0
+  - **拓扑排序 Kahn（1962）**：**结构不变量** 所有边前向 + 全节点覆盖 + 有环返回 null，残差 0
+  - **二分图最大匹配 Kuhn（1955）/ Munkres（1957）**：匈牙利增广路；**定理级不变量** König 定理 最大匹配 = 最小顶点覆盖（暴力枚举 2^8 顶点子集，12 图）+ 匹配合法性（无重点、边存在），残差 0
+- **沙盒先行铁律执行**：6 组算法先在 Node 沙盒基于 core.js 真实辅助函数（qrDecompose/jacobiEigen/matMul/clone2）验证 7/7，再整块注入；25-seed 稳健性扫描 6/6 全过（QR 3.15e-14、maxflow/mincut 0、Dinic≡EK 0、Tarjan≡Kosaraju 0、Kahn 0、Kuhn=König 0）
+- **沙盒抓获并修复真实缺陷**：QR 迭代初版**完全不收敛**（1799 步后残余子对角仍 ~3，残差 1.92）——根因是 deflation 块定位逻辑错误：当尾块大小为 1 时 Wilkinson 位移退化为恒等操作，迭代空转；修正为标准 deflation 语义（底子对角可忽略即收缩 hi，活跃不可约块保证 size ≥ 2）后三次收敛（≤27 步，残差 1.3e-14）
+- **文档**：README §7.5 表格扩至 22 行、用法示例补齐 6 个新 API；ARCHITECTURE API 面新增 9 个导出；`docs/ALGORITHMS.md` 新增 6 节；CHANGELOG/VERIFICATION 同步（328/328）；致谢补 Wilkinson·Edmonds–Karp·Dinic·Tarjan·Kosaraju·Kahn·Kuhn–Munkres·König
+- 指标：verified **811/1024 不变**（算法库不占 ISA 网格）；核心不变量 **321 → 328/328**；无头 **331 → 338/338** · UI 冒烟 **26/26**；axiom.html **616.5 → 630.8 KB**；三表幽灵键 0
+
 ## [1.3.9] - 2026-10-20
 
 ### 算法库扩展（二叉堆 / 堆优化 Dijkstra / A* / FFT 卷积 / CSR / MST / 二分 / Kadane）

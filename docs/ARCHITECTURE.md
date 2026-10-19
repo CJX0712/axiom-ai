@@ -128,10 +128,12 @@ algo      svd luDecompose fft dft pageRank dijkstra bellmanFord sliceSample newt
           heapPush heapPop heapSort dijkstraHeap aStar ifft fftConvolve
           denseToCSR csrMatVec csrTranspose csrToDense primMST kruskalMST bruteForceMST
           bisect kadane
+          qrEigenvalues maxFlowEK maxFlowDinic minCutBrute tarjanSCC kosarajuSCC
+          kahnTopo kuhnMatching minVertexCoverBrute
 selftest  runChecks() → { total, passed, results[] }
 ```
 
-> `algo` 组（v1.3.8 起，集大成验证算法库）为 **L10 原子指令 ISA 之外的旗舰级算法参考实现**：不占 1024 网格，但同样各带一条可独立复算的硬不变量（计入核心不变量 321 项）。详见 `docs/ALGORITHMS.md` 与 README §7.5。
+> `algo` 组（v1.3.8 起，集大成验证算法库）为 **L10 原子指令 ISA 之外的旗舰级算法参考实现**：不占 1024 网格，但同样各带一条可独立复算的硬不变量（计入核心不变量 328 项）。详见 `docs/ALGORITHMS.md` 与 README §7.5。
 
 ## 5. L9 组合应用层（管线编排）
 
