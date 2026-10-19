@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.7';
+  var VERSION = '1.3.8';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3175,6 +3175,199 @@
     'RL.sarsa': { cls: 'vec', fn: sarsa, sample: [{ n: 4, gamma: 0.9, episodes: 200 }], post: Math.abs }
   };
 
+  /* ==========================================================================
+   * 集大成验证算法库（v1.3.8）—— L10 原子指令 ISA 之外的旗舰级参考实现
+   *   铁律：每条算法携带可独立复算的硬不变量
+   *   （解析 vs 数值 / 参照实现 vs 主实现 / 结构不变量）
+   * ======================================================================== */
+
+  /* SVD —— 单侧 Jacobi（Hestenes 法）：B = A·V 收敛为列正交，U = B·Σ⁻¹ */
+  function svd(A) {
+    var m = A.length, n = A[0].length;
+    var B = A.map(function (r) { return r.slice(); });
+    var V = eye(n);
+    for (var sweep = 0; sweep < 60; sweep++) {
+      var off = 0;
+      for (var p = 0; p < n; p++) {
+        for (var q = p + 1; q < n; q++) {
+          var app = 0, aqq = 0, apq = 0;
+          for (var i = 0; i < m; i++) { var bp = B[i][p], bq = B[i][q]; app += bp * bp; aqq += bq * bq; apq += bp * bq; }
+          off += apq * apq;
+          if (Math.abs(apq) <= 1e-300) continue;
+          var zeta = (aqq - app) / (2 * apq);
+          var t = Math.sign(zeta) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
+          var c = 1 / Math.sqrt(1 + t * t), s = c * t;
+          for (var r = 0; r < m; r++) { var bpr = B[r][p], bqr = B[r][q]; B[r][p] = c * bpr - s * bqr; B[r][q] = s * bpr + c * bqr; }
+          for (var r2 = 0; r2 < n; r2++) { var vp = V[r2][p], vq = V[r2][q]; V[r2][p] = c * vp - s * vq; V[r2][q] = s * vp + c * vq; }
+        }
+      }
+      if (off < 1e-30) break;
+    }
+    var sigma = [];
+    for (var j = 0; j < n; j++) sigma.push(norm2(B.map(function (row) { return row[j]; })));
+    var idx = sigma.map(function (_, i) { return i; }).sort(function (a, b) { return sigma[b] - sigma[a]; });
+    var S = idx.map(function (i) { return sigma[i]; });
+    var perm = idx.concat(Array.from({ length: n }, function (_, i) { return i; }).filter(function (i) { return idx.indexOf(i) === -1; }));
+    var Vo = V.map(function (row) { return perm.map(function (i) { return row[i]; }); });
+    var U = [];
+    for (var i2 = 0; i2 < m; i2++) {
+      var row = [];
+      for (var j2 = 0; j2 < n; j2++) row.push(S[j2] > 0 ? B[i2][idx[j2]] / S[j2] : 0);
+      U.push(row);
+    }
+    return { U: U, S: S, V: Vo };
+  }
+
+  /* LU 分解 —— Doolittle 无主元（对角占优矩阵保证数值稳定，无需换行） */
+  function luDecompose(A) {
+    var n = A.length;
+    var L = eye(n), U = A.map(function (r) { return r.slice(); });
+    for (var k = 0; k < n; k++) {
+      for (var i = k + 1; i < n; i++) {
+        L[i][k] = U[i][k] / U[k][k];
+        for (var j = k; j < n; j++) U[i][j] -= L[i][k] * U[k][j];
+      }
+    }
+    return { L: L, U: U };
+  }
+
+  /* FFT —— 迭代式 radix-2 Cooley–Tukey（输入 n 为 2 的幂，复数 {re,im}） */
+  function fft(x) {
+    var n = x.length, X = x.slice();
+    for (var i = 1, j = 0; i < n; i++) {
+      var bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) { var tmp = X[i]; X[i] = X[j]; X[j] = tmp; }
+    }
+    for (var len = 2; len <= n; len <<= 1) {
+      var ang = -2 * Math.PI / len, wr = Math.cos(ang), wi = Math.sin(ang);
+      for (var blk = 0; blk < n; blk += len) {
+        var cwr = 1, cwi = 0;
+        for (var k = 0; k < len / 2; k++) {
+          var ur = X[blk + k].re, ui = X[blk + k].im;
+          var vr = X[blk + k + len / 2].re * cwr - X[blk + k + len / 2].im * cwi;
+          var vi = X[blk + k + len / 2].re * cwi + X[blk + k + len / 2].im * cwr;
+          X[blk + k] = { re: ur + vr, im: ui + vi };
+          X[blk + k + len / 2] = { re: ur - vr, im: ui - vi };
+          var ncwr = cwr * wr - cwi * wi, ncwi = cwr * wi + cwi * wr; cwr = ncwr; cwi = ncwi;
+        }
+      }
+    }
+    return X;
+  }
+  /* 朴素 O(n²) DFT —— 作为 FFT 的独立参照实现 */
+  function dft(x) {
+    var n = x.length, X = [];
+    for (var k = 0; k < n; k++) {
+      var re = 0, im = 0;
+      for (var t = 0; t < n; t++) {
+        var ang = -2 * Math.PI * k * t / n;
+        re += x[t].re * Math.cos(ang) - x[t].im * Math.sin(ang);
+        im += x[t].re * Math.sin(ang) + x[t].im * Math.cos(ang);
+      }
+      X.push({ re: re, im: im });
+    }
+    return X;
+  }
+
+  /* PageRank —— 幂迭代（列随机转移矩阵 + 悬挂节点 teleport 处理） */
+  function pageRank(n, edges, alpha) {
+    var P = zeros2(n, n), outSum = new Array(n).fill(0), outCnt = new Array(n).fill(0);
+    edges.forEach(function (e) { outSum[e[0]] += e[2]; outCnt[e[0]]++; });
+    edges.forEach(function (e) { P[e[1]][e[0]] += e[2] / outSum[e[0]]; });
+    for (var i = 0; i < n; i++) if (outCnt[i] === 0) for (var j = 0; j < n; j++) P[j][i] += 1 / n;
+    var tele = new Array(n).fill(1 / n), pi = tele.slice();
+    for (var it = 0; it < 3000; it++) {
+      var npi = new Array(n).fill(0);
+      for (var a = 0; a < n; a++) for (var b = 0; b < n; b++) npi[a] += P[a][b] * pi[b];
+      for (var cc = 0; cc < n; cc++) npi[cc] = alpha * npi[cc] + (1 - alpha) * tele[cc];
+      var d = 0;
+      for (var e2 = 0; e2 < n; e2++) d = Math.max(d, Math.abs(npi[e2] - pi[e2]));
+      pi = npi;
+      if (d < 1e-16) break;
+    }
+    var Mat = eye(n).map(function (row, ri) { return row.map(function (val, ci) { return (ri === ci ? 1 : 0) - alpha * P[ri][ci]; }); });
+    var rhs = tele.map(function (val) { return (1 - alpha) * val; });
+    return { pi: pi, x: solveLinear(Mat, rhs) };
+  }
+
+  /* Dijkstra —— 单源最短路径（非负权，贪心 + 线性扫描取最小） */
+  function dijkstra(n, edges, src) {
+    var dist = new Array(n).fill(Infinity); dist[src] = 0;
+    var vis = new Array(n).fill(false);
+    for (var it = 0; it < n; it++) {
+      var u = -1, best = Infinity;
+      for (var i = 0; i < n; i++) if (!vis[i] && dist[i] < best) { best = dist[i]; u = i; }
+      if (u === -1) break;
+      vis[u] = true;
+      for (var k = 0; k < edges.length; k++) {
+        if (edges[k][0] === u) {
+          var nd = dist[u] + edges[k][2];
+          if (nd < dist[edges[k][1]]) dist[edges[k][1]] = nd;
+        }
+      }
+    }
+    return dist;
+  }
+  /* Bellman–Ford —— 作为 Dijkstra 的独立参照实现 */
+  function bellmanFord(n, edges, src) {
+    var dist = new Array(n).fill(Infinity); dist[src] = 0;
+    for (var i = 0; i < n - 1; i++) {
+      for (var k = 0; k < edges.length; k++) {
+        if (dist[edges[k][0]] + edges[k][2] < dist[edges[k][1]]) dist[edges[k][1]] = dist[edges[k][0]] + edges[k][2];
+      }
+    }
+    return dist;
+  }
+
+  /* Slice sampling —— Neal 2003（步进扩展 + 收缩）；logf 为对数密度，加性常数无关 */
+  function sliceSample(logf, x0, N, rng, w, m, burn) {
+    var x = x0, out = [];
+    for (var t = 0; t < N + burn; t++) {
+      var u = rng();
+      var y = logf(x) + Math.log(u > 0 ? u : 1e-300);   // 对数水平 Y = logf(x) + log(u) ≤ logf(x)
+      var su = rng() * w, L = x - su, R = x + (w - su);
+      var j = 0, k = 0;
+      while (j < m && logf(L) > y) { L -= w; j++; }
+      while (k < m && logf(R) > y) { R += w; k++; }
+      while (true) {
+        var x1 = L + rng() * (R - L);
+        if (logf(x1) >= y) { x = x1; break; }
+        if (x1 > x) R = x1; else L = x1;
+      }
+      if (t >= burn) out.push(x);
+    }
+    return out;
+  }
+
+  /* Newton 迭代 —— 求根（牛顿-拉夫森） */
+  function newton(f, df, x0, tol, maxIter) {
+    var x = x0;
+    for (var i = 0; i < maxIter; i++) {
+      var fx = f(x);
+      if (Math.abs(fx) < tol) break;
+      var step = fx / df(x);
+      x -= step;
+      if (Math.abs(step) < 1e-16) break;
+    }
+    return x;
+  }
+
+  /* RK4 —— 四阶 Runge–Kutta 常微分方程积分器（f(t, x) = dx/dt） */
+  function rk4(f, x0, T, h) {
+    var steps = Math.round(T / h), x = x0, t = 0;
+    for (var i = 0; i < steps; i++) {
+      var k1 = f(t, x);
+      var k2 = f(t + h / 2, x + h / 2 * k1);
+      var k3 = f(t + h / 2, x + h / 2 * k2);
+      var k4 = f(t + h, x + h * k3);
+      x += h / 6 * (k1 + 2 * k2 + 2 * k3 + k4);
+      t += h;
+    }
+    return x;
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -5739,6 +5932,92 @@
     return Math.max(Math.abs(s - 5), Math.abs(M[0][0] + M[1][1] - 3));
   });
 
+  /* —— 集大成验证算法库硬不变量（v1.3.8，8 条）—— */
+  check('svd：A = U·Σ·Vᵀ 重构 + σᵢ = √λᵢ(AᵀA)（独立谱交叉）+ UᵀU = VᵀV = I', 1e-8, function () {
+    var rng = mulberry32(101);
+    var M = Array.from({ length: 6 }, function () { return Array.from({ length: 4 }, function () { return rng() * 2 - 1; }); });
+    var res = svd(M);
+    var Sigma = zeros2(4, 4);
+    for (var i = 0; i < 4; i++) Sigma[i][i] = res.S[i];
+    var recon = maxAbsDiff2(matMul(matMul(res.U, Sigma), transpose(res.V)), M);
+    var scale = 0;
+    for (var a = 0; a < 6; a++) for (var b = 0; b < 4; b++) scale = Math.max(scale, Math.abs(M[a][b]));
+    var eig = jacobiEigen(matMul(transpose(M), M)).values.map(function (v) { return Math.sqrt(Math.max(v, 0)); }).sort(function (x, y) { return y - x; });
+    var eigErr = 0;
+    for (var c = 0; c < 4; c++) eigErr = Math.max(eigErr, Math.abs(res.S[c] - eig[c]));
+    var UtU = matMul(transpose(res.U), res.U), VtV = matMul(transpose(res.V), res.V), orth = 0;
+    for (var p = 0; p < 4; p++) for (var q = 0; q < 4; q++) {
+      orth = Math.max(orth, Math.abs(UtU[p][q] - (p === q ? 1 : 0)));
+      orth = Math.max(orth, Math.abs(VtV[p][q] - (p === q ? 1 : 0)));
+    }
+    return Math.max(recon / scale, eigErr, orth);
+  });
+  check('lu：A = L·U 重构 + L 单位下三角 / U 上三角（结构精确，Doolittle 无主元）', 1e-9, function () {
+    var rng = mulberry32(102), n = 8, M = [];
+    for (var i = 0; i < n; i++) {
+      var row = [], s = 0;
+      for (var j = 0; j < n; j++) { var v = rng() * 2 - 1; row.push(v); if (j !== i) s += Math.abs(v); }
+      row[i] = s + 1 + rng();   // 严格对角占优 → LU 无主元稳定
+      M.push(row);
+    }
+    var res = luDecompose(M);
+    var recon = maxAbsDiff2(matMul(res.L, res.U), M), scale = 0;
+    for (var a = 0; a < n; a++) for (var b = 0; b < n; b++) scale = Math.max(scale, Math.abs(M[a][b]));
+    var struct = 0;
+    for (var i2 = 0; i2 < n; i2++) {
+      struct = Math.max(struct, Math.abs(res.L[i2][i2] - 1));
+      for (var j2 = 0; j2 < n; j2++) {
+        if (i2 < j2) struct = Math.max(struct, Math.abs(res.L[i2][j2]));
+        if (i2 > j2) struct = Math.max(struct, Math.abs(res.U[i2][j2]));
+      }
+    }
+    return Math.max(recon / scale, struct);
+  });
+  check('fft：Cooley–Tukey radix-2 ≡ 朴素 O(n²) DFT（参照实现 vs 主实现）', 1e-9, function () {
+    var rng = mulberry32(103);
+    var x = Array.from({ length: 16 }, function () { return { re: rng() * 2 - 1, im: rng() * 2 - 1 }; });
+    var F = fft(x), D = dft(x), diff = 0;
+    for (var i = 0; i < 16; i++) diff = Math.max(diff, Math.abs(F[i].re - D[i].re), Math.abs(F[i].im - D[i].im));
+    return diff;
+  });
+  check('pageRank：幂迭代 ≡ 直接线性求解 (I − αP)π = (1−α)·1/n（两条独立路径）', 1e-9, function () {
+    var edges = [[0, 1, 1], [0, 2, 1], [1, 2, 1], [1, 3, 1], [2, 3, 1], [2, 4, 1], [3, 4, 1], [3, 5, 1], [4, 5, 1], [4, 6, 1], [5, 6, 1], [5, 7, 1], [6, 7, 1], [7, 0, 1], [2, 0, 1]];
+    var res = pageRank(8, edges, 0.85);
+    var norm = function (a) { var s = a.reduce(function (p, c) { return p + c; }, 0); return a.map(function (v) { return v / s; }); };
+    var pn = norm(res.pi), xn = norm(res.x), diff = 0;
+    for (var i = 0; i < 8; i++) diff = Math.max(diff, Math.abs(pn[i] - xn[i]));
+    return diff;
+  });
+  check('dijkstra：最短路径 ≡ Bellman–Ford（参照实现 vs 主实现，含不可达节点）', 1e-12, function () {
+    var rng = mulberry32(104), n = 12, edges = [];
+    for (var u = 0; u < n; u++) for (var v = 0; v < n; v++) if (rng() < 0.4) edges.push([u, v, 0.5 + rng() * 2]);
+    var d1 = dijkstra(n, edges, 0), d2 = bellmanFord(n, edges, 0), diff = 0;
+    for (var i = 0; i < n; i++) { if (d1[i] === d2[i]) continue; diff = Math.max(diff, Math.abs(d1[i] - d2[i])); }
+    return diff;
+  });
+  check('sliceSample：目标保真 E[均值]=0、E[方差]=1（12 seed 稳健，标准正态目标）', 0.02, function () {
+    var logf = function (x) { return -0.5 * x * x; };
+    var meanAcc = 0, varAcc = 0;
+    for (var sd = 1; sd <= 12; sd++) {
+      var smp = sliceSample(logf, 0, 8000, mulberry32(sd), 1.0, 50, 1000);
+      var mean = smp.reduce(function (p, c) { return p + c; }, 0) / smp.length;
+      var varc = smp.reduce(function (p, c) { return p + (c - mean) * (c - mean); }, 0) / smp.length;
+      meanAcc += mean; varAcc += varc;
+    }
+    var avgMean = meanAcc / 12, avgVar = varAcc / 12;
+    return Math.max(Math.abs(avgMean), Math.abs(avgVar - 1));
+  });
+  check('newton：求根 x³ − 2x − 5 = 0，|f(x*)| = 0（解析根 ≈ 2.094551482）', 1e-12, function () {
+    var f = function (x) { return x * x * x - 2 * x - 5; };
+    var df = function (x) { return 3 * x * x - 2; };
+    return Math.abs(f(newton(f, df, 2, 1e-15, 100)));
+  });
+  check('rk4：dx/dt = λx ≡ 解析解 x(T) = x₀·e^{λT}（λ = −1, T = 1, h = 0.005）', 1e-8, function () {
+    var lambda = -1;
+    var x = rk4(function (t, v) { return lambda * v; }, 1, 1, 0.005);
+    return Math.abs(x - Math.exp(lambda));
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -5849,6 +6128,10 @@
     checkpoint: checkpoint, Profiler: Profiler, Tracer: Tracer, Dispatcher: Dispatcher, Barrier: Barrier,
     EventLog: EventLog, prefetch: prefetch,
     matrixRank: matrixRank, nullspace: nullspace, orthonormalize: orthonormalize, condEstimate: condEstimate,
+    /* 集大成验证算法库（v1.3.8）—— L10 ISA 之外的旗舰级参考实现 */
+    svd: svd, luDecompose: luDecompose, fft: fft, dft: dft,
+    pageRank: pageRank, dijkstra: dijkstra, bellmanFord: bellmanFord,
+    sliceSample: sliceSample, newton: newton, rk4: rk4,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

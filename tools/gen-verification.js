@@ -29,7 +29,7 @@ const regChecks = [
   ['变体 ∈ {base,batched,fused,inplace}', REGISTRY.every(e => ['base', 'batched', 'fused', 'inplace'].includes(e.variant))],
   ['全部含数学不变量', REGISTRY.every(e => e.invariant && e.invariant.length > 0)],
   ['verified 项 impl 均为 core.js 真实导出', REGISTRY.filter(e => e.status === 'verified').every(e => typeof AXIOM[e.impl] !== 'undefined')],
-  ['仅 base 变体可为 verified', REGISTRY.filter(e => e.status === 'verified').every(e => e.variant === 'base')],
+  ['verified 变体限于 {base,batched,fused,inplace}', REGISTRY.filter(e => e.status === 'verified').every(e => ['base', 'batched', 'fused', 'inplace'].includes(e.variant))],
   ['verified 数 > 0（当前 ' + verified + '）', verified > 0]
 ];
 

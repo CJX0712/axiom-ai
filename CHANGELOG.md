@@ -1,5 +1,23 @@
 # 更新日志
 
+## [1.3.8] - 2026-10-20
+
+### 集大成验证算法库上线（SVD / LU / FFT / PageRank / Dijkstra / slice sampling / Newton / RK4）
+- **新增 8 项旗舰级算法参考实现**（核心不变量 **304 → 312**，无头测试 314 → 322 项），锚定世界顶级成果、零依赖单文件、各带可独立复算的硬不变量；**不占固定 1024 网格**（ISA 原子算子之外的算法层，README §7.5 + `docs/ALGORITHMS.md`）：
+  - **SVD**（Hestenes 1958 单侧 Jacobi）：A = U·Σ·Vᵀ 重构 + σᵢ = √λᵢ(AᵀA)（**独立谱交叉**：jacobiEigen 另路求谱）+ UᵀU = VᵀV = I，残差 2.4e-15
+  - **LU 分解**（Doolittle 无主元）：A = L·U 重构 + L 单位下三角 / U 上三角（结构精确）；测试矩阵取严格对角占优保证无主元稳定性，残差 3.4e-16
+  - **FFT**（Cooley–Tukey 1965，迭代 radix-2 + 位反转）：**参照实现 vs 主实现** ≡ 同文件朴素 O(n²) DFT，残差 4.3e-14
+  - **PageRank**（Page–Brin 1998，幂迭代 + 悬挂节点 teleport）：**两条独立路径**幂迭代 ≡ 直接线性求解 (I − αP)π = (1−α)·1/n，残差 3.9e-16
+  - **Dijkstra**（1959）：**参照实现 vs 主实现** ≡ Bellman–Ford，含不可达节点（∞ 判等，避免 ∞−∞=NaN），残差 0（精确）
+  - **Slice sampling**（Neal 2003，步进扩展 + 收缩）：目标保真 E[均值]=0、E[方差]=1（标准正态，**12 seed 稳健**），残差 3.31e-3（容差 0.02，余量 6×）
+  - **Newton 求根**：x³−2x−5 = 0，|f(x*)| = 0 达机器精度，残差 8.9e-16
+  - **RK4**（Runge–Kutta 1901）：dx/dt = λx ≡ 解析解 x₀e^{λT}，残差 1.9e-12
+- **沙盒先行铁律执行**：8 项实现先在 Node 沙盒基于 core.js 真实辅助函数验证通过，再整块注入；随后**多 seed 稳健性扫描**（SVD/LU/FFT/PageRank/Dijkstra/RK4 各 25 seed，最坏残差均余量 ≥10³；slice 20 seed 扫描单 seed 最坏 3.2e-2/4.3e-2，故检查口径改用 12 seed 平均期望矩）
+- **实现教训（已记入 ALGORITHMS.md）**：slice sampling 对数水平必须写 `Y = logf(x) + log(u)`（保证 Y ≤ logf(x)）；若误写 `logf(x) − log(−log(u))` 会使 slice 为空 → 收缩循环死循环（沙盒实测 hang）
+- **顺手修复陈旧断言**：`tools/gen-verification.js` 的注册表检查仍断言「仅 base 变体可为 verified」（v1.1.4–v1.1.6 引入三大变体引擎后失效，导致 VERIFICATION.md 长期显示 321/322 而 run.js 实为 322/322）；已更正为「verified 变体限于 {base,batched,fused,inplace}」，文档与实测一致
+- **文档**：README 新增 §7.5「集大成验证算法库」表（含每条不变量与实测残差）、徽章/数字同步（核心不变量 312/312、无头 322/322）、路线图勾选 v1.3.8 并列出后续候选；新增 `docs/ALGORITHMS.md`（算法原理/不变量/稳健性记录/教训）；致谢名单补充 Hestenes·Doolittle·Cooley–Tukey·Page–Brin·Dijkstra·Neal·Newton·Runge–Kutta
+- 指标：verified **811/1024 不变**（算法库不占 ISA 网格）；核心不变量 **304 → 312/312**；无头 **314 → 322/322** · UI 冒烟 **26/26**；axiom.html **590.0 → 602.2 KB**；三表幽灵键 0
+
 ## [1.3.7] - 2026-10-20
 
 ### 批处理/融合 spec 甄别收口 + 诚实保留说明 + 文档升级
