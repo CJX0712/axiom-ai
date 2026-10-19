@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.2.4';
+  var VERSION = '1.2.5';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4883,6 +4883,78 @@
     if (arrMaxDiff(fused_label_onehot(labels), oneHot(labelEncode(labels).codes).matrix) > 0) bad++;
     if (Math.abs(fused_allreduce([1, 2, 3, 4]) - reduceAll(broadcast([1, 2, 3, 4]))) > 0) bad++;
     return bad + (n < 40 ? 1e6 : 0); // 守卫：至少覆盖 40 个融合样本
+  });
+  /* —— v1.2.5 不变量扩容第二批：谱/结构/收敛/不等式/恒等式 —— */
+  check('jacobi：谱不变量 Πλᵢ = det(A)', 1e-9, function () {
+    var eig = jacobiEigen([[4, 1], [1, 3]]);
+    var prod = eig.values.reduce(function (a, b) { return a * b; }, 1);
+    return Math.abs(prod - det([[4, 1], [1, 3]]));
+  });
+  check('linreg：含截距残差和 = 0（估计无偏性）', 1e-9, function () {
+    var X = [[1, 1], [1, 2], [1, 3], [1, 4]], y = [2, 4, 5, 7];
+    var w = linearRegression(X, y).w;
+    var s = 0;
+    for (var i = 0; i < X.length; i++) s += y[i] - (w[0] * X[i][0] + w[1] * X[i][1]);
+    return Math.abs(s);
+  });
+  check('gmm：责任度每行和 = 1 且混合权重和 = 1（结构不变量）', 1e-12, function () {
+    var r = gmmEM([[0, 0], [0.1, 0], [5, 5], [5.1, 4.9]], 2);
+    var bad = 0;
+    for (var i = 0; i < r.responsibilities.length; i++) bad += Math.abs(r.responsibilities[i].reduce(function (a, b) { return a + b; }, 0) - 1);
+    bad += Math.abs(r.weights.reduce(function (a, b) { return a + b; }, 0) - 1);
+    return bad;
+  });
+  check('kmeans：每点分配给最近中心（分配最优性）', 0, function () {
+    var X = [[0, 0], [0.1, 0.1], [5, 5], [5.1, 4.9]];
+    var r = kmeans(X, 2), bad = 0;
+    for (var i = 0; i < X.length; i++) {
+      var d = r.centers.map(function (c) { return Math.sqrt(Math.pow(c[0] - X[i][0], 2) + Math.pow(c[1] - X[i][1], 2)); });
+      var nearest = d.indexOf(Math.min.apply(null, d));
+      if (nearest !== r.labels[i]) bad++;
+    }
+    return bad;
+  });
+  check('attention：因果掩码首行 = one-hot（只能看自己）', 1e-12, function () {
+    var r = selfAttention([[1, 0], [0, 1]], [[1, 0], [0, 1]], [[1, 2], [3, 4]], true);
+    return arrMaxDiff(r.weights[0], [1, 0]);
+  });
+  check('hmm：前向终态 α_T 求和 = P(O)（对数域一致）', 1e-10, function () {
+    var r = hmmForwardBackward([0.6, 0.4], [[0.7, 0.3], [0.4, 0.6]], [[0.9, 0.1], [0.2, 0.8]], [0, 1, 0]);
+    var last = r.alpha[r.alpha.length - 1];
+    return Math.abs(last.reduce(function (a, b) { return a + b; }, 0) - Math.exp(r.logPO));
+  });
+  check('valueIteration：V 逐轮单调不减（压缩映射迭代性质）', 0, function () {
+    var r = valueIteration({ n: 5, gamma: 0.9, maxIter: 60 });
+    var bad = 0;
+    for (var i = 1; i < r.snapshots.length; i++)
+      for (var s = 0; s < r.snapshots[i].length; s++) if (r.snapshots[i][s] < r.snapshots[i - 1][s] - 1e-12) bad++;
+    return bad;
+  });
+  check('kl：KL(p‖q) ≥ 0（Gibbs 不等式，四组网格）', 1e-12, function () {
+    var ps = [[0.5, 0.5], [0.9, 0.1], [0.2, 0.8], [0.6, 0.3, 0.1]];
+    var qs = [[0.5, 0.5], [0.1, 0.9], [0.5, 0.5], [0.2, 0.3, 0.5]];
+    var min = Infinity;
+    for (var i = 0; i < ps.length; i++) min = Math.min(min, klDivergence(ps[i], qs[i]));
+    return min < 0 ? -min : 0;
+  });
+  check('js：JS = ½KL(p‖m) + ½KL(q‖m)（恒等式）', 1e-12, function () {
+    var p = [0.6, 0.4], q = [0.2, 0.8];
+    var m = [0.5 * (p[0] + q[0]), 0.5 * (p[1] + q[1])];
+    return Math.abs(jsDivergence(p, q) - 0.5 * (klDivergence(p, m) + klDivergence(q, m)));
+  });
+  check('mutualInfo：I(X;Y) ≤ min(H(X), H(Y))', 1e-12, function () {
+    var indep = [[0.25, 0.25], [0.25, 0.25]];
+    var perfect = [[0.5, 0], [0, 0.5]];
+    var hxy = entropy([0.5, 0.5]);
+    return (mutualInfo(indep) > 1e-12 ? 1 : 0) + (mutualInfo(perfect) > hxy + 1e-12 ? 1 : 0);
+  });
+  check('rope：旋转保范数 ‖R_m x‖ = ‖x‖', 1e-12, function () {
+    var x = [3, 4, 1, 2];
+    return Math.abs(norm2(ropeApply(x, 7, 10000)) - norm2(x));
+  });
+  check('grad_accum：累加交换律（顺序无关）', 1e-12, function () {
+    var g1 = [[1, 2], [3, 4]], g2 = [[0.5, -0.5], [1, 1]];
+    return arrMaxDiff(gradAccum([g1, g2]), gradAccum([g2, g1]));
   });
   /* —— v1.2.4 不变量扩容：第二/第三硬不变量（全部可独立复算）—— */
   check('matmul：结合律 (AB)C = A(BC)（逐位一致）', 1e-12, function () {
