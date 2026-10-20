@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /* ============================================================================
  * UI 冒烟测试：用最小 DOM 垫片在 Node 中执行 ui.js 的全部渲染路径
- * 验证：外壳渲染、Tab 切换、ISA 表格/分页、自检运行、三个演示计算路径、
- *       导出报告生成。
+ * 验证：外壳渲染、Tab 切换、ISA 表格/分页、自检运行、算法库 22 组演示、
+ *       管线编排、三个演示计算路径、导出报告生成。
  * ==========================================================================*/
 'use strict';
 const fs = require('fs');
@@ -118,7 +118,7 @@ ok(sandbox.AXIOM.runChecks().passed === sandbox.AXIOM.checks.length, 'core.js �
 ok(sandbox.AXIOM_REGISTRY.length === 1024, 'registry.js 1024 条已加载');
 
 var tabs = findAll(appEl, function (n) { return n.tagName === 'BUTTON' && n.getAttribute('data-tab'); });
-ok(tabs.length === 6, '6 个 Tab 渲染（实际 ' + tabs.length + '）');
+ok(tabs.length === 7, '7 个 Tab 渲染（实际 ' + tabs.length + '）');
 ok(findAll(appEl, function (n) { return n._cls.contains('layer'); }).length === 10, '架构视图 10 层卡片');
 
 /* Tab 1 → 指令集 */
@@ -147,7 +147,24 @@ ok(summaries.filter(function (s) { return s._cls.contains('ok'); }).length === 2
 var verifyRows = findAll(viewEl(), function (n) { return n.tagName === 'TR'; }).length;
 ok(verifyRows >= sandbox.AXIOM.checks.length, '自检结果表 ≥ ' + sandbox.AXIOM.checks.length + ' 行（实际 ' + verifyRows + '）');
 
-/* Tab 3 → 管线编排（L9 组合应用层） */
+/* Tab → 算法库（22 组旗舰级算法参考实现，ISA 之外） */
+clickTab('algo');
+var algoTables = findAll(viewEl(), function (n) { return n.tagName === 'TABLE'; });
+ok(algoTables.length === 1, '算法库表格渲染（实际 ' + algoTables.length + '）');
+var algoRows = algoTables.length ? findAll(algoTables[0], function (n) { return n.tagName === 'TR'; }).length : 0;
+ok(algoRows === 22, '算法库 22 数据行（实际 ' + algoRows + '）');
+ok(algoTables.length && algoTables[0].innerHTML.indexOf('<thead>') !== -1, '算法库表头已渲染');
+var algoBtns = findAll(viewEl(), function (n) { return n.tagName === 'BUTTON'; });
+ok(algoBtns.length === 23, '算法库按钮：1 个「运行全部」+ 22 个单组演示（实际 ' + algoBtns.length + '）');
+var algoThrew = false;
+try { algoBtns.forEach(function (b) { b.dispatch('click'); }); } catch (e) { algoThrew = true; console.log(e); }
+ok(!algoThrew, '算法库 22 组演示 + 运行全部：点击全部无异常');
+var algoSums = findAll(viewEl(), function (n) { return n._cls.contains('summary'); });
+ok(algoSums.length >= 23, '算法库演示汇总条 ≥ 23（实际 ' + algoSums.length + '）');
+ok(algoSums.length > 0 && algoSums.filter(function (s) { return s._cls.contains('ok'); }).length === algoSums.length,
+  '算法库演示汇总全绿（' + algoSums.length + ' 条）');
+
+/* Tab → 管线编排（L9 组合应用层） */
 clickTab('pipeline');
 var presetBtns = findAll(viewEl(), function (n) { return n.tagName === 'BUTTON'; });
 ok(presetBtns.length >= 4, '管线视图：3 预设 + 加入 + 执行按钮（实际 ' + presetBtns.length + '）');

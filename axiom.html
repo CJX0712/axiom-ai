@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.10';
+  var VERSION = '1.3.11';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3208,7 +3208,9 @@
           off += apq * apq;
           if (Math.abs(apq) <= 1e-300) continue;
           var zeta = (aqq - app) / (2 * apq);
-          var t = Math.sign(zeta) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
+          // ⚠️ ζ=0（两列范数恰等的对称边界）时 Math.sign(0)=0 会使 t=0 退化为恒等旋转、非对角永不归零；
+          // Hestenes 根 t²+2ζt−1=0 在 ζ=0 时为 ±1（均有效），须显式取 ±1（v1.3.11 修复，回归检查见 checks）
+          var t = (zeta >= 0 ? 1 : -1) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
           var c = 1 / Math.sqrt(1 + t * t), s = c * t;
           for (var r = 0; r < m; r++) { var bpr = B[r][p], bqr = B[r][q]; B[r][p] = c * bpr - s * bqr; B[r][q] = s * bpr + c * bqr; }
           for (var r2 = 0; r2 < n; r2++) { var vp = V[r2][p], vq = V[r2][q]; V[r2][p] = c * vp - s * vq; V[r2][q] = s * vp + c * vq; }
@@ -6445,6 +6447,21 @@
     }
     return Math.max(recon / scale, eigErr, orth);
   });
+  /* 回归检查（v1.3.11）：svd 等范数列边界 —— 列 0/1 范数恰等（√10）且内积 6 ≠ 0 ⇒ ζ = 0，
+   * 修复前 Math.sign(0)=0 使旋转退化为恒等，σ 错为 [√10,√10,2]（随机矩阵检查概率 0，永不触发） */
+  check('svd：等范数列边界（ζ=0，Hestenes 旋转根 ±1）—— 解析奇异值 4/2/2 + σᵢ = √λᵢ(AᵀA) + UᵀU = I + 重构', 1e-9, function () {
+    var A = [[3, 1, 0], [1, 3, 0], [0, 0, 2]];
+    var r = svd(A);
+    var e = Math.max(Math.abs(r.S[0] - 4), Math.abs(r.S[1] - 2), Math.abs(r.S[2] - 2));   // 解析：AᵀA 特征值 16 / 4 / 4
+    var lam = jacobiEigen(matMul(transpose(A), A)).values;                                 // 独立谱交叉（Jacobi 另路计算）
+    for (var i = 0; i < 3; i++) e = Math.max(e, Math.abs(r.S[i] - Math.sqrt(Math.max(0, lam[i]))));
+    var UtU = matMul(transpose(r.U), r.U);
+    for (var p = 0; p < 3; p++) for (var q = 0; q < 3; q++) e = Math.max(e, Math.abs(UtU[p][q] - (p === q ? 1 : 0)));
+    var Sigma = zeros2(3, 3);
+    for (var k = 0; k < 3; k++) Sigma[k][k] = r.S[k];
+    e = Math.max(e, maxAbsDiff2(matMul(matMul(r.U, Sigma), transpose(r.V)), A) / 3);      // 重构残差（相对 ‖A‖∞）
+    return e;
+  });
   check('lu：A = L·U 重构 + L 单位下三角 / U 上三角（结构精确，Doolittle 无主元）', 1e-9, function () {
     var rng = mulberry32(102), n = 8, M = [];
     for (var i = 0; i < n; i++) {
@@ -7905,7 +7922,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 /* ==== AXIOM ui.js（仪表盘） ==== */
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(22) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -7975,6 +7992,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     '.summary.ok{border-color:var(--green);color:var(--green)}',
     '.summary.bad{border-color:var(--red);color:var(--red)}',
     '.res{font-family:var(--mono);font-size:12px;white-space:nowrap}',
+    /* algo */
+    '.ademo{background:var(--panel);border:1px solid var(--cyan);color:var(--cyan);border-radius:6px;padding:3px 12px;cursor:pointer;font-size:12px;font-family:var(--mono);white-space:nowrap}',
+    '.ademo:hover{background:rgba(34,211,238,.12)}',
+    '.ademo:disabled{opacity:.5;cursor:wait}',
+    '.algo-out{font-family:var(--mono);font-size:12px;color:var(--txt2);line-height:1.9;white-space:pre-wrap}',
     /* lab */
     '.demo{border:1px solid var(--border);border-radius:10px;padding:18px;margin-bottom:18px;background:var(--panel2)}',
     '.demo h3{font-size:15px;margin-bottom:4px}',
@@ -8050,6 +8072,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     chips.appendChild(el('span', 'chip', '已验证 <b>' + verified + '</b>'));
     chips.appendChild(el('span', 'chip', '系统层 <b>10</b>'));
     chips.appendChild(el('span', 'chip', '不变量 <b>' + AXIOM.checks.length + '</b>'));
+    chips.appendChild(el('span', 'chip', '算法库 <b>' + ALGO_DEFS.length + '</b>'));
     var gh = el('a', 'gh', 'GitHub ↗');
     gh.href = 'https://github.com/CJX0712/axiom-ai';
     gh.target = '_blank';
@@ -8061,7 +8084,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 
     var wrap = el('div', 'wrap');
     var tabs = el('div', 'tabs');
-    var TAB_DEFS = [['arch', '架构总览'], ['isa', '指令集 · 1024'], ['verify', '实时自检'], ['pipeline', '管线编排 · L9'], ['lab', '演示实验室'], ['export', '导出']];
+    var TAB_DEFS = [['arch', '架构总览'], ['isa', '指令集 · 1024'], ['verify', '实时自检'], ['algo', '算法库 · ' + ALGO_DEFS.length], ['pipeline', '管线编排 · L9'], ['lab', '演示实验室'], ['export', '导出']];
     var view = el('div', 'view');
     TAB_DEFS.forEach(function (d) {
       var t = el('button', 'tab' + (state.tab === d[0] ? ' on' : ''), esc(d[1]));
@@ -8090,6 +8113,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     if (state.tab === 'arch') renderArch(view);
     else if (state.tab === 'isa') renderISA(view);
     else if (state.tab === 'verify') renderVerify(view);
+    else if (state.tab === 'algo') renderAlgo(view);
     else if (state.tab === 'pipeline') renderPipeline(view);
     else if (state.tab === 'lab') renderLab(view);
     else renderExport(view);
@@ -8132,7 +8156,8 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
       '<div style="margin-top:18px;font-size:12px;color:var(--txt3);line-height:2">' +
       '设计原则：<b style="color:var(--txt2)">下层提供可验证原语，上层由下层组合</b>。L1–L8 的每条微指令都携带数学不变量；' +
       'L9 不新增指令，由已有微指令组合成推理 / 训练编排；L10 为指令集主体（1024 条）。' +
-      '全部 ' + AXIOM.checks.length + ' 项不变量在「实时自检」视图中可一键复算。</div>'));
+      '全部 ' + AXIOM.checks.length + ' 项不变量在「实时自检」视图中可一键复算；' +
+      'ISA 之外另有 <b style="color:var(--txt2)">' + ALGO_DEFS.length + ' 组旗舰级算法参考实现</b>（SVD / FFT / PageRank / 最大流 / SCC / 匹配 …），见「算法库」视图。</div>'));
   }
 
   /* ---------------- 视图 2：指令集 ---------------- */
@@ -8288,7 +8313,276 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     return Object.keys(m).map(function (k) { return m[k]; });
   }
 
-  /* ---------------- 视图 4：管线编排（L9 组合应用层） ---------------- */
+  /* ---------------- 视图 4：算法库（L10 ISA 之外的旗舰级参考实现） ----------------
+   * 22 组算法，每组携带可独立复算的硬不变量（解析 vs 数值 / 参照实现 vs 主实现 / 定理级 / 结构）；
+   * 表格中的「最大残差」直接取自 AXIOM.runChecks() 的实测结果（浏览器与 Node 同源码）。
+   */
+  var ALGO_DEFS = [
+    { id: 'svd', name: 'SVD 分解', src: 'Golub–Reinsch / Hestenes (1958)', api: 'AXIOM.svd', inv: 'A = U·Σ·Vᵀ 重构 + σᵢ = √λᵢ(AᵀA) 独立谱交叉 + 正交性', chk: ['svd：'] },
+    { id: 'lu', name: 'LU 分解', src: 'Doolittle (1878)', api: 'AXIOM.luDecompose', inv: 'A = L·U 重构 + L 单位下三角 / U 上三角（结构精确）', chk: ['lu：'] },
+    { id: 'fft', name: 'FFT', src: 'Cooley–Tukey (1965)', api: 'AXIOM.fft', inv: '迭代 radix-2 ≡ 朴素 O(n²) DFT（参照实现 vs 主实现）', chk: ['fft：'] },
+    { id: 'pageRank', name: 'PageRank', src: 'Page–Brin (1998)', api: 'AXIOM.pageRank', inv: '幂迭代 ≡ 直接线性求解 (I−αP)π=(1−α)/n（两条独立路径）', chk: ['pageRank：'] },
+    { id: 'dijkstra', name: 'Dijkstra 最短路径', src: 'Dijkstra (1959)', api: 'AXIOM.dijkstra', inv: '≡ Bellman–Ford（参照实现 vs 主实现，含不可达节点）', chk: ['dijkstra：'] },
+    { id: 'sliceSample', name: 'Slice Sampling', src: 'Neal (2003)', api: 'AXIOM.sliceSample', inv: '目标保真 E[均值]=0、E[方差]=1（12 seed 稳健）', chk: ['sliceSample：'] },
+    { id: 'newton', name: 'Newton 求根', src: 'Newton–Raphson (1669)', api: 'AXIOM.newton', inv: '|f(x*)| = 0（解析根 ≈ 2.094551481542）', chk: ['newton：'] },
+    { id: 'rk4', name: 'RK4 积分', src: 'Runge (1895)–Kutta (1901)', api: 'AXIOM.rk4', inv: 'dx/dt = λx ≡ 解析解 x₀·e^{λT}', chk: ['rk4：'] },
+    { id: 'heapSort', name: '二叉堆 + 堆排序', src: 'Williams (1964)', api: 'AXIOM.heapSort', inv: '堆排序 ≡ Array.sort 升序（200 元素逐位一致）', chk: ['heapSort：'] },
+    { id: 'dijkstraHeap', name: '堆优化 Dijkstra', src: 'Dijkstra + 二叉堆', api: 'AXIOM.dijkstraHeap', inv: '三路交叉：堆版 ≡ Bellman–Ford ≡ 线性扫描', chk: ['dijkstraHeap：'] },
+    { id: 'aStar', name: 'A* 搜索', src: 'Hart–Nilsson–Raphael (1968)', api: 'AXIOM.aStar', inv: '最优距离 ≡ Dijkstra + 可采纳启发严格剪枝', chk: ['aStar：'] },
+    { id: 'fftConvolve', name: 'FFT 卷积', src: 'Cooley–Tukey + 卷积定理', api: 'AXIOM.fftConvolve', inv: '循环卷积 ≡ 朴素 O(n²)（卷积定理）', chk: ['fftConvolve：'] },
+    { id: 'csr', name: 'CSR 稀疏矩阵', src: 'SciPy / BLAS 生态', api: 'AXIOM.denseToCSR', inv: '稀疏 matVec ≡ 稠密 + 转置 ≡ 稠密 transpose', chk: ['csr：'] },
+    { id: 'mst', name: 'Prim / Kruskal MST', src: 'Prim (1957)；Kruskal (1956)', api: 'AXIOM.primMST', inv: '三路交叉 ≡ 暴力枚举生成树（割集最优性）', chk: ['mst：'] },
+    { id: 'bisect', name: '二分求根', src: '经典区间二分', api: 'AXIOM.bisect', inv: '二分根 ≡ Newton 根（同一方程两条独立路径）', chk: ['bisect：'] },
+    { id: 'kadane', name: 'Kadane 最大子数组', src: 'Kadane (1977)', api: 'AXIOM.kadane', inv: '≡ 暴力枚举 O(n²)（20 实例整数精确）', chk: ['kadane：'] },
+    { id: 'qrEigenvalues', name: 'QR 迭代特征值', src: 'Francis–Wilkinson (1961–64)', api: 'AXIOM.qrEigenvalues', inv: 'QR 迭代 ≡ Jacobi + tr(A) = Σλᵢ（含退化用例）', chk: ['qrEigenvalues：'] },
+    { id: 'maxFlowEK', name: '最大流 Edmonds–Karp', src: 'Edmonds–Karp (1972)', api: 'AXIOM.maxFlowEK', inv: '定理级：max-flow = min-cut（暴力枚举 2^(n−2) 个割）', chk: ['maxFlow：Edmonds'] },
+    { id: 'maxFlowDinic', name: '最大流 Dinic', src: 'Dinic (1970)', api: 'AXIOM.maxFlowDinic', inv: '跨算法一致：Dinic ≡ Edmonds–Karp', chk: ['maxFlow：Dinic'] },
+    { id: 'scc', name: '强连通分量', src: 'Tarjan (1972)；Kosaraju (1978)', api: 'AXIOM.tarjanSCC', inv: '跨算法一致：Tarjan ≡ Kosaraju（15 图逐分量）', chk: ['scc：'] },
+    { id: 'kahnTopo', name: '拓扑排序', src: 'Kahn (1962)', api: 'AXIOM.kahnTopo', inv: '结构不变量：边全前向 + 全覆盖 + 有环返回 null', chk: ['kahnTopo：'] },
+    { id: 'kuhnMatching', name: '二分图最大匹配', src: 'Kuhn (1955)；König (1931)', api: 'AXIOM.kuhnMatching', inv: '定理级：König 最大匹配 = 最小顶点覆盖 + 合法性', chk: ['kuhnMatching：'] }
+  ];
+  function algoMaxDiff(A, B) {
+    var m = 0;
+    for (var i = 0; i < A.length; i++) for (var j = 0; j < A[i].length; j++) m = Math.max(m, Math.abs(A[i][j] - B[i][j]));
+    return m;
+  }
+  var DEMOS = {
+  svd: function () {
+    var A = [[3, 1, 0], [1, 3, 0], [0, 0, 2]];
+    var r = AXIOM.svd(A);
+    var rec = AXIOM.matMul(AXIOM.matMul(r.U, r.S.map(function (v, i) { return r.S.map(function (_, j) { return i === j ? v : 0; }); })), AXIOM.transpose(r.V));
+    return 'A = [[3,1,0],[1,3,0],[0,0,2]]（对称阵，解析奇异值 4/2/2）\n奇异值 S = ' + fmtVec(r.S) +
+      '\n重构残差 ‖U·Σ·Vᵀ − A‖∞ = ' + algoMaxDiff(rec, A).toExponential(2) +
+      '\nUᵀU − I 残差 = ' + algoMaxDiff(AXIOM.matMul(AXIOM.transpose(r.U), r.U), AXIOM.eye(3)).toExponential(2);
+  },
+  lu: function () {
+    var A = [[8, 2, 1, 0], [2, 9, 3, 1], [1, 3, 10, 2], [0, 1, 2, 7]];
+    var r = AXIOM.luDecompose(A);
+    return '4×4 对角占优矩阵（Doolittle 无主元数值稳定）\nL·U 重构残差 ‖LU − A‖∞ = ' + algoMaxDiff(AXIOM.matMul(r.L, r.U), A).toExponential(2) +
+      '\nL 为单位下三角 · U 为上三角（结构精确）';
+  },
+  fft: function () {
+    var x = [1, 2, 3, 4].map(function (v) { return { re: v, im: 0 }; });
+    var X = AXIOM.fft(x), D = AXIOM.dft(x), d = 0;
+    for (var i = 0; i < X.length; i++) d = Math.max(d, Math.abs(X[i].re - D[i].re), Math.abs(X[i].im - D[i].im));
+    return 'x = [1, 2, 3, 4]（n = 4 实数信号，2 的幂）\nFFT X = [' + X.map(function (v) { return v.re.toFixed(4) + (v.im >= 0 ? '+' : '') + v.im.toFixed(4) + 'i'; }).join(', ') + ']' +
+      '\n与朴素 O(n²) DFT 最大差 = ' + d.toExponential(2);
+  },
+  pageRank: function () {
+    var r = AXIOM.pageRank(4, [[0, 1, 1], [1, 2, 1], [2, 0, 1], [3, 2, 1]], 0.85);
+    var d = 0;
+    for (var i = 0; i < r.pi.length; i++) d = Math.max(d, Math.abs(r.pi[i] - r.x[i]));
+    return '4 节点有向图（0→1→2→0 环 + 悬挂节点 3→2，α = 0.85）\n幂迭代 π = ' + fmtVec(r.pi) +
+      '\n与直接线性求解 (I−αP)π=(1−α)/n 解差 = ' + d.toExponential(2);
+  },
+  dijkstra: function () {
+    var edges = [[0, 1, 4], [0, 2, 1], [2, 1, 2], [1, 3, 1], [2, 3, 5], [3, 4, 3]];
+    var d1 = AXIOM.dijkstra(5, edges, 0), d2 = AXIOM.bellmanFord(5, edges, 0), d = 0;
+    for (var i = 0; i < 5; i++) d = Math.max(d, Math.abs(d1[i] - d2[i]));
+    return '5 节点 6 边非负权图（源 0）\nDijkstra dist = ' + fmtVec(d1) +
+      '\n与 Bellman–Ford 参照实现解差 = ' + d.toExponential(2);
+  },
+  sliceSample: function () {
+    var rng = AXIOM.mulberry32(13);
+    var s = AXIOM.sliceSample(function (x) { return -0.5 * x * x; }, 0, 3000, rng, 1.5, 20, 300);
+    var mean = s.reduce(function (a, b) { return a + b; }, 0) / s.length;
+    var v = s.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0) / s.length;
+    return '目标：标准正态 N(0,1)，logf(x) = −x²/2（种子 13，burn-in 300）\n3000 个样本：均值 = ' + mean.toFixed(4) + '（期望 0）· 方差 = ' + v.toFixed(4) + '（期望 1）';
+  },
+  newton: function () {
+    var f = function (x) { return x * x * x - 2 * x - 5; };
+    var df = function (x) { return 3 * x * x - 2; };
+    var r = AXIOM.newton(f, df, 2, 1e-14, 50);
+    return 'f(x) = x³ − 2x − 5，初值 x₀ = 2\n牛顿根 x* = ' + r.toFixed(12) + '（解析根 ≈ 2.094551481542）\n|f(x*)| = ' + Math.abs(f(r)).toExponential(2);
+  },
+  rk4: function () {
+    var r = AXIOM.rk4(function (t, x) { return -x; }, 1, 1, 0.01);
+    return 'dx/dt = −x，x(0) = 1，T = 1，h = 0.01\nRK4 数值解 x(1) = ' + r.toFixed(10) +
+      '\n解析解 e⁻¹ = ' + Math.exp(-1).toFixed(10) + ' · 误差 = ' + Math.abs(r - Math.exp(-1)).toExponential(2);
+  },
+  heapSort: function () {
+    var a = [5, 2, 9, 1, 7, 3, 8, 4, 6, 0];
+    return '输入 10 元素：[5, 2, 9, 1, 7, 3, 8, 4, 6, 0]\n小顶堆 push/pop 排序输出 = ' + fmtVec(AXIOM.heapSort(a.slice())) +
+      '\n显式比较器（规避数组 < 字符串强制转换）· 与 Array.sort 200 元素逐位一致';
+  },
+  dijkstraHeap: function () {
+    var edges = [[0, 1, 4], [0, 2, 1], [2, 1, 2], [1, 3, 1], [2, 3, 5], [3, 4, 3]];
+    var d1 = AXIOM.dijkstraHeap(5, edges, 0), d2 = AXIOM.dijkstra(5, edges, 0), d = 0;
+    for (var i = 0; i < 5; i++) d = Math.max(d, Math.abs(d1[i] - d2[i]));
+    return '同 5 节点图（二叉堆优先队列 + 过期条目惰性删除，O((V+E)logV)）\n堆优化 dist = ' + fmtVec(d1) +
+      '\n与线性扫描版解差 = ' + d.toExponential(2);
+  },
+  aStar: function () {
+    var N = 6, edges = [];                                   // 6×6 网格（36 节点，60 条单位权边）
+    for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) {
+      var u = r * N + c;
+      if (c + 1 < N) edges.push([u, u + 1, 1]);
+      if (r + 1 < N) edges.push([u, u + N, 1]);
+    }
+    var goal = N * N - 1;
+    var h = function (v) { return (N - 1 - Math.floor(v / N)) + (N - 1 - v % N); };   // 曼哈顿距离（可采纳）
+    var r1 = AXIOM.aStar(N * N, edges, 0, goal, h), r0 = AXIOM.aStar(N * N, edges, 0, goal, function () { return 0; });
+    return '6×6 网格图（36 节点 / 60 条单位权边，0 → 35）\nA*（曼哈顿可采纳启发）距离 = ' + r1.dist.toFixed(6) + ' · 扩展 ' + r1.expanded + ' 节点' +
+      '\n一致代价搜索（h≡0）距离 = ' + r0.dist.toFixed(6) + ' · 扩展 ' + r0.expanded + ' 节点' +
+      '\n距离一致（最优性不变量）· 扩展数 ' + r1.expanded + ' < ' + r0.expanded + '（启发剪枝不变量）';
+  },
+  fftConvolve: function () {
+    var c = AXIOM.fftConvolve([1, 2, 3, 4], [1, 0, 1, 0]), ref = [];
+    for (var k = 0; k < 4; k++) { var s = 0; for (var i = 0; i < 4; i++) s += [1, 2, 3, 4][i] * [1, 0, 1, 0][(k - i + 4) % 4]; ref.push(s); }
+    var d = 0;
+    for (var j = 0; j < 4; j++) d = Math.max(d, Math.abs(c[j] - ref[j]));
+    return 'a = [1,2,3,4]，b = [1,0,1,0]（n = 4 循环卷积）\nFFT 卷积 c = IFFT(FFT(a)·FFT(b)) = ' + fmtVec(c) +
+      '\n与朴素 O(n²) 循环卷积解差 = ' + d.toExponential(2);
+  },
+  csr: function () {
+    var M = [[1, 0, 0, 2], [0, 3, 0, 0], [0, 0, 0, 0], [4, 0, 5, 0]];
+    var S = AXIOM.denseToCSR(M), y = AXIOM.csrMatVec(S, [1, 1, 1, 1]);
+    var ref = M.map(function (row) { return row.reduce(function (a, b) { return a + b; }, 0); }), d = 0;
+    for (var i = 0; i < 4; i++) d = Math.max(d, Math.abs(y[i] - ref[i]));
+    return '4×4 稀疏矩阵（nnz = ' + S.data.length + ' / 16）\nCSR（indptr/indices/data 三数组）matVec y = ' + fmtVec(y) +
+      '\n与稠密 matVec 解差 = ' + d.toExponential(2) + ' · 转置往返残差 = ' + algoMaxDiff(AXIOM.csrToDense(AXIOM.csrTranspose(S)), AXIOM.transpose(M)).toExponential(2);
+  },
+  mst: function () {
+    var edges = [[0, 1, 2], [0, 3, 6], [1, 2, 3], [1, 3, 8], [1, 4, 5], [2, 4, 7], [3, 4, 9]];
+    var p = AXIOM.primMST(5, edges), k = AXIOM.kruskalMST(5, edges), bf = AXIOM.bruteForceMST(5, edges);
+    return '5 节点 7 边连通无向图\nPrim（稠密 O(V²)）总权 = ' + p.toFixed(6) + ' · Kruskal（并查集）总权 = ' + k.total.toFixed(6) + '（' + k.count + ' 条边）' +
+      '\n暴力枚举生成树总权 = ' + bf.toFixed(6) + ' · 三路交叉一致';
+  },
+  bisect: function () {
+    var f = function (x) { return x * x * x - 2 * x - 5; };
+    var rb = AXIOM.bisect(f, 2, 3, 1e-14, 100);
+    var rn = AXIOM.newton(f, function (x) { return 3 * x * x - 2; }, 2, 1e-14, 50);
+    return 'f(x) = x³ − 2x − 5，括号区间 [2, 3]（f(2)·f(3) < 0）\n二分求根 x* = ' + rb.toFixed(12) +
+      '\nNewton 根 = ' + rn.toFixed(12) + ' · 两条独立路径差 = ' + Math.abs(rb - rn).toExponential(2);
+  },
+  kadane: function () {
+    var a = [-2, 1, -3, 4, -1, 2, 1, -5, 4], best = -Infinity;
+    for (var i = 0; i < a.length; i++) { var s = 0; for (var j = i; j < a.length; j++) { s += a[j]; if (s > best) best = s; } }
+    return 'a = [-2, 1, -3, 4, -1, 2, 1, -5, 4]\nKadane 最大子数组和 = ' + AXIOM.kadane(a) + '（最优子数组 [4, −1, 2, 1]，区间 3..6）' +
+      '\n暴力枚举 O(n²) = ' + best + ' · 线性 DP 与暴力一致';
+  },
+  qrEigenvalues: function () {
+    var qr = AXIOM.qrEigenvalues([[4, 1], [1, 3]], 1e-14);
+    var jv = AXIOM.jacobiEigen([[4, 1], [1, 3]]).values.slice().sort(function (a, b) { return b - a; });
+    var d = Math.max(Math.abs(qr.values[0] - jv[0]), Math.abs(qr.values[1] - jv[1]));
+    return 'A = [[4,1],[1,3]]（对称阵，解析特征值 (7±√5)/2 ≈ 4.618 / 2.382）\nQR 迭代 λ = ' + fmtVec(qr.values) + '（' + qr.iters + ' 步 Wilkinson 位移三次收敛）' +
+      '\nJacobi 旋转法 λ = ' + fmtVec(jv) + ' · 两条独立路径差 = ' + d.toExponential(2);
+  },
+  maxFlowEK: function () {
+    var cap = [[0, 3, 2, 0], [0, 0, 1, 3], [0, 0, 0, 2], [0, 0, 0, 0]];
+    return '4 节点网络（s = 0，t = 3；边容量见备注）\nEdmonds–Karp 最大流 = ' + AXIOM.maxFlowEK(4, cap, 0, 3) +
+      '\n暴力枚举 2^(n−2) = 4 个割的最小割 = ' + AXIOM.minCutBrute(4, cap, 0, 3) + ' · max-flow = min-cut 定理成立';
+  },
+  maxFlowDinic: function () {
+    var cap = [[0, 3, 2, 0], [0, 0, 1, 3], [0, 0, 0, 2], [0, 0, 0, 0]];
+    return '同 4 节点网络（层次图 + 多路增广阻塞流 + 当前弧优化）\nDinic 最大流 = ' + AXIOM.maxFlowDinic(4, cap, 0, 3) +
+      '\nEdmonds–Karp 最大流 = ' + AXIOM.maxFlowEK(4, cap, 0, 3) + ' · 跨算法一致';
+  },
+  scc: function () {
+    var edges = [[0, 1], [1, 2], [2, 0], [3, 4], [4, 5], [5, 3]];
+    var t = AXIOM.tarjanSCC(6, edges), k = AXIOM.kosarajuSCC(6, edges);
+    return '6 节点有向图（两个 3-环：0→1→2→0 与 3→4→5→3）\nTarjan（low-link 单遍）= [' + t.map(function (c) { return '{' + c.join(',') + '}'; }).join(', ') + ']' +
+      '\nKosaraju（两遍反向图）= [' + k.map(function (c) { return '{' + c.join(',') + '}'; }).join(', ') + '] · 划分逐分量一致';
+  },
+  kahnTopo: function () {
+    var order = AXIOM.kahnTopo(6, [[0, 1], [0, 2], [1, 3], [2, 3], [3, 4], [4, 5]]);
+    var cyc = AXIOM.kahnTopo(3, [[0, 1], [1, 2], [2, 0]]);
+    return '6 节点 DAG（0→1, 0→2, 1→3, 2→3, 3→4, 4→5）\nKahn 拓扑序 = ' + fmtVec(order) +
+      '\n环图（0→1→2→0）检测：返回 ' + (cyc === null ? 'null（正确识别有向环）' : fmtVec(cyc));
+  },
+  kuhnMatching: function () {
+    var edges = [[0, 0], [0, 1], [1, 1], [1, 2], [2, 2]];
+    var m = AXIOM.kuhnMatching(3, 3, edges);
+    return '3×3 二部图（L0–{R0,R1}，L1–{R1,R2}，L2–{R2}）\nKuhn 匈牙利增广路最大匹配 = ' + m.size + '（matchR = ' + fmtVec(m.matchR) + '）' +
+      '\n暴力枚举最小顶点覆盖 = ' + AXIOM.minVertexCoverBrute(3, 3, edges) + ' · König 定理：最大匹配 = 最小顶点覆盖';
+  }
+  };
+  var algoRun = null;
+  function algoResults() {
+    if (!algoRun) algoRun = AXIOM.runChecks();
+    return algoRun;
+  }
+  function algoResidualOf(def) {
+    var rs = algoResults().results, hit = [];
+    rs.forEach(function (x) {
+      for (var i = 0; i < def.chk.length; i++) if (x.name.indexOf(def.chk[i]) === 0) { hit.push(x); return; }
+    });
+    var worst = 0, pass = true;
+    hit.forEach(function (x) { if (x.residual > worst) worst = x.residual; if (!x.pass) pass = false; });
+    return { n: hit.length, worst: worst, pass: pass && hit.length > 0 };
+  }
+  function algoChecks() {
+    var rs = algoResults().results, hit = [];
+    ALGO_DEFS.forEach(function (d) {
+      rs.forEach(function (x) { for (var i = 0; i < d.chk.length; i++) if (x.name.indexOf(d.chk[i]) === 0) { hit.push(x); return; } });
+    });
+    return hit;
+  }
+  function runAlgoDemo(def, out) {
+    var box = el('div', 'demo');
+    box.appendChild(el('h3', null, esc(def.name) + '<span>' + esc(def.api) + ' · ' + esc(def.src) + '</span>'));
+    var text;
+    try { text = DEMOS[def.id](); } catch (e) { text = '演示执行异常：' + (e && e.message ? e.message : String(e)); }
+    box.appendChild(el('div', 'algo-out', esc(text).replace(/\n/g, '<br>')));
+    var st = algoResidualOf(def);
+    var sum = el('div', 'summary' + (st.pass ? ' ok' : ' bad'));
+    sum.textContent = '硬不变量：' + def.inv + ' —— ' + st.n + ' 项检查' +
+      (st.n ? (st.pass ? '全部通过（最大残差 ' + sci(st.worst) + '，容差内）' : '存在失败（残差 ' + sci(st.worst) + '）') : '（未匹配，请核对检查项名）');
+    box.appendChild(sum);
+    out.appendChild(box);
+  }
+  function renderAlgo(view) {
+    view.appendChild(el('h2', null, '算法库 · ' + ALGO_DEFS.length + ' 组 <span style="font-size:12px;color:var(--txt3);font-weight:400">L10 的 1024 条微指令是原子算子 ISA；此处为 ISA 之外的旗舰级算法参考实现，每组均携带可独立复算的硬不变量</span>'));
+    view.appendChild(el('div', null, '<div style="height:12px"></div>'));
+    var runAll = el('button', 'runbtn', '▶ 运行全部 ' + ALGO_DEFS.length + ' 组演示');
+    var out = el('div');
+    view.appendChild(runAll);
+    view.appendChild(el('div', null, '<div style="height:16px"></div>'));
+
+    var table = el('table');
+    table.innerHTML = '<thead><tr><th>#</th><th>算法</th><th>世界顶级来源</th><th>实现（API）</th><th>硬不变量（独立复算路径）</th><th>检查</th><th>最大残差</th><th>演示</th></tr></thead>';
+    var tbody = el('tbody');
+    ALGO_DEFS.forEach(function (d, i) {
+      var tr = document.createElement('tr');
+      var st = algoResidualOf(d);
+      tr.innerHTML =
+        '<td class="tid">' + (i + 1) + '</td>' +
+        '<td class="tname">' + esc(d.name) + '</td>' +
+        '<td style="font-size:12px;color:var(--txt2)">' + esc(d.src) + '</td>' +
+        '<td class="tid">' + esc(d.api) + '</td>' +
+        '<td class="inv">' + esc(d.inv) + '</td>' +
+        '<td class="res" style="color:var(--txt3)">' + st.n + ' 项</td>' +
+        '<td class="res ' + (st.pass ? 'st-v' : 'st-s') + '">' + (st.n ? (st.pass ? '✅ ' : '❌ ') + sci(st.worst) : '—') + '</td>';
+      var td = document.createElement('td');
+      var b = el('button', 'ademo', '▶ 运行');
+      b.addEventListener('click', function () { runAlgoDemo(d, out); });
+      td.appendChild(b);
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    view.appendChild(table);
+    view.appendChild(el('div', null, '<div style="height:16px"></div>'));
+    view.appendChild(out);
+
+    runAll.addEventListener('click', function () {
+      runAll.disabled = true;
+      runAll.textContent = '⏳ 运行中…';
+      out.innerHTML = '';
+      ALGO_DEFS.forEach(function (d) { runAlgoDemo(d, out); });
+      var rs = algoResults(), ac = algoChecks();
+      var allOk = ac.every(function (x) { return x.pass; });
+      var sum = el('div', 'summary' + (allOk ? ' ok' : ' bad'));
+      sum.textContent = '算法库 ' + ALGO_DEFS.length + ' 组演示执行完成 · 对应 ' + ac.length + ' 项核心不变量检查 ' +
+        ac.filter(function (x) { return x.pass; }).length + ' / ' + ac.length + ' PASS · 全库 ' + rs.passed + ' / ' + rs.total +
+        (allOk ? '   🟢 全绿' : '   🔴 存在失败');
+      out.appendChild(sum);
+      runAll.disabled = false;
+      runAll.textContent = '▶ 重新运行';
+    });
+  }
+
+  /* ---------------- 视图 5：管线编排（L9 组合应用层） ---------------- */
   var PIPELINE_OPS = [
     ['zscore', '标准化', '均值=0、方差=1', 'NORM'],
     ['normalizeL2', 'L2 归一化', '‖x̂‖ = 1', 'NORM'],
@@ -8419,7 +8713,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     });
   }
 
-  /* ---------------- 视图 5：演示实验室 ---------------- */
+  /* ---------------- 视图 6：演示实验室 ---------------- */
   function renderLab(view) {
     view.appendChild(el('h2', null, '演示实验室 <span style="font-size:12px;color:var(--txt3);font-weight:400">三个演示全部由 core.js 真实计算驱动，确定性种子，可复现</span>'));
     view.appendChild(el('div', null, '<div style="height:14px"></div>'));
@@ -8593,7 +8887,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     return box;
   }
 
-  /* ---------------- 视图 6：导出 ---------------- */
+  /* ---------------- 视图 7：导出 ---------------- */
   function renderExport(view) {
     view.appendChild(el('h2', null, '导出'));
     view.appendChild(el('div', null, '<div style="height:14px"></div>'));

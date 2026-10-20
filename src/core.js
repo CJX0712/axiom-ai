@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.10';
+  var VERSION = '1.3.11';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3195,7 +3195,9 @@
           off += apq * apq;
           if (Math.abs(apq) <= 1e-300) continue;
           var zeta = (aqq - app) / (2 * apq);
-          var t = Math.sign(zeta) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
+          // ⚠️ ζ=0（两列范数恰等的对称边界）时 Math.sign(0)=0 会使 t=0 退化为恒等旋转、非对角永不归零；
+          // Hestenes 根 t²+2ζt−1=0 在 ζ=0 时为 ±1（均有效），须显式取 ±1（v1.3.11 修复，回归检查见 checks）
+          var t = (zeta >= 0 ? 1 : -1) / (Math.abs(zeta) + Math.sqrt(1 + zeta * zeta));
           var c = 1 / Math.sqrt(1 + t * t), s = c * t;
           for (var r = 0; r < m; r++) { var bpr = B[r][p], bqr = B[r][q]; B[r][p] = c * bpr - s * bqr; B[r][q] = s * bpr + c * bqr; }
           for (var r2 = 0; r2 < n; r2++) { var vp = V[r2][p], vq = V[r2][q]; V[r2][p] = c * vp - s * vq; V[r2][q] = s * vp + c * vq; }
@@ -6431,6 +6433,21 @@
       orth = Math.max(orth, Math.abs(VtV[p][q] - (p === q ? 1 : 0)));
     }
     return Math.max(recon / scale, eigErr, orth);
+  });
+  /* 回归检查（v1.3.11）：svd 等范数列边界 —— 列 0/1 范数恰等（√10）且内积 6 ≠ 0 ⇒ ζ = 0，
+   * 修复前 Math.sign(0)=0 使旋转退化为恒等，σ 错为 [√10,√10,2]（随机矩阵检查概率 0，永不触发） */
+  check('svd：等范数列边界（ζ=0，Hestenes 旋转根 ±1）—— 解析奇异值 4/2/2 + σᵢ = √λᵢ(AᵀA) + UᵀU = I + 重构', 1e-9, function () {
+    var A = [[3, 1, 0], [1, 3, 0], [0, 0, 2]];
+    var r = svd(A);
+    var e = Math.max(Math.abs(r.S[0] - 4), Math.abs(r.S[1] - 2), Math.abs(r.S[2] - 2));   // 解析：AᵀA 特征值 16 / 4 / 4
+    var lam = jacobiEigen(matMul(transpose(A), A)).values;                                 // 独立谱交叉（Jacobi 另路计算）
+    for (var i = 0; i < 3; i++) e = Math.max(e, Math.abs(r.S[i] - Math.sqrt(Math.max(0, lam[i]))));
+    var UtU = matMul(transpose(r.U), r.U);
+    for (var p = 0; p < 3; p++) for (var q = 0; q < 3; q++) e = Math.max(e, Math.abs(UtU[p][q] - (p === q ? 1 : 0)));
+    var Sigma = zeros2(3, 3);
+    for (var k = 0; k < 3; k++) Sigma[k][k] = r.S[k];
+    e = Math.max(e, maxAbsDiff2(matMul(matMul(r.U, Sigma), transpose(r.V)), A) / 3);      // 重构残差（相对 ‖A‖∞）
+    return e;
   });
   check('lu：A = L·U 重构 + L 单位下三角 / U 上三角（结构精确，Doolittle 无主元）', 1e-9, function () {
     var rng = mulberry32(102), n = 8, M = [];
