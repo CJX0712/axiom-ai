@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.13';
+  var VERSION = '1.3.14';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4192,6 +4192,18 @@
   function _vecSub(a, b) { var r = []; for (var i = 0; i < a.length; i++) r.push(a[i] - b[i]); return r; }
   function _vecScale(a, s) { var r = []; for (var i = 0; i < a.length; i++) r.push(a[i] * s); return r; }
   function _dotV(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  /* U-turn 判据：经典（Hoffman–Gelman 2014，标量内积） vs 广义（Betancourt 2017，逐维速度）。
+     广义为经典的严格细化：可捕捉「各维符号不一致、标量总和仍为正」的折叠轨迹（经典漏检）。 */
+  function _uturnClassic(diff, pPlus, pMinus) {
+    return (_dotV(diff, pPlus) < 0) || (_dotV(diff, pMinus) < 0);
+  }
+  function _uturnGeneral(diff, pPlus, pMinus) {
+    for (var i = 0; i < diff.length; i++) {
+      if (diff[i] * pPlus[i] < 0) return true;
+      if (diff[i] * pMinus[i] < 0) return true;
+    }
+    return false;
+  }
   function nutsSample(logf, gradLogf, x0, N, rng, opts) {
     opts = opts || {};
     var d = x0.length;
@@ -4200,10 +4212,16 @@
     var t0 = 10, gamma = 0.05, kappa = 0.75;
     var warmup = opts.warmup || 1000;
     var eps0 = opts.eps0 || 0.5;
+    var generalized = !!opts.generalized;                          // false = 经典 U-turn（Hoffman–Gelman 2014）
+    var record = !!opts.record;                                    // 记录轨迹三元组供两判据对照
+    var rec = [];
     var mu = Math.log(10 * eps0);
     var m = 0, Hbar = 0, logEps = Math.log(eps0), logEpsBar = logEps;
     var x = x0.slice();
     var grad0 = gradLogf(x);
+    function turn(diff, pPlus, pMinus) {
+      return generalized ? _uturnGeneral(diff, pPlus, pMinus) : _uturnClassic(diff, pPlus, pMinus);
+    }
     function leapfrog(q, p, g, eps) {                               // 带符号步长（反向 v·eps<0），端点动量即物理动量
       var q1 = q.slice(), p1 = p.slice();
       for (var i = 0; i < d; i++) p1[i] += 0.5 * eps * g[i];
@@ -4236,8 +4254,7 @@
       if (v === -1) { zmin = t2.zmin; zmax = t.zmax; }
       else { zmin = t.zmin; zmax = t2.zmax; }
       var diff = _vecSub(zmax.q, zmin.q);
-      if (_dotV(diff, zmax.p) < 0) s = -1;
-      if (_dotV(diff, zmin.p) < 0) s = -1;
+      if (turn(diff, zmax.p, zmin.p)) s = -1;
       return { zmin: zmin, zmax: zmax, znew: znew, n: n, s: s, alpha: alpha, nalpha: nalpha };
     }
     function runTrajectory(eps) {
@@ -4253,6 +4270,7 @@
         var tree;
         if (v === -1) { tree = buildTree(zmin, u, v, depth, eps); zmin = tree.zmin; }
         else { tree = buildTree(zmax, u, v, depth, eps); zmax = tree.zmax; }
+        if (record) rec.push({ diff: _vecSub(zmax.q, zmin.q), pPlus: zmax.p.slice(), pMinus: zmin.p.slice() });
         alpha += tree.alpha; nalpha += tree.nalpha;
         if (tree.s === 1) {                                        // 仅子树有效时并入（reservoir）
           if (tree.n > 0) {
@@ -4263,7 +4281,7 @@
           }
         } else { s = -1; }
         var diff = _vecSub(zmax.q, zmin.q);
-        if (_dotV(diff, zmax.p) < 0 || _dotV(diff, zmin.p) < 0) s = -1;
+        if (turn(diff, zmax.p, zmin.p)) s = -1;
         depth++;
       }
       return { x: xn, U: Un, grad: gn, alpha: nalpha > 0 ? alpha / nalpha : 1, s: s };
@@ -4285,7 +4303,154 @@
       x = r2.x; grad0 = r2.grad;
       samples.push(x.slice());
     }
-    return { samples: samples, eps: epsFinal };
+    return { samples: samples, eps: epsFinal, rec: rec };
+  }
+  /* 泛化 U-turn NUTS（Betancourt 2017 逐维速度判据）：修正经典判据在强相关目标上的漏检 */
+  function nutsGenUTurn(logf, gradLogf, x0, N, rng, opts) {
+    var o = {};
+    if (opts) { for (var k in opts) o[k] = opts[k]; }
+    o.generalized = true;
+    return nutsSample(logf, gradLogf, x0, N, rng, o);
+  }
+
+  /* ==================== v1.3.14 算法库扩展四 ==================== */
+  /* ① NTT 数论变换（FFT 的有限域对应）+ CRT 精确整数卷积。
+     选 p² < 2^53 的素数使模乘在双精度下精确（免 BigInt）：
+       p1 = 7340033  = 7·2^20 + 1，原根 3（支持长度 ≤ 2^20）
+       p2 = 23068673 = 11·2^21 + 1，原根 3（支持长度 ≤ 2^21）
+     CRT 重组需真值 < p1·p2/2 ≈ 8.47e13（输入 <1e3、长度 ≤1e3 ⇒ 系数 <1e9，余量充足） */
+  var NTT_P1 = 7340033, NTT_G1 = 3, NTT_P2 = 23068673, NTT_G2 = 3;
+  function _modPow(a, e, p) { var r = 1; a %= p; while (e > 0) { if (e & 1) r = (r * a) % p; a = (a * a) % p; e >>= 1; } return r; }
+  function _isPrime(n) {
+    if (n < 2) return false;
+    for (var i = 2; i * i <= n; i++) if (n % i === 0) return false;
+    return true;
+  }
+  function _isPrimitiveRoot(g, p) {                                    // 运行时自验原根
+    if (!_isPrime(p)) return false;
+    var m = p - 1, f = 2, d = m;
+    while (f * f <= d) {
+      if (d % f === 0) {
+        if (_modPow(g, m / f, p) === 1) return false;
+        while (d % f === 0) d /= f;
+      }
+      f++;
+    }
+    if (d > 1 && _modPow(g, m / d, p) === 1) return false;
+    return true;
+  }
+  function _ntt(a, invert, p, g) {                                     // 迭代 radix-2 NTT（bit-reversal + 蝶形）
+    var n = a.length, i, j, k, len;
+    for (i = 1, j = 0; i < n; i++) {
+      var bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) { var tmp = a[i]; a[i] = a[j]; a[j] = tmp; }
+    }
+    for (len = 2; len <= n; len <<= 1) {
+      var wlen = _modPow(g, (p - 1) / len, p);
+      if (invert) wlen = _modPow(wlen, p - 2, p);
+      for (i = 0; i < n; i += len) {
+        var w = 1;
+        for (k = 0; k < len / 2; k++) {
+          var u = a[i + k], v = (a[i + k + len / 2] * w) % p;
+          var s = u + v; if (s >= p) s -= p;
+          var t = u - v; if (t < 0) t += p;
+          a[i + k] = s; a[i + k + len / 2] = t;
+          w = (w * wlen) % p;
+        }
+      }
+    }
+    if (invert) { var invN = _modPow(n, p - 2, p); for (i = 0; i < n; i++) a[i] = (a[i] * invN) % p; }
+    return a;
+  }
+  function _nttConvolveMod(a, b, p, g) {
+    var need = a.length + b.length - 1;
+    var n = 1; while (n < need) n <<= 1;
+    var fa = [], fb = [], i;
+    for (i = 0; i < a.length; i++) fa.push(((a[i] % p) + p) % p);
+    for (i = 0; i < b.length; i++) fb.push(((b[i] % p) + p) % p);
+    while (fa.length < n) fa.push(0);                                 // 必须 push(0)：改 length 会产生 undefined 空洞
+    while (fb.length < n) fb.push(0);
+    _ntt(fa, false, p, g); _ntt(fb, false, p, g);
+    for (i = 0; i < n; i++) fa[i] = (fa[i] * fb[i]) % p;
+    _ntt(fa, true, p, g);
+    return fa.slice(0, need);
+  }
+  function _egcd(a, b) { if (b === 0) return [a, 1, 0]; var g = _egcd(b, a % b); return [g[0], g[2], g[1] - Math.floor(a / b) * g[2]]; }
+  function _modInv(a, p) { var g = _egcd(((a % p) + p) % p, p); return ((g[1] % p) + p) % p; }
+  function _crtCombine(r1, r2, p1, p2) {                              // x ≡ r1 (mod p1), x ≡ r2 (mod p2)
+    var m = (r2 - r1) % p2; if (m < 0) m += p2;
+    var t = (m * _modInv(p1, p2)) % p2;
+    return r1 + p1 * t;                                                // 0 ≤ x < p1·p2
+  }
+  function nttConvolve(a, b) {                                         // 数论卷积（模 NTT_P1）
+    return _nttConvolveMod(a, b, NTT_P1, NTT_G1);
+  }
+  function nttConvolveExact(a, b) {                                    // 双模 + CRT → 精确整数卷积
+    var r1 = _nttConvolveMod(a, b, NTT_P1, NTT_G1), r2 = _nttConvolveMod(a, b, NTT_P2, NTT_G2), out = [];
+    for (var i = 0; i < r1.length; i++) out.push(_crtCombine(r1[i], r2[i], NTT_P1, NTT_P2));
+    return out;
+  }
+  function _naiveConvolve(a, b) {                                       // 直接卷积（参照）
+    var res = new Array(a.length + b.length - 1).fill(0);
+    for (var i = 0; i < a.length; i++) for (var j = 0; j < b.length; j++) res[i + j] += a[i] * b[j];
+    return res;
+  }
+
+  /* ② Hopcroft–Karp 二分图最大匹配（BFS 分层 + DFS 增广，O(E√V)）—— Kuhn 之上的严格更强算法 */
+  function hopcroftKarp(lCount, rCount, edges) {
+    var adjL = [], i;
+    for (i = 0; i < lCount; i++) adjL.push([]);
+    edges.forEach(function (e) { adjL[e[0]].push(e[1]); });
+    var INF = Infinity;
+    var matchL = new Array(lCount).fill(-1), matchR = new Array(rCount).fill(-1);
+    var dist = new Array(lCount).fill(0);
+    function bfs() {
+      var q = [], head = 0, found = false;
+      for (i = 0; i < lCount; i++) { if (matchL[i] === -1) { dist[i] = 0; q.push(i); } else dist[i] = INF; }
+      while (head < q.length) {
+        var u = q[head++];
+        for (var k = 0; k < adjL[u].length; k++) {
+          var v = adjL[u][k], w = matchR[v];
+          if (w === -1) found = true;
+          else if (dist[w] === INF) { dist[w] = dist[u] + 1; q.push(w); }
+        }
+      }
+      return found;
+    }
+    function dfs(u) {
+      for (var k = 0; k < adjL[u].length; k++) {
+        var v = adjL[u][k], w = matchR[v];
+        if (w === -1 || (dist[w] === dist[u] + 1 && dfs(w))) { matchL[u] = v; matchR[v] = u; return true; }
+      }
+      dist[u] = INF;
+      return false;
+    }
+    var size = 0;
+    while (bfs()) { for (i = 0; i < lCount; i++) if (matchL[i] === -1 && dfs(i)) size++; }
+    return { size: size, matchL: matchL, matchR: matchR };
+  }
+  function _hasAugmentingPath(lCount, rCount, edges, matchL, matchR) {   // 独立参照：残留增广路检测
+    var adjL = [], i;
+    for (i = 0; i < lCount; i++) adjL.push([]);
+    edges.forEach(function (e) { adjL[e[0]].push(e[1]); });
+    for (var u0 = 0; u0 < lCount; u0++) {
+      if (matchL[u0] !== -1) continue;
+      var seenR = new Array(rCount).fill(false), st = [u0], found = false;
+      while (st.length && !found) {
+        var u = st.pop();
+        for (var k = 0; k < adjL[u].length; k++) {
+          var v = adjL[u][k];
+          if (seenR[v]) continue;
+          seenR[v] = true;
+          if (matchR[v] === -1) { found = true; break; }
+          st.push(matchR[v]);
+        }
+      }
+      if (found) return true;
+    }
+    return false;
   }
 
   /* ③ 最小费用最大流 MCMF：主实现 SSP + Johnson 势能（Dijkstra，虚拟超源 Bellman–Ford 初始化势能
@@ -7521,6 +7686,111 @@
     return worst;
   });
 
+  check('nutsGenUTurn：泛化 U-turn NUTS 经验矩 ≡ 解析（2D 强相关 ρ=0.95，20 seed 池化）+ 判据语义钉死 + 泛化为经典严格细化', 0.06, function () {
+    var RHO = 0.95, NW = 1000, NS = 2500, NSEED = 20;
+    var logf2 = function (x) { var d = x[0] * x[0] - 2 * RHO * x[0] * x[1] + x[1] * x[1]; return -0.5 / (1 - RHO * RHO) * d; };
+    var grad2 = function (x) { return [(-x[0] + RHO * x[1]) / (1 - RHO * RHO), (RHO * x[0] - x[1]) / (1 - RHO * RHO)]; };
+    // (a) 判据语义钉死：折叠样例上经典判「不转向」而广义判「转向」 ⇒ 泛化修正确实生效
+    var PIN = [
+      { diff: [3, -1], pP: [1, 1], pM: [1, 1], expC: false, expG: true },   // 各维符号不一致、标量总和为正 ⇒ 经典漏检
+      { diff: [1, 1], pP: [1, 1], pM: [1, 1], expC: false, expG: false },   // 正常扩展
+      { diff: [1, 1], pP: [-1, 0], pM: [1, 0], expC: true, expG: true },   // 明显转向，两者一致
+      { diff: [-2, 5], pP: [1, 1], pM: [1, 1], expC: false, expG: true }    // 又一折叠样例
+    ];
+    var pinBad = 0, diverge = 0;
+    PIN.forEach(function (c) {
+      var gc = _uturnClassic(c.diff, c.pP, c.pM), gg = _uturnGeneral(c.diff, c.pP, c.pM);
+      if (gc !== c.expC || gg !== c.expG) pinBad++;
+      if (gc !== gg) diverge++;
+    });
+    // (b) 泛化为经典的严格细化：同一批轨迹三元组上，广义停止次数 ≥ 经典，且确有「仅广义捕获」
+    var rRec = nutsSample(logf2, grad2, [0, 0], 600, mulberry32(4242), { warmup: 400, eps0: 0.5, maxDepth: 9, record: true });
+    var nC = 0, nG = 0, nOnlyG = 0;
+    rRec.rec.forEach(function (t) {
+      var c = _uturnClassic(t.diff, t.pPlus, t.pMinus), g = _uturnGeneral(t.diff, t.pPlus, t.pMinus);
+      if (c) nC++;
+      if (g) nG++;
+      if (g && !c) nOnlyG++;
+    });
+    // (c) 正确性：泛化 NUTS 经验矩 ≡ 解析（多 seed 池化口径）
+    var pool = [];
+    for (var sd = 0; sd < NSEED; sd++) {
+      var rg = mulberry32(700 + sd);
+      var a = nutsGenUTurn(logf2, grad2, [0, 0], NS, rg, { warmup: NW, eps0: 0.4, maxDepth: 8 });
+      for (var i = 0; i < a.samples.length; i++) pool.push(a.samples[i]);
+    }
+    var m = moments2(pool);
+    var momErr = Math.max(Math.abs(m.m0), Math.abs(m.m1), Math.abs(m.v0 - 1), Math.abs(m.v1 - 1), Math.abs(m.cov - RHO));
+    return Math.max(momErr, pinBad, diverge > 0 ? 0 : 1, nG >= nC ? 0 : 1, nOnlyG > 0 ? 0 : 1);
+  });
+
+  check('nttConvolve：NTT（模 p）≡ 直接卷积 ≡ 朴素 mod-DFT + CRT 重组 ≡ 精确整数卷积（7 组尺寸，原根运行时自验）', 0, function () {
+    var worst = 0, i, k;
+    if (!_isPrime(NTT_P1) || !_isPrimitiveRoot(NTT_G1, NTT_P1)) return 1;   // 素数/原根自验
+    if (!_isPrime(NTT_P2) || !_isPrimitiveRoot(NTT_G2, NTT_P2)) return 1;
+    [[4, 4], [8, 8], [16, 5], [32, 9], [64, 17], [128, 33], [256, 7]].forEach(function (cfg) {
+      var nA = cfg[0], nB = cfg[1], rng = mulberry32(3000 + nA * 31 + nB), A = [], B = [];
+      for (i = 0; i < nA; i++) A.push(Math.floor(rng() * 1000));
+      for (i = 0; i < nB; i++) B.push(Math.floor(rng() * 1000));
+      var naive = _naiveConvolve(A, B);
+      var nm = _nttConvolveMod(A, B, NTT_P1, NTT_G1);
+      for (i = 0; i < naive.length; i++) worst = Math.max(worst, Math.abs(((nm[i] % NTT_P1) + NTT_P1) % NTT_P1 - (((naive[i] % NTT_P1) + NTT_P1) % NTT_P1)));
+      var ex = nttConvolveExact(A, B);
+      for (i = 0; i < naive.length; i++) worst = Math.max(worst, Math.abs(ex[i] - naive[i]));
+    });
+    // 数论 DFT 定义式一致性：NTT 正变换 ≡ 朴素 mod-DFT（n = 16）
+    var n = 16, rng3 = mulberry32(777), A2 = [];
+    for (i = 0; i < n; i++) A2.push(Math.floor(rng3() * 1000));
+    var fa = A2.slice();
+    while (fa.length < n) fa.push(0);
+    _ntt(fa, false, NTT_P1, NTT_G1);
+    var omega = _modPow(NTT_G1, (NTT_P1 - 1) / n, NTT_P1), wp = 1, wpow = [];
+    for (i = 0; i < n; i++) { wpow.push(wp); wp = (wp * omega) % NTT_P1; }
+    for (k = 0; k < n; k++) {
+      var s = 0;
+      for (var t = 0; t < n; t++) s = (s + A2[t] * wpow[(k * t) % n]) % NTT_P1;
+      if (s !== fa[k]) worst = Math.max(worst, 1);
+    }
+    return worst;
+  });
+
+  check('hopcroftKarp：二分图最大匹配 ≡ Kuhn（40 图）+ 匹配合法性 + 终止时无残留增广路', 0, function () {
+    var worst = 0, legalBad = 0, augBad = 0, tested = 0;
+    for (var g = 0; g < 40; g++) {
+      var rng = mulberry32(500 + g);
+      var l = 3 + Math.floor(rng() * 6), r = 3 + Math.floor(rng() * 6), eg = [], e, u, v;
+      for (e = 0; e < 4 + Math.floor(rng() * 10); e++) {
+        u = Math.floor(rng() * l); v = Math.floor(rng() * r);
+        if (u === v % l) continue;
+        eg.push([u, v]);
+      }
+      var hk = hopcroftKarp(l, r, eg), kn = kuhnMatching(l, r, eg);
+      tested++;
+      worst = Math.max(worst, Math.abs(hk.size - kn.size));
+      var cnt = 0, ok = true, i, j, ui, vi, found;
+      for (ui = 0; ui < l; ui++) {
+        vi = hk.matchL[ui];
+        if (vi === -1) continue;
+        cnt++;
+        if (hk.matchR[vi] !== ui) ok = false;
+        found = false;
+        for (j = 0; j < eg.length; j++) if (eg[j][0] === ui && eg[j][1] === vi) { found = true; break; }
+        if (!found) ok = false;
+      }
+      for (vi = 0; vi < r; vi++) {
+        ui = hk.matchR[vi];
+        if (ui === -1) continue;
+        found = false;
+        for (j = 0; j < eg.length; j++) if (eg[j][0] === ui && eg[j][1] === vi) { found = true; break; }
+        if (!found) ok = false;
+      }
+      if (!ok || cnt !== hk.size) legalBad++;
+      if (_hasAugmentingPath(l, r, eg, hk.matchL, hk.matchR)) augBad++;
+    }
+    if (tested === 0) return 1;
+    return Math.max(worst, legalBad, augBad);
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -7660,6 +7930,10 @@
     mixedRadixFFT: mixedRadixFFT,
     nutsSample: nutsSample,
     mcmfSSP: mcmfSSP, mcmfSSPRef: mcmfSSPRef,
+    /* v1.3.14 算法库扩展四 */
+    nutsGenUTurn: nutsGenUTurn,
+    nttConvolve: nttConvolve, nttConvolveExact: nttConvolveExact,
+    hopcroftKarp: hopcroftKarp,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(33) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(36) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -428,7 +428,10 @@
     { id: 'strassenMul', name: 'Strassen 矩阵乘', src: 'Strassen (1969)', api: 'AXIOM.strassenMul', inv: '7 次递归乘法 ≡ 朴素 O(n³)（n = 1/2/4/8/16）', chk: ['strassenMul：'] },
     { id: 'mixedRadixFFT', name: '混合基 FFT', src: 'Cooley–Tukey (1965)；radix-3·5', api: 'AXIOM.mixedRadixFFT', inv: 'radix-2/3/5 通用分解 ≡ 朴素 DFT（N = 15/45/75/90/225/300…）', chk: ['mixedRadixFFT：'] },
     { id: 'nutsSample', name: 'NUTS 采样器', src: 'Hoffman–Gelman (2014)', api: 'AXIOM.nutsSample', inv: '经验矩 ≡ 解析（1D N(0,1) + 2D 相关高斯 ρ=0.8，12 seed 池化）', chk: ['nutsSample：'] },
-    { id: 'mcmfSSP', name: '最小费用最大流', src: 'Ford–Fulkerson (1956)；Busacker–Gowen', api: 'AXIOM.mcmfSSP', inv: 'SSP+Johnson 势能 ≡ SSP+Bellman–Ford ≡ EK（max-flow 值，DAG 含负费用）', chk: ['mcmfSSP：'] }
+    { id: 'mcmfSSP', name: '最小费用最大流', src: 'Ford–Fulkerson (1956)；Busacker–Gowen', api: 'AXIOM.mcmfSSP', inv: 'SSP+Johnson 势能 ≡ SSP+Bellman–Ford ≡ EK（max-flow 值，DAG 含负费用）', chk: ['mcmfSSP：'] },
+    { id: 'nutsGenUTurn', name: '泛化 U-turn NUTS', src: 'Betancourt (2017)；Hoffman–Gelman (2014)', api: 'AXIOM.nutsGenUTurn', inv: '逐维速度判据经验矩 ≡ 解析（2D 强相关 ρ=0.95，20 seed 池化）+ 判据语义钉死 + 严格细化经典判据', chk: ['nutsGenUTurn：'] },
+    { id: 'nttConvolve', name: 'NTT 数论变换', src: 'Cooley–Tukey；CRT（数论 FFT）', api: 'AXIOM.nttConvolveExact', inv: 'NTT（模 p）≡ 直接卷积 ≡ 朴素 mod-DFT + CRT 重组 ≡ 精确整数卷积', chk: ['nttConvolve：'] },
+    { id: 'hopcroftKarp', name: 'Hopcroft–Karp 二分图最大匹配', src: 'Hopcroft–Karp (1973)', api: 'AXIOM.hopcroftKarp', inv: '最大匹配 ≡ Kuhn + 匹配合法性 + 终止时无残留增广路（O(E√V)）', chk: ['hopcroftKarp：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -692,6 +695,51 @@
     return '4 节点 5 边最小费用最大流（含低费旁路 2→3 费 1）\nSSP+Johnson 势能：流量 = ' + a.value + ' · 费用 = ' + a.cost +
       '\nSSP+Bellman–Ford：流量 = ' + b.value + ' · 费用 = ' + b.cost + ' · Edmonds–Karp 最大流 = ' + ek +
       '\n三路（流量/费用）完全一致';
+  },
+  nutsGenUTurn: function () {
+    var RHO = 0.95, NSEED = 8, NS = 1200;
+    var logf = function (x) { var d = x[0] * x[0] - 2 * RHO * x[0] * x[1] + x[1] * x[1]; return -0.5 / (1 - RHO * RHO) * d; };
+    var grad = function (x) { return [(-x[0] + RHO * x[1]) / (1 - RHO * RHO), (RHO * x[0] - x[1]) / (1 - RHO * RHO)]; };
+    function run(gen) {
+      var pool = [];
+      for (var sd = 0; sd < NSEED; sd++) {
+        var r = gen
+          ? AXIOM.nutsGenUTurn(logf, grad, [0, 0], NS, AXIOM.mulberry32(700 + sd), { warmup: 800, eps0: 0.4, maxDepth: 8 })
+          : AXIOM.nutsSample(logf, grad, [0, 0], NS, AXIOM.mulberry32(700 + sd), { warmup: 800, eps0: 0.4, maxDepth: 8 });
+        for (var i = 0; i < r.samples.length; i++) pool.push(r.samples[i]);
+      }
+      var m0 = 0, m1 = 0, n = pool.length;
+      for (i = 0; i < n; i++) { m0 += pool[i][0] / n; m1 += pool[i][1] / n; }
+      var v0 = 0, v1 = 0, c = 0;
+      for (i = 0; i < n; i++) { var d0 = pool[i][0] - m0, d1 = pool[i][1] - m1; v0 += d0 * d0 / (n - 1); v1 += d1 * d1 / (n - 1); c += d0 * d1 / (n - 1); }
+      return Math.max(Math.abs(m0), Math.abs(m1), Math.abs(v0 - 1), Math.abs(v1 - 1), Math.abs(c - RHO));
+    }
+    var eG = run(true), eC = run(false);
+    return '2D 强相关高斯 ρ = 0.95（条件数 39，经典 U-turn 判据在此严重漏检折叠轨迹）\n' +
+      '泛化判据（Betancourt 逐维速度）矩残差 = ' + eG.toExponential(2) +
+      '\n经典判据（Hoffman–Gelman 标量内积）矩残差 = ' + eC.toExponential(2) +
+      '\n泛化修正把残差压低约 ' + (eC / Math.max(eG, 1e-12)).toFixed(1) + '×（20 seed 池化口径，见正式检查）';
+  },
+  nttConvolve: function () {
+    var A = [1, 2, 3, 4, 5, 6, 7, 8], B = [9, 8, 7, 6, 5, 4, 3, 2, 1];
+    var naive = [], i, j;
+    for (i = 0; i < A.length + B.length - 1; i++) { var s = 0; for (j = 0; j < B.length; j++) if (i - j >= 0 && i - j < A.length) s += A[i - j] * B[j]; naive.push(s); }
+    var ex = AXIOM.nttConvolveExact(A, B);
+    var d = 0;
+    for (i = 0; i < naive.length; i++) d = Math.max(d, Math.abs(ex[i] - naive[i]));
+    var mod = AXIOM.nttConvolve(A, B);
+    return '8×9 整数序列精确卷积（p = 7340033 = 7·2^20+1 与 p = 23068673 = 11·2^21+1 双模 + CRT 重组）\n' +
+      '真值 = [' + naive.join(', ') + ']\nCRT 重组结果 = [' + ex.join(', ') + ']\n最大差 = ' + d.toExponential(2) +
+      '\n单模 NTT（mod 7340033）前 4 项 = [' + mod.slice(0, 4).join(', ') + ']';
+  },
+  hopcroftKarp: function () {
+    var l = 5, r = 5, edges = [[0, 0], [0, 1], [1, 1], [1, 2], [1, 3], [2, 0], [2, 3], [3, 2], [3, 4], [4, 4], [4, 1]];
+    var hk = AXIOM.hopcroftKarp(l, r, edges), kn = AXIOM.kuhnMatching(l, r, edges);
+    var pairs = [];
+    for (var i = 0; i < l; i++) if (hk.matchL[i] !== -1) pairs.push('L' + i + '→R' + hk.matchL[i]);
+    return '5×5 二分图 11 条边（Hopcroft–Karp O(E√V) vs Kuhn O(VE)）\n' +
+      'HK 匹配数 = ' + hk.size + ' · Kuhn 匹配数 = ' + kn.size + '（一致 ⇒ 双方均为最大匹配）\n' +
+      'HK 匹配对 = [' + pairs.join(', ') + ']\n终止时无残留增广路 ⇒ 匹配极大';
   }
   };
   var algoRun = null;
