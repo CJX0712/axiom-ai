@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(30) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(33) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -425,7 +425,10 @@
     { id: 'dsu', name: '并查集', src: 'Tarjan (1975)', api: 'AXIOM.dsuCreate', inv: '连通分量 ≡ BFS + Kruskal-DSU MST ≡ Prim + 分量数守恒', chk: ['dsu：'] },
     { id: 'kmpSearch', name: 'KMP 字符串匹配', src: 'Knuth–Morris–Pratt (1977)', api: 'AXIOM.kmpSearch', inv: '命中位置 ≡ 朴素暴力 + 失败函数 ≡ 暴力最长真前后缀', chk: ['kmpSearch：'] },
     { id: 'gaussLegendre', name: 'Gauss–Legendre 求积', src: 'Gauss (1814)；Golub–Welsch (1969)', api: 'AXIOM.gaussQuad', inv: 'n 点对 ≤2n−1 次多项式精确（代数精度定理）+ ∫cos x', chk: ['gaussLegendre：'] },
-    { id: 'strassenMul', name: 'Strassen 矩阵乘', src: 'Strassen (1969)', api: 'AXIOM.strassenMul', inv: '7 次递归乘法 ≡ 朴素 O(n³)（n = 1/2/4/8/16）', chk: ['strassenMul：'] }
+    { id: 'strassenMul', name: 'Strassen 矩阵乘', src: 'Strassen (1969)', api: 'AXIOM.strassenMul', inv: '7 次递归乘法 ≡ 朴素 O(n³)（n = 1/2/4/8/16）', chk: ['strassenMul：'] },
+    { id: 'mixedRadixFFT', name: '混合基 FFT', src: 'Cooley–Tukey (1965)；radix-3·5', api: 'AXIOM.mixedRadixFFT', inv: 'radix-2/3/5 通用分解 ≡ 朴素 DFT（N = 15/45/75/90/225/300…）', chk: ['mixedRadixFFT：'] },
+    { id: 'nutsSample', name: 'NUTS 采样器', src: 'Hoffman–Gelman (2014)', api: 'AXIOM.nutsSample', inv: '经验矩 ≡ 解析（1D N(0,1) + 2D 相关高斯 ρ=0.8，12 seed 池化）', chk: ['nutsSample：'] },
+    { id: 'mcmfSSP', name: '最小费用最大流', src: 'Ford–Fulkerson (1956)；Busacker–Gowen', api: 'AXIOM.mcmfSSP', inv: 'SSP+Johnson 势能 ≡ SSP+Bellman–Ford ≡ EK（max-flow 值，DAG 含负费用）', chk: ['mcmfSSP：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -659,6 +662,36 @@
     var C = AXIOM.strassenMul(A, B, 2), R = AXIOM.matMul(A, B);
     return '4×4 整数矩阵（分治叶尺寸 2 ⇒ 7 次递归乘法替代 8 次，O(n^2.807)）\nStrassen C[0] = ' + fmtVec(C[0]) + ' · C[3] = ' + fmtVec(C[3]) +
       '\n与朴素 O(n³) 矩阵乘最大差 = ' + algoMaxDiff(C, R).toExponential(2);
+  },
+  mixedRadixFFT: function () {
+    var x = [];
+    for (var i = 0; i < 15; i++) x.push({ re: Math.cos(2 * Math.PI * i / 15), im: Math.sin(2 * Math.PI * 3 * i / 15) });
+    var X = AXIOM.mixedRadixFFT(x), D = AXIOM.dft(x), d = 0;
+    for (var j = 0; j < X.length; j++) d = Math.max(d, Math.abs(X[j].re - D[j].re), Math.abs(X[j].im - D[j].im));
+    var k3 = 3;
+    return 'N = 15 = 3·5（radix-3·5 混合基，2 幂走 fft、质因子走朴素 DFT）\n|X[0]| = ' + Math.hypot(X[0].re, X[0].im).toFixed(4) + ' · |X[' + k3 + ']| = ' + Math.hypot(X[k3].re, X[k3].im).toFixed(4) +
+      '\n与朴素 O(n²) DFT 最大差 = ' + d.toExponential(2);
+  },
+  nutsSample: function () {
+    var rng = AXIOM.mulberry32(2024);
+    var r = AXIOM.nutsSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], 1500, rng, { warmup: 600, eps0: 0.6, maxDepth: 7 });
+    var mean = 0, i;
+    for (i = 0; i < r.samples.length; i++) mean += r.samples[i][0] / r.samples.length;
+    var v = 0;
+    for (i = 0; i < r.samples.length; i++) v += (r.samples[i][0] - mean) * (r.samples[i][0] - mean) / (r.samples.length - 1);
+    return '目标 N(0,1)（1D 标准正态，双平均自适应步长 ε* = ' + r.eps.toFixed(3) + '）\n经验均值 = ' + mean.toFixed(4) + '（解析 0）· 经验方差 = ' + v.toFixed(4) + '（解析 1）' +
+      '\n1500 样本 · U-turn 自适应轨迹长度（无需手动设 L）';
+  },
+  mcmfSSP: function () {
+    var n = 4, s = 0, t = 3;
+    var edges = [[0, 1, 3, 1], [0, 2, 2, 4], [1, 2, 1, 2], [1, 3, 2, 3], [2, 3, 4, 1]];
+    var a = AXIOM.mcmfSSP(n, s, t, edges), b = AXIOM.mcmfSSPRef(n, s, t, edges);
+    var cap = []; for (var i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+    for (i = 0; i < edges.length; i++) cap[edges[i][0]][edges[i][1]] += edges[i][2];
+    var ek = AXIOM.maxFlowEK(n, cap, s, t);
+    return '4 节点 5 边最小费用最大流（含低费旁路 2→3 费 1）\nSSP+Johnson 势能：流量 = ' + a.value + ' · 费用 = ' + a.cost +
+      '\nSSP+Bellman–Ford：流量 = ' + b.value + ' · 费用 = ' + b.cost + ' · Edmonds–Karp 最大流 = ' + ek +
+      '\n三路（流量/费用）完全一致';
   }
   };
   var algoRun = null;

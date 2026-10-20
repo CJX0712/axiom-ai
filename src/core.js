@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.12';
+  var VERSION = '1.3.13';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4142,6 +4142,235 @@
     return Math.abs(a - b);
   }
 
+  /* ==================== v1.3.13 算法库扩展三 ==================== */
+  /* ① 混合基 FFT（通用 radix-2/3/5 Cooley–Tukey）：长度按最小质因子分解，
+     2 的幂走既有 fft，质因子叶子走朴素 DFT。不变量 ≙ dft（朴素 DFT） */
+  function _cAdd(a, b) { return { re: a.re + b.re, im: a.im + b.im }; }
+  function _cMul(a, b) { return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }; }
+  function _cExp(th) { return { re: Math.cos(th), im: Math.sin(th) }; }
+  function _smallestPrime(n) {
+    if (n % 2 === 0) return 2;
+    for (var p = 3; p * p <= n; p += 2) if (n % p === 0) return p;
+    return n;                                                       // n 为质数
+  }
+  function _directDft(x) {                                          // 长度 p 的朴素 DFT（p 质数，O(p²) 精确）
+    var N = x.length, X = [];
+    for (var k = 0; k < N; k++) {
+      var s = { re: 0, im: 0 };
+      for (var n = 0; n < N; n++) s = _cAdd(s, _cMul(x[n], _cExp(-2 * Math.PI * k * n / N)));
+      X[k] = s;
+    }
+    return X;
+  }
+  function _mrDft(x) {                                              // 混合基递归：n = r + p·m, k = k0 + q·k1
+    var N = x.length;
+    if (N <= 1) return x.slice();
+    if ((N & (N - 1)) === 0) return fft(x);
+    var p = _smallestPrime(N), q = N / p, B = [];
+    for (var r = 0; r < p; r++) {
+      var row = [];
+      for (var m = 0; m < q; m++) row.push(x[r + p * m]);
+      B.push(_mrDft(row));
+    }
+    var X = new Array(N);
+    for (var k0 = 0; k0 < q; k0++) {
+      var col = [];
+      for (var r2 = 0; r2 < p; r2++) col.push(_cMul(B[r2][k0], _cExp(-2 * Math.PI * r2 * k0 / N)));
+      var dftp = _directDft(col);
+      for (var k1 = 0; k1 < p; k1++) X[k0 + q * k1] = dftp[k1];
+    }
+    return X;
+  }
+  function mixedRadixFFT(x) {
+    if ((x.length & (x.length - 1)) === 0) return fft(x);
+    return _mrDft(x);
+  }
+
+  /* ② NUTS（No-U-Turn Sampler，Hoffman–Gelman 2014）：递归二叉轨迹 + 双平均步长自适应 +
+     多项式（reservoir）选态。严格遵循 Algorithm 2/3：signed-step leapfrog、leaf s'=1（离开
+     slice 仅 n'=0）、无条件合并子树、仅 s'=1 并入、reservoir n'/(n+n')。不变量 ≙ 解析矩（池化） */
+  function _vecSub(a, b) { var r = []; for (var i = 0; i < a.length; i++) r.push(a[i] - b[i]); return r; }
+  function _vecScale(a, s) { var r = []; for (var i = 0; i < a.length; i++) r.push(a[i] * s); return r; }
+  function _dotV(a, b) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+  function nutsSample(logf, gradLogf, x0, N, rng, opts) {
+    opts = opts || {};
+    var d = x0.length;
+    var delta = (opts.delta != null) ? opts.delta : 0.65;
+    var maxDepth = opts.maxDepth || 10;
+    var t0 = 10, gamma = 0.05, kappa = 0.75;
+    var warmup = opts.warmup || 1000;
+    var eps0 = opts.eps0 || 0.5;
+    var mu = Math.log(10 * eps0);
+    var m = 0, Hbar = 0, logEps = Math.log(eps0), logEpsBar = logEps;
+    var x = x0.slice();
+    var grad0 = gradLogf(x);
+    function leapfrog(q, p, g, eps) {                               // 带符号步长（反向 v·eps<0），端点动量即物理动量
+      var q1 = q.slice(), p1 = p.slice();
+      for (var i = 0; i < d; i++) p1[i] += 0.5 * eps * g[i];
+      for (i = 0; i < d; i++) q1[i] += eps * p1[i];
+      var g1 = gradLogf(q1);
+      for (i = 0; i < d; i++) p1[i] += 0.5 * eps * g1[i];
+      var U = -logf(q1);
+      return { q: q1, p: p1, U: U, grad: g1 };
+    }
+    function buildTree(z, u, v, depth, eps) {
+      if (depth === 0) {
+        var z1 = leapfrog(z.q, z.p, z.grad, v * eps); z1.H0 = z.H0;
+        var Hp = z1.U + 0.5 * dotSelf(z1.p);
+        var n = (Math.log(u) <= -Hp) ? 1 : 0;                       // 在 slice 内才计权重
+        var alpha = Math.min(1, Math.exp(-Hp + z.H0));
+        return { zmin: z1, zmax: z1, znew: z1, n: n, s: 1, alpha: alpha, nalpha: 1 };  // s'=1：仅 u-turn 终止
+      }
+      var t = buildTree(z, u, v, depth - 1, eps);
+      if (t.s === -1) return t;
+      var t2;
+      if (v === -1) { t2 = buildTree(t.zmin, u, v, depth - 1, eps); }
+      else { t2 = buildTree(t.zmax, u, v, depth - 1, eps); }
+      var znew;                                                    // 无条件合并 t 与 t2（即便 t2 u-turn）
+      if (t2.n > 0 && (t.n + t2.n) > 0 && rng() < t2.n / (t.n + t2.n)) znew = t2.znew;
+      else znew = t.znew;
+      var n = t.n + t2.n;
+      var alpha = t.alpha + t2.alpha, nalpha = t.nalpha + t2.nalpha;
+      var s = t.s * t2.s;
+      var zmin, zmax;
+      if (v === -1) { zmin = t2.zmin; zmax = t.zmax; }
+      else { zmin = t.zmin; zmax = t2.zmax; }
+      var diff = _vecSub(zmax.q, zmin.q);
+      if (_dotV(diff, zmax.p) < 0) s = -1;
+      if (_dotV(diff, zmin.p) < 0) s = -1;
+      return { zmin: zmin, zmax: zmax, znew: znew, n: n, s: s, alpha: alpha, nalpha: nalpha };
+    }
+    function runTrajectory(eps) {
+      var U0 = -logf(x);
+      var p0 = []; for (var i = 0; i < d; i++) p0.push(gaussRand(rng));
+      var H0 = U0 + 0.5 * dotSelf(p0);
+      var u = rng() * Math.exp(-H0);
+      var z = { q: x.slice(), p: p0.slice(), U: U0, grad: grad0.slice(), H0: H0 };
+      var zmin = z, zmax = z, n = 1, s = 1, depth = 0, alpha = 0, nalpha = 0;
+      var xn = x.slice(), Un = U0, gn = grad0.slice(), hasNew = false;
+      while (s === 1 && depth < maxDepth) {
+        var v = (rng() < 0.5) ? -1 : 1;
+        var tree;
+        if (v === -1) { tree = buildTree(zmin, u, v, depth, eps); zmin = tree.zmin; }
+        else { tree = buildTree(zmax, u, v, depth, eps); zmax = tree.zmax; }
+        alpha += tree.alpha; nalpha += tree.nalpha;
+        if (tree.s === 1) {                                        // 仅子树有效时并入（reservoir）
+          if (tree.n > 0) {
+            if (!hasNew || rng() < tree.n / (n + tree.n)) {
+              xn = tree.znew.q.slice(); Un = tree.znew.U; gn = tree.znew.grad.slice(); hasNew = true;
+            }
+            n += tree.n;
+          }
+        } else { s = -1; }
+        var diff = _vecSub(zmax.q, zmin.q);
+        if (_dotV(diff, zmax.p) < 0 || _dotV(diff, zmin.p) < 0) s = -1;
+        depth++;
+      }
+      return { x: xn, U: Un, grad: gn, alpha: nalpha > 0 ? alpha / nalpha : 1, s: s };
+    }
+    for (var w = 0; w < warmup; w++) {                             // 双平均步长自适应
+      var r = runTrajectory(Math.exp(logEps));
+      x = r.x; grad0 = r.grad;
+      m++;
+      Hbar = (1 - 1 / (m + t0)) * Hbar + (1 / (m + t0)) * (delta - r.alpha);
+      logEps = mu - (Math.sqrt(m) / gamma) * Hbar;
+      logEps = Math.max(-7, Math.min(1.1, logEps));
+      logEpsBar = Math.pow(m, -kappa) * logEps + (1 - Math.pow(m, -kappa)) * logEpsBar;
+      logEpsBar = Math.max(-7, Math.min(1.1, logEpsBar));
+    }
+    var epsFinal = Math.exp(logEpsBar);
+    var samples = [];
+    for (var c = 0; c < N; c++) {
+      var r2 = runTrajectory(epsFinal);
+      x = r2.x; grad0 = r2.grad;
+      samples.push(x.slice());
+    }
+    return { samples: samples, eps: epsFinal };
+  }
+
+  /* ③ 最小费用最大流 MCMF：主实现 SSP + Johnson 势能（Dijkstra，虚拟超源 Bellman–Ford 初始化势能
+     保证约化费用 ≥ 0），参照 SSP + Bellman–Ford（实际费用最短路）。不变量 ≙ 彼此 ≙ maxFlowEK（max-flow 值） */
+  function _mcmfBuild(n, edges) {                                   // 残差图 G[u] = [{to,cap,cost,rev}]
+    var G = [];
+    for (var i = 0; i < n; i++) G.push([]);
+    function addEdge(u, v, cap, cost) {
+      G[u].push({ to: v, cap: cap, cost: cost, rev: G[v].length });
+      G[v].push({ to: u, cap: 0, cost: -cost, rev: G[u].length - 1 });
+    }
+    for (var e = 0; e < edges.length; e++) addEdge(edges[e][0], edges[e][1], edges[e][2], edges[e][3]);
+    return G;
+  }
+  function mcmfSSP(n, s, t, edges) {                               // 主实现：SSP + Johnson 势能（Dijkstra）
+    var G = _mcmfBuild(n, edges);
+    var pi = new Array(n).fill(0), totalFlow = 0, totalCost = 0;
+    for (var bi = 0; bi < n; bi++) {                               // 虚拟超源 BF：pi[v]=min(0, 最短路)，保证约化费用 ≥ 0
+      var changed = false;
+      for (var bu = 0; bu < n; bu++) {
+        for (var be = 0; be < G[bu].length; be++) {
+          var bed = G[bu][be];
+          if (bed.cap > 0 && pi[bu] + bed.cost < pi[bed.to]) { pi[bed.to] = pi[bu] + bed.cost; changed = true; }
+        }
+      }
+      if (!changed) break;
+    }
+    while (true) {
+      var dist = new Array(n).fill(Infinity), prevN = new Array(n).fill(-1), prevE = new Array(n).fill(-1);
+      dist[s] = 0;
+      var vis = new Array(n).fill(false);
+      for (var it = 0; it < n; it++) {                             // Dijkstra（约化费用非负；跳过已 settle 节点防 prevN 成环）
+        var u = -1, best = Infinity;
+        for (var i = 0; i < n; i++) if (!vis[i] && dist[i] < best) { best = dist[i]; u = i; }
+        if (u === -1 || u === t) break;
+        vis[u] = true;
+        for (var e = 0; e < G[u].length; e++) {
+          var ed = G[u][e];
+          if (ed.cap <= 0 || vis[ed.to] || !isFinite(pi[ed.to])) continue;
+          var c = ed.cost + pi[u] - pi[ed.to];
+          if (dist[u] + c < dist[ed.to]) { dist[ed.to] = dist[u] + c; prevN[ed.to] = u; prevE[ed.to] = e; }
+        }
+      }
+      if (!isFinite(dist[t])) break;
+      for (i = 0; i < n; i++) if (isFinite(dist[i])) pi[i] += dist[i];  // Johnson 势能更新
+      var f = Infinity;
+      for (var v = t; v !== s; v = prevN[v]) f = Math.min(f, G[prevN[v]][prevE[v]].cap);
+      for (v = t; v !== s; v = prevN[v]) {
+        var uu = prevN[v], ee = prevE[v], e2 = G[uu][ee];
+        e2.cap -= f; G[e2.to][e2.rev].cap += f; totalCost += f * e2.cost;
+      }
+      totalFlow += f;
+    }
+    return { value: totalFlow, cost: totalCost };
+  }
+  function mcmfSSPRef(n, s, t, edges) {                            // 参照：SSP + Bellman–Ford（实际费用最短路）
+    var G = _mcmfBuild(n, edges);
+    var totalFlow = 0, totalCost = 0;
+    while (true) {
+      var dist = new Array(n).fill(Infinity), prevN = new Array(n).fill(-1), prevE = new Array(n).fill(-1);
+      dist[s] = 0;
+      for (var it = 0; it < n - 1; it++) {                          // 标准 Bellman–Ford（V−1 轮，必终止）
+        var changed = false;
+        for (var u = 0; u < n; u++) {
+          if (dist[u] === Infinity) continue;
+          for (var e = 0; e < G[u].length; e++) {
+            var ed = G[u][e];
+            if (ed.cap <= 0) continue;
+            if (dist[u] + ed.cost < dist[ed.to]) { dist[ed.to] = dist[u] + ed.cost; prevN[ed.to] = u; prevE[ed.to] = e; changed = true; }
+          }
+        }
+        if (!changed) break;
+      }
+      if (!isFinite(dist[t])) break;
+      var f = Infinity;
+      for (var v = t; v !== s; v = prevN[v]) f = Math.min(f, G[prevN[v]][prevE[v]].cap);
+      for (v = t; v !== s; v = prevN[v]) {
+        var uu = prevN[v], ee = prevE[v], e2 = G[uu][ee];
+        e2.cap -= f; G[e2.to][e2.rev].cap += f; totalCost += f * e2.cost;
+      }
+      totalFlow += f;
+    }
+    return { value: totalFlow, cost: totalCost };
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -7233,6 +7462,65 @@
     return worst;
   });
 
+  check('mixedRadixFFT：混合基（radix-2/3/5）≡ 朴素 DFT（N=15/45/75/60/90/225/300 + 2 幂 16/32/64）', 1e-10, function () {
+    function cdiff(a, b) {
+      var w = 0;
+      for (var i = 0; i < a.length; i++) w = Math.max(w, Math.abs(a[i].re - b[i].re), Math.abs(a[i].im - b[i].im));
+      return w;
+    }
+    var worst = 0;
+    [15, 45, 75, 60, 90, 225, 300, 16, 32, 64].forEach(function (N) {
+      var rng = mulberry32(1000 + N), x = [];
+      for (var i = 0; i < N; i++) x.push({ re: rng() * 2 - 1, im: rng() * 2 - 1 });
+      worst = Math.max(worst, cdiff(mixedRadixFFT(x), dft(x)));
+    });
+    return worst;
+  });
+
+  check('nutsSample：NUTS 经验矩 ≡ 解析（1D N(0,1) + 2D 相关高斯 ρ=0.8，12 seed 池化，双平均自适应步长）', 0.06, function () {
+    var NW = 600, NS = 1500, MD = 7, pool1 = [], pool2 = [];
+    for (var sd = 0; sd < 12; sd++) {
+      var rng = mulberry32(900 + sd);
+      var r1 = nutsSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], NS, rng, { warmup: NW, eps0: 0.6, maxDepth: MD });
+      for (var i = 0; i < r1.samples.length; i++) pool1.push(r1.samples[i]);
+      var rng2 = mulberry32(900 + sd);
+      var r2 = nutsSample(function (x) {
+        var dd = x[0] * x[0] - 1.6 * x[0] * x[1] + x[1] * x[1];
+        return -0.5 / 0.36 * dd;
+      }, function (x) { return [-x[0] / 0.36 + 0.8 * x[1] / 0.36, 0.8 * x[0] / 0.36 - x[1] / 0.36]; }, [0, 0], NS, rng2, { warmup: NW, eps0: 0.6, maxDepth: MD });
+      for (var j = 0; j < r2.samples.length; j++) pool2.push(r2.samples[j]);
+    }
+    var m1 = moments1(pool1), m2 = moments2(pool2);
+    return Math.max(Math.abs(m1.mean), Math.abs(m1.var - 1),
+      Math.abs(m2.m0), Math.abs(m2.m1), Math.abs(m2.v0 - 1), Math.abs(m2.v1 - 1), Math.abs(m2.cov - 0.8));
+  });
+
+  check('mcmfSSP：最小费用最大流 ≡ SSP+Bellman–Ford ≡ EK（max-flow 值），20 个 DAG（含负费用边）', 0, function () {
+    function dagGraph(rng, n, eCount) {                            // DAG（所有边 u<v）⇒ 无负费用环 ⇒ MCMF 良定义
+      var edges = [];
+      for (var i = 1; i < n; i++) edges.push([i - 1, i, 1 + Math.floor(rng() * 9), -5 + Math.floor(rng() * 21)]);
+      for (var k = 0; k < eCount; k++) {
+        var u = Math.floor(rng() * n), v = Math.floor(rng() * n);
+        if (u >= v) continue;
+        edges.push([u, v, 1 + Math.floor(rng() * 9), -5 + Math.floor(rng() * 21)]);
+      }
+      return edges;
+    }
+    var worst = 0;
+    for (var g = 0; g < 20; g++) {
+      var rng = mulberry32(500 + g);
+      var n = 5 + Math.floor(rng() * 5), s = 0, t = n - 1;
+      var edges = dagGraph(rng, n, 6 + Math.floor(rng() * 8));
+      var a = mcmfSSP(n, s, t, edges), b = mcmfSSPRef(n, s, t, edges);
+      var cap = []; for (var ci = 0; ci < n; ci++) cap.push(new Array(n).fill(0));
+      for (var ei = 0; ei < edges.length; ei++) cap[edges[ei][0]][edges[ei][1]] += edges[ei][2];
+      var ek = maxFlowEK(n, cap, s, t);
+      if (ek === 0) continue;
+      worst = Math.max(worst, Math.abs(a.value - b.value), Math.abs(a.cost - b.cost), Math.abs(a.value - ek));
+    }
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -7368,6 +7656,10 @@
     kmpFailure: kmpFailure, kmpSearch: kmpSearch, bruteSearch: bruteSearch,
     legendreP: legendreP, gaussLegendre: gaussLegendre, gaussQuad: gaussQuad,
     strassenMul: strassenMul, addM: addM, subM: subM,
+    /* v1.3.13 算法库扩展三 */
+    mixedRadixFFT: mixedRadixFFT,
+    nutsSample: nutsSample,
+    mcmfSSP: mcmfSSP, mcmfSSPRef: mcmfSSPRef,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

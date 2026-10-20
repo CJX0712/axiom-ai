@@ -1,5 +1,21 @@
 # 更新日志
 
+## [1.3.13] - 2026-10-21
+
+### 算法库扩展三（不占 ISA 网格的旗舰算法层再 +3 组 → 33 组）
+
+- **新增 3 组算法 + 3 条硬不变量（核心不变量 338 → 341）**，沙盒先行独立验证后注入：
+  - **混合基 FFT**（Cooley–Tukey 1965；radix-3·5）：长度按最小质因子递归分解，2 的幂走既有 radix-2 `fft`、质因子叶子走朴素 DFT；radix-2/3/5 通用 ≡ 朴素 O(n²) DFT（N=15/45/75/60/90/225/300 + 2 幂 16/32/64）—— 3.68e-12
+  - **NUTS 采样器**（Hoffman–Gelman 2014）：递归二叉轨迹 + 双平均步长自适应（δ=0.65）+ 多项式（reservoir）选态；经验矩 ≡ 解析（1D N(0,1) + 2D 相关高斯 ρ=0.8，12 seed 池化）—— 2.40e-2
+  - **最小费用最大流 MCMF**（Ford–Fulkerson 1956；Busacker–Gowen 1961）：主实现 SSP + Johnson 势能（Dijkstra，虚拟超源 Bellman–Ford 初始化势能保证约化费用 ≥ 0）；≡ SSP + Bellman–Ford ≡ Edmonds–Karp（max-flow 值，20 个 DAG 含负费用边）—— 0（精确）
+- **沙盒连抓 3 项实现缺陷（铁律：沙盒先行 + 确定性/多 seed 边界预检）**：
+  - **NUTS 三重结构 bug**（单 seed 2D var 收缩 ~11%，1D 因轨迹短被掩盖）：(a) leaf 用「离开 slice 即停」截断轨迹（应为 s'=1，离开 slice 仅 n'=0）；(b) 内部节点 `if (t2.s===-1) return t2` 丢弃第一子树有效态（应无条件合并）；(c) 反向积分用「动量取反 + 正 eps」致端点动量符号错（应带符号步长 v·eps）。经 Hoffman–Gelman Algorithm 2（显式收集在-slice 态、末尾均匀选）作 ground-truth 对照，确认正确结构：signed-step leapfrog / leaf s'=1 / 无条件合并 / 仅 s'=1 并入 / reservoir n'/(n+n') / n 从 1 起。修正后 12-seed 池化 worst 2.40e-2
+  - **MCMF 主实现死循环**：Dijkstra 未跳过已 settle 节点 → `prevN` 成环 → 回溯死循环；修复为「松弛处跳过 vis 节点」+ 虚拟超源 BF 势能初始化
+  - **MCMF 测试图负费用环**：随机图含负费用环致最小费用最大流无良定义、参照 BF 亦 `prevN` 成环挂起；测试图改 DAG（u<v）彻底消除
+- **UI 算法库视图扩至 33 组**：清单表与 3 组新「▶ 运行」真实计算 demo 齐备（混合基 FFT 输出 N=15 与朴素 DFT 对比、NUTS 输出经验矩 vs 解析、MCMF 输出三路流量/费用一致性）
+- **指标**：核心不变量 **338 → 341** · 无头 **348 → 351/351** · UI 冒烟 **33/33 不变**（算法库断言 30→33 数据行 / 34 按钮）· verified **811/1024 不变**（算法库不占 ISA 网格）· axiom.html **685.6 → 701.6 KB**
+- **文档**：README §7.5 表 +3 行、用法示例加 3 个新 API、路线图勾选、巨人肩补 Hoffman–Gelman/Ford–Fulkerson/Busacker–Gowen；`docs/ALGORITHMS.md` 第 32–34 节 + 稳健性表 +3 行；`docs/ARCHITECTURE.md` 加 3 个新 API 与 341 计数；VERIFICATION/ISA-1024 自动重生成
+
 ## [1.3.12] - 2026-10-21
 
 ### 算法库扩展二（不占 ISA 网格的旗舰算法层再 +8 组 → 30 组）
