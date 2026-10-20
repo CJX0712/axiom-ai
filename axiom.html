@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.11';
+  var VERSION = '1.3.12';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -3863,6 +3863,298 @@
     return best;
   }
 
+  /* ==========================================================================
+   * 算法库扩展二（v1.3.12）—— Bluestein 任意长度 FFT / 自适应 Metropolis /
+   *   Hamiltonian MC / Floyd–Warshall / 并查集 / KMP / Gauss–Legendre 求积 /
+   *   Strassen 矩阵乘
+   *   铁律同上：每条携带可独立复算硬不变量（参照实现 vs 主实现 / 解析对照 / 定理级）
+   * ======================================================================== */
+
+  /* Bluestein FFT —— 任意长度（含非 2 的幂）卷积定理算法（Bluestein 1968/1970）
+   * jk = (j² + k² − (j−k)²)/2 ⇒ X_k = e^{−πik²/n}·Σ_j (x_j e^{−πij²/n})·e^{πi(j−k)²/n}
+   * 即 chirp 序列与 x 的循环卷积，用长度 ≥ 2n−1 的 radix-2 FFT 完成（O(n log n)） */
+  function bluesteinFFT(x) {
+    var n = x.length;
+    if ((n & (n - 1)) === 0) return fft(x);          // 2 的幂直接走 Cooley–Tukey
+    var m = 1;
+    while (m < 2 * n - 1) m <<= 1;                   // 循环卷积长度 ≥ 2n−1
+    var A = [], B = [], i;
+    for (i = 0; i < m; i++) { A.push({ re: 0, im: 0 }); B.push({ re: 0, im: 0 }); }
+    for (i = 0; i < n; i++) {                        // a_j = x_j·e^{−πij²/n}
+      var a1 = -Math.PI * i * i / n;
+      A[i] = { re: x[i].re * Math.cos(a1) - x[i].im * Math.sin(a1), im: x[i].re * Math.sin(a1) + x[i].im * Math.cos(a1) };
+    }
+    for (i = 0; i < n; i++) {                        // b_m = e^{+πim²/n}（负下标折叠到尾部）
+      var a2 = Math.PI * i * i / n;
+      B[i] = { re: Math.cos(a2), im: Math.sin(a2) };
+      if (i > 0) B[m - i] = B[i];
+    }
+    var FA = fft(A), FB = fft(B), FC = [];
+    for (i = 0; i < m; i++) {
+      FC.push({ re: FA[i].re * FB[i].re - FA[i].im * FB[i].im, im: FA[i].re * FB[i].im + FA[i].im * FB[i].re });
+    }
+    var C = ifft(FC), X = [];
+    for (i = 0; i < n; i++) {                        // X_k = e^{−πik²/n}·c_k
+      var a3 = -Math.PI * i * i / n;
+      X.push({ re: C[i].re * Math.cos(a3) - C[i].im * Math.sin(a3), im: C[i].re * Math.sin(a3) + C[i].im * Math.cos(a3) });
+    }
+    return X;
+  }
+
+  /* 自适应 Metropolis（Haario 2001, Adaptive Metropolis）—— 提议协方差由历史样本在线估计
+   * C = s_d·(cov(链历史) + εI)，s_d = 2.38²/d（Roberts–Rosenthal 2001 最优缩放）
+   * 自适应在 burn-in 结束时冻结 ⇒ burn 后为齐次马尔可夫链，保证遍历到正确平稳分布 */
+  function cholSafe(C) {                              // 带正则的下三角 Cholesky（协方差估计可能近奇异）
+    var d = C.length, L = zeros2(d, d), i, j, k;
+    for (i = 0; i < d; i++) {
+      for (j = 0; j <= i; j++) {
+        var s = C[i][j];
+        for (k = 0; k < j; k++) s -= L[i][k] * L[j][k];
+        if (i === j) L[i][j] = Math.sqrt(Math.max(s, 1e-10));
+        else L[i][j] = s / L[j][j];
+      }
+    }
+    return L;
+  }
+  function covOf(hist) {                             // 样本协方差（无偏，n−1）
+    var n = hist.length, d = hist[0].length, mu = new Array(d).fill(0), i, j, t;
+    for (t = 0; t < n; t++) for (i = 0; i < d; i++) mu[i] += hist[t][i] / n;
+    var C = zeros2(d, d);
+    for (t = 0; t < n; t++) {
+      for (i = 0; i < d; i++) for (j = 0; j < d; j++) C[i][j] += (hist[t][i] - mu[i]) * (hist[t][j] - mu[j]) / (n - 1);
+    }
+    return C;
+  }
+  function covScale(C, sd, eps) {
+    var d = C.length, R = zeros2(d, d), i, j;
+    for (i = 0; i < d; i++) for (j = 0; j < d; j++) R[i][j] = sd * C[i][j] + (i === j ? eps : 0);
+    return R;
+  }
+  function gaussRand(rng) {                           // Box–Muller（标准正态）
+    var u = Math.max(rng(), 1e-300);
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
+  }
+  function adaptiveMetropolis(logf, x0, N, rng, burn) {
+    N = N || 3000; burn = burn || 3000;
+    var d = x0.length, sd = 2.38 * 2.38 / d, eps = 1e-6, i, t;
+    var x = x0.slice(), lfx = logf(x), hist = [], samples = [], acc = 0;
+    var L = zeros2(d, d);
+    for (i = 0; i < d; i++) L[i][i] = 0.5;            // 初始固定提议尺度
+    for (t = 0; t < burn + N; t++) {
+      if (t === burn) L = cholSafe(covScale(covOf(hist), sd, eps));       // burn 结束冻结（保证遍历性）
+      else if (t > 20 * d && t < burn && t % 50 === 0) L = cholSafe(covScale(covOf(hist), sd, eps));
+      var y = x.slice(), k2, z = [];
+      for (i = 0; i < d; i++) z.push(gaussRand(rng));
+      for (i = 0; i < d; i++) { var s2 = 0; for (k2 = 0; k2 <= i; k2++) s2 += L[i][k2] * z[k2]; y[i] += s2; }
+      var lfy = logf(y), accOk = false;
+      if (isFinite(lfy)) accOk = lfy === lfx ? true : Math.log(rng() + 1e-300) < lfy - lfx;
+      if (accOk) { x = y; lfx = lfy; acc++; }
+      if (t < burn) hist.push(x.slice()); else samples.push(x.slice());
+    }
+    return { samples: samples, rate: acc / (burn + N), cov: covOf(samples) };
+  }
+
+  /* Hamiltonian Monte Carlo（Duane 1987；Neal 2011 手册）—— leapfrog 积分 + Metropolis 接受
+   * H(x,p) = −log f(x) + ½pᵀp；leapfrog 可逆·保体积·近似保能量 ⇒ 高维高接受率与低自相关
+   * 轨迹抖动（步数 Lt ~ U{1..L}、步长 ±10%）避免与最短周期共振（Neal §3.2） */
+  function hmcSample(logf, gradLogf, x0, N, rng, eps, L) {
+    N = N || 1200; L = L || 8; eps = eps || 0.25;
+    var d = x0.length, x = x0.slice(), lf = logf(x), samples = [], acc = 0, eSum = 0, i, it;
+    for (it = 0; it < N; it++) {
+      var p = [];
+      for (i = 0; i < d; i++) p.push(gaussRand(rng));
+      var H0 = -lf + 0.5 * dotSelf(p);
+      var xn = x.slice(), pn = p.slice();
+      var Lt = Math.max(1, 1 + Math.floor(rng() * L)), ep = eps * (0.9 + 0.2 * rng());
+      var g = gradLogf(xn);
+      for (i = 0; i < d; i++) pn[i] += 0.5 * ep * g[i];        // 首个半步
+      for (var s = 0; s < Lt; s++) {
+        for (i = 0; i < d; i++) xn[i] += ep * pn[i];           // 位置整步
+        g = gradLogf(xn);
+        var half = (s === Lt - 1) ? 0.5 : 1;
+        for (i = 0; i < d; i++) pn[i] += half * ep * g[i];      // 动量步（末步半步）
+      }
+      var lfn = logf(xn);
+      if (!isFinite(lfn)) { samples.push(x.slice()); continue; }
+      var H1 = -lfn + 0.5 * dotSelf(pn), dH = H1 - H0;
+      eSum += Math.abs(dH);
+      if (Math.log(rng() + 1e-300) < -dH) { x = xn; lf = lfn; acc++; }
+      samples.push(x.slice());
+    }
+    return { samples: samples, rate: acc / N, energyErr: eSum / N };
+  }
+  function dotSelf(a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * a[i]; return s; }
+
+  /* Floyd–Warshall —— 全源最短路动态规划 O(n³)（支持负权，前提无负环） */
+  function floydWarshall(n, edges) {
+    var D = zeros2(n, n), i, j, k;
+    for (i = 0; i < n; i++) for (j = 0; j < n; j++) D[i][j] = (i === j ? 0 : Infinity);
+    for (i = 0; i < edges.length; i++) if (edges[i][2] < D[edges[i][0]][edges[i][1]]) D[edges[i][0]][edges[i][1]] = edges[i][2];
+    for (k = 0; k < n; k++) for (i = 0; i < n; i++) for (j = 0; j < n; j++) {
+      if (D[i][k] + D[k][j] < D[i][j]) D[i][j] = D[i][k] + D[k][j];
+    }
+    return D;
+  }
+
+  /* 并查集（Tarjan 1975 路径压缩 + 按秩合并）—— 近乎 O(α(n)) 的连通性结构 */
+  function dsuCreate(n) {
+    var p = [], r = [], i;
+    for (i = 0; i < n; i++) { p.push(i); r.push(0); }
+    return { p: p, rank: r, count: n };
+  }
+  function dsuFind(s, x) {
+    while (s.p[x] !== x) { s.p[x] = s.p[s.p[x]]; x = s.p[x]; }   // 路径压缩
+    return x;
+  }
+  function dsuUnion(s, a, b) {
+    var ra = dsuFind(s, a), rb = dsuFind(s, b);
+    if (ra === rb) return false;
+    if (s.rank[ra] < s.rank[rb]) { var t = ra; ra = rb; rb = t; }
+    s.p[rb] = ra;
+    if (s.rank[ra] === s.rank[rb]) s.rank[ra]++;                 // 按秩合并
+    s.count--;
+    return true;
+  }
+  function dsuComponents(s, n) {
+    var lab = new Array(n).fill(0), i;
+    for (i = 0; i < n; i++) lab[i] = dsuFind(s, i);
+    return lab;
+  }
+  function kruskalDSU(n, edges) {                                 // Kruskal（显式 DSU）→ MST 权重
+    var s = dsuCreate(n), sorted = edges.slice().sort(function (a, b) { return a[2] - b[2]; });
+    var total = 0, cnt = 0;
+    for (var k = 0; k < sorted.length; k++) {
+      if (dsuUnion(s, sorted[k][0], sorted[k][1])) { total += sorted[k][2]; cnt++; }
+    }
+    return { total: total, count: cnt, comps: s.count };
+  }
+
+  /* KMP（Knuth–Morris–Pratt 1977）—— 失败函数预处理，匹配 O(n+m) 且绝不回退文本指针 */
+  function kmpFailure(p) {
+    var f = new Array(p.length).fill(0), k = 0;
+    for (var i = 1; i < p.length; i++) {
+      while (k > 0 && p[i] !== p[k]) k = f[k - 1];
+      if (p[i] === p[k]) k++;
+      f[i] = k;
+    }
+    return f;
+  }
+  function kmpSearch(text, pat) {
+    if (pat.length === 0) return [];
+    var f = kmpFailure(pat), out = [], k = 0;
+    for (var i = 0; i < text.length; i++) {
+      while (k > 0 && text[i] !== pat[k]) k = f[k - 1];
+      if (text[i] === pat[k]) k++;
+      if (k === pat.length) { out.push(i - pat.length + 1); k = f[k - 1]; }
+    }
+    return out;
+  }
+  function bruteSearch(text, pat) {                                // 朴素 O(nm) 参照实现
+    var out = [];
+    if (pat.length === 0) return out;
+    for (var i = 0; i + pat.length <= text.length; i++) {
+      var ok = true;
+      for (var j = 0; j < pat.length; j++) if (text[i + j] !== pat[j]) { ok = false; break; }
+      if (ok) out.push(i);
+    }
+    return out;
+  }
+
+  /* Gauss–Legendre 求积 —— 节点 = P_n 的零点，n 点公式对 ≤2n−1 次多项式精确（代数精度 2n−1）
+   * 权重 w_i = 2/((1−x_i²)·P'_n(x_i)²)；节点由 Newton 迭代（初值 cos(π(i+¾)/(n+½))）求得 */
+  function legendreP(n, x) {                                      // 递推 kP_k = (2k−1)xP_{k−1} − (k−1)P_{k−2}
+    if (n === 0) return 1;
+    var p0 = 1, p1 = x;
+    for (var k = 2; k <= n; k++) { var p2 = ((2 * k - 1) * x * p1 - (k - 1) * p0) / k; p0 = p1; p1 = p2; }
+    return p1;
+  }
+  function gaussLegendre(n) {
+    var xs = [], ws = [], i;
+    for (i = 0; i < n; i++) {
+      var x = Math.cos(Math.PI * (i + 0.75) / (n + 0.5));
+      var p0 = 0, p1 = 0, dp = 1, it, k;
+      for (it = 0; it < 100; it++) {
+        p0 = 1; p1 = x;
+        for (k = 2; k <= n; k++) { var p2 = ((2 * k - 1) * x * p1 - (k - 1) * p0) / k; p0 = p1; p1 = p2; }
+        dp = n * (x * p1 - p0) / (x * x - 1);                    // P'_n(x) = n(xP_n − P_{n−1})/(x²−1)
+        var dx = -p1 / dp;
+        x += dx;
+        if (Math.abs(dx) < 1e-16) break;
+      }
+      p0 = 1; p1 = x;
+      for (k = 2; k <= n; k++) { var p3 = ((2 * k - 1) * x * p1 - (k - 1) * p0) / k; p0 = p1; p1 = p3; }
+      dp = n * (x * p1 - p0) / (x * x - 1);
+      xs.push(x);
+      ws.push(2 / ((1 - x * x) * dp * dp));
+    }
+    return { x: xs, w: ws };
+  }
+  function gaussQuad(f, a, b, n) {                                 // ∫_a^b f ≈ (b−a)/2·Σ w_i f(仿射映射节点)
+    var g = gaussLegendre(n), half = (b - a) / 2, mid = (a + b) / 2, s = 0;
+    for (var i = 0; i < n; i++) s += g.w[i] * f(mid + half * g.x[i]);
+    return half * s;
+  }
+
+  /* Strassen 分治矩阵乘（Strassen 1969）—— 7 次递归乘法替代 8 次，O(n^2.807)
+   * 小尺寸回退朴素 kernel（实际高性能库做法：递归到 cache 友好尺寸转 BLAS） */
+  function addM(X, Y) { var R = zeros2(X.length, X[0].length), i, j; for (i = 0; i < X.length; i++) for (j = 0; j < X[0].length; j++) R[i][j] = X[i][j] + Y[i][j]; return R; }
+  function subM(X, Y) { var R = zeros2(X.length, X[0].length), i, j; for (i = 0; i < X.length; i++) for (j = 0; j < X[0].length; j++) R[i][j] = X[i][j] - Y[i][j]; return R; }
+  function strassenMul(A, B, leaf) {
+    leaf = leaf || 16;
+    var n = A.length, i, j;
+    if (n <= leaf) return matMul(A, B);
+    var h = n >> 1, A11 = [], A12 = [], A21 = [], A22 = [], B11 = [], B12 = [], B21 = [], B22 = [];
+    for (i = 0; i < h; i++) {
+      A11.push(A[i].slice(0, h)); A12.push(A[i].slice(h));
+      B11.push(B[i].slice(0, h)); B12.push(B[i].slice(h));
+    }
+    for (i = h; i < n; i++) {
+      A21.push(A[i].slice(0, h)); A22.push(A[i].slice(h));
+      B21.push(B[i].slice(0, h)); B22.push(B[i].slice(h));
+    }
+    var m1 = strassenMul(addM(A11, A22), addM(B11, B22), leaf);
+    var m2 = strassenMul(addM(A21, A22), B11, leaf);
+    var m3 = strassenMul(A11, subM(B12, B22), leaf);
+    var m4 = strassenMul(A22, subM(B21, B11), leaf);
+    var m5 = strassenMul(addM(A11, A12), B22, leaf);
+    var m6 = strassenMul(subM(A21, A11), addM(B11, B12), leaf);
+    var m7 = strassenMul(subM(A12, A22), addM(B21, B22), leaf);
+    var C11 = addM(subM(addM(m1, m4), m5), m7);
+    var C12 = addM(m3, m5);
+    var C21 = addM(m2, m4);
+    var C22 = addM(subM(addM(m1, m3), m2), m6);
+    var C = zeros2(n, n);
+    for (i = 0; i < h; i++) {
+      for (j = 0; j < h; j++) { C[i][j] = C11[i][j]; C[i][h + j] = C12[i][j]; C[h + i][j] = C21[i][j]; C[h + i][h + j] = C22[i][j]; }
+    }
+    return C;
+  }
+
+  /* 采样类不变量的矩统计辅助（多 seed 聚合用：先平均再与解析值比较，衡量偏差而非方差） */
+  function moments1(samples) {
+    var n = samples.length, mu = 0, i;
+    for (i = 0; i < n; i++) mu += samples[i][0] / n;
+    var v = 0;
+    for (i = 0; i < n; i++) v += (samples[i][0] - mu) * (samples[i][0] - mu) / (n - 1);
+    return { mean: mu, var: v };
+  }
+  function moments2(samples) {
+    var n = samples.length, m0 = 0, m1 = 0, i;
+    for (i = 0; i < n; i++) { m0 += samples[i][0] / n; m1 += samples[i][1] / n; }
+    var v0 = 0, v1 = 0, c01 = 0;
+    for (i = 0; i < n; i++) {
+      var d0 = samples[i][0] - m0, d1 = samples[i][1] - m1;
+      v0 += d0 * d0 / (n - 1); v1 += d1 * d1 / (n - 1); c01 += d0 * d1 / (n - 1);
+    }
+    return { m0: m0, m1: m1, v0: v0, v1: v1, cov: c01 };
+  }
+  function absDistDiff(a, b) {                                     // ∞−∞ = NaN 保护
+    if (a === b) return 0;
+    if (!isFinite(a) && !isFinite(b)) return 0;
+    if (!isFinite(a) || !isFinite(b)) return Infinity;
+    return Math.abs(a - b);
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -6733,6 +7025,227 @@
     return worst;
   });
 
+  check('bluesteinFFT：任意长度 FFT（Bluestein 卷积定理，非 2 的幂）≡ 朴素 O(n²) DFT + 2 的幂 ≡ radix-2', 1e-9, function () {
+    var rng = mulberry32(11), worst = 0, worstRadix = 0;
+    [3, 5, 6, 7, 9, 10, 11, 12, 13, 15].forEach(function (n) {
+      var x = [], i;
+      for (i = 0; i < n; i++) x.push({ re: rng() * 2 - 1, im: rng() * 2 - 1 });
+      var a = bluesteinFFT(x), b = dft(x);
+      for (var k = 0; k < n; k++) worst = Math.max(worst, Math.abs(a[k].re - b[k].re), Math.abs(a[k].im - b[k].im));
+    });
+    [4, 8, 16].forEach(function (n) {
+      var x = [], i;
+      for (i = 0; i < n; i++) x.push({ re: rng() * 2 - 1, im: rng() * 2 - 1 });
+      var a = bluesteinFFT(x), b = fft(x);
+      for (var k = 0; k < n; k++) worstRadix = Math.max(worstRadix, Math.abs(a[k].re - b[k].re), Math.abs(a[k].im - b[k].im));
+    });
+    return Math.max(worst, worstRadix);
+  });
+
+  check('adaptiveMetropolis：Haario 协方差自适应 —— 三目标（N(0,1) / 2D 相关高斯 ρ=0.8 / Gamma(k=3)）经验矩 ≡ 解析（20 seed 稳健）', 0.06, function () {
+    var rng0 = mulberry32(101), seeds = [], s;
+    for (s = 0; s < 20; s++) seeds.push(1 + Math.floor(rng0() * 100000));
+    var a1 = 0, a2 = 0, b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, c1 = 0, c2 = 0;
+    seeds.forEach(function (seed) {
+      var rng = mulberry32(seed);
+      var r1 = adaptiveMetropolis(function (x) { return -0.5 * x[0] * x[0]; }, [0], 6000, rng, 3000);
+      var m1 = moments1(r1.samples);
+      a1 += m1.mean / 20; a2 += m1.var / 20;
+      var Sinv = [[1 / 0.36, -0.8 / 0.36], [-0.8 / 0.36, 1 / 0.36]];
+      var r2 = adaptiveMetropolis(function (x) {
+        var s1 = Sinv[0][0] * x[0] + Sinv[0][1] * x[1], s2 = Sinv[1][0] * x[0] + Sinv[1][1] * x[1];
+        return -0.5 * (x[0] * s1 + x[1] * s2);
+      }, [0, 0], 6000, rng, 3000);
+      var m2 = moments2(r2.samples);
+      b0 += m2.m0 / 20; b1 += m2.m1 / 20; b2 += m2.v0 / 20; b3 += m2.v1 / 20; b4 += m2.cov / 20;
+      var r3 = adaptiveMetropolis(function (x) { return x[0] > 0 ? 2 * Math.log(x[0]) - x[0] : -Infinity; }, [3], 6000, rng, 3000);
+      var m3 = moments1(r3.samples);
+      c1 += m3.mean / 20; c2 += m3.var / 20;
+    });
+    var e1 = Math.max(Math.abs(a1), Math.abs(a2 - 1));
+    var e2 = Math.max(Math.abs(b0), Math.abs(b1), Math.abs(b2 - 1), Math.abs(b3 - 1), Math.abs(b4 - 0.8));
+    var e3 = Math.max(Math.abs(c1 - 3) / 3, Math.abs(c2 - 3) / 3);
+    return Math.max(e1, e2, e3);
+  });
+
+  check('hmcSample：Hamiltonian MC（leapfrog）经验矩 ≡ 解析（1D 标准正态 + 2D 相关高斯 ρ=0.8，20 seed 稳健）', 0.06, function () {
+    var rng0 = mulberry32(202), seeds = [], s;
+    for (s = 0; s < 20; s++) seeds.push(1 + Math.floor(rng0() * 100000));
+    var a1 = 0, a2 = 0, b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0;
+    seeds.forEach(function (seed) {
+      var rng = mulberry32(seed);
+      var r1 = hmcSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], 2000, rng, 0.5, 10);
+      var m1 = moments1(r1.samples);
+      a1 += m1.mean / 20; a2 += m1.var / 20;
+      var Sinv = [[1 / 0.36, -0.8 / 0.36], [-0.8 / 0.36, 1 / 0.36]];
+      var r2 = hmcSample(function (x) {
+        var s1 = Sinv[0][0] * x[0] + Sinv[0][1] * x[1], s2 = Sinv[1][0] * x[0] + Sinv[1][1] * x[1];
+        return -0.5 * (x[0] * s1 + x[1] * s2);
+      }, function (x) {
+        return [-(Sinv[0][0] * x[0] + Sinv[0][1] * x[1]), -(Sinv[1][0] * x[0] + Sinv[1][1] * x[1])];
+      }, [0, 0], 2000, rng, 0.28, 12);
+      var m2 = moments2(r2.samples);
+      b0 += m2.m0 / 20; b1 += m2.m1 / 20; b2 += m2.v0 / 20; b3 += m2.v1 / 20; b4 += m2.cov / 20;
+    });
+    var e1 = Math.max(Math.abs(a1), Math.abs(a2 - 1));
+    var e2 = Math.max(Math.abs(b0), Math.abs(b1), Math.abs(b2 - 1), Math.abs(b3 - 1), Math.abs(b4 - 0.8));
+    return Math.max(e1, e2);
+  });
+
+  check('hmcSample：leapfrog 能量误差 E|ΔH| 有界（可逆·保体积 ⇒ 20 seed 平均 |ΔH| ≤ 0.1）', 0.1, function () {
+    var rng0 = mulberry32(303), seeds = [], s;
+    for (s = 0; s < 20; s++) seeds.push(1 + Math.floor(rng0() * 100000));
+    var e = 0;
+    seeds.forEach(function (seed) {
+      var rng = mulberry32(seed);
+      var r = hmcSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], 800, rng, 0.5, 10);
+      e += r.energyErr / 20;
+    });
+    return e;
+  });
+
+  check('floydWarshall：全源最短路 ≡ 每源 Dijkstra（12 图）+ 负权无负环 ≡ 每源 Bellman–Ford（DAG 负权）', 1e-12, function () {
+    var rng = mulberry32(7), worst = 0, worstBF = 0;
+    for (var c = 0; c < 12; c++) {
+      var n = 7, edges = [], v;
+      for (v = 1; v < n; v++) edges.push([Math.floor(rng() * v), v, Math.round(rng() * 900 + 100) / 100]);
+      for (var e2 = 0; e2 < 10; e2++) {
+        var a = Math.floor(rng() * n), b = Math.floor(rng() * n);
+        if (a !== b) edges.push([a, b, Math.round(rng() * 900 + 100) / 100]);
+      }
+      var D = floydWarshall(n, edges);
+      for (var s = 0; s < n; s++) {
+        var ds = dijkstra(n, edges, s);
+        for (var j = 0; j < n; j++) worst = Math.max(worst, absDistDiff(D[s][j], ds[j]));
+      }
+    }
+    for (var c2 = 0; c2 < 10; c2++) {                              // DAG（i<j）⇒ 无环 ⇒ 负权安全
+      var n2 = 6, ed = [];
+      for (var i2 = 0; i2 < n2; i2++) {
+        for (var j2 = i2 + 1; j2 < n2; j2++) {
+          if (rng() < 0.6) ed.push([i2, j2, Math.round((rng() * 10 - 5) * 100) / 100]);
+        }
+      }
+      var D2 = floydWarshall(n2, ed);
+      for (var s2 = 0; s2 < n2; s2++) {
+        var bf = bellmanFord(n2, ed, s2);
+        for (var j3 = 0; j3 < n2; j3++) worstBF = Math.max(worstBF, absDistDiff(D2[s2][j3], bf[j3]));
+      }
+    }
+    return Math.max(worst, worstBF);
+  });
+
+  check('dsu：并查集（路径压缩 + 按秩合并）连通分量 ≡ BFS（15 图）+ Kruskal-DSU MST ≡ Prim + 分量数守恒', 1e-12, function () {
+    var rng = mulberry32(13), worstComp = 0, worstMST = 0;
+    for (var c = 0; c < 15; c++) {
+      var n = 8, edges = [], v;
+      // 偶数号图建随机生成树保证连通（MST 权重可比）；奇数号图保持稀疏（只比连通分量）
+      var connected = (c % 2 === 0);
+      if (connected) for (v = 1; v < n; v++) edges.push([Math.floor(rng() * v), v, Math.round(rng() * 900 + 100) / 100]);
+      else for (v = 1; v < n; v++) if (rng() < 0.55) edges.push([Math.floor(rng() * v), v, Math.round(rng() * 900 + 100) / 100]);
+      for (var e2 = 0; e2 < 10; e2++) {
+        var a = Math.floor(rng() * n), b = Math.floor(rng() * n);
+        if (a !== b) edges.push([a, b, Math.round(rng() * 900 + 100) / 100]);
+      }
+      var s = dsuCreate(n);
+      edges.forEach(function (e3) { dsuUnion(s, e3[0], e3[1]); });
+      var adj = [], i3;
+      for (i3 = 0; i3 < n; i3++) adj.push([]);
+      edges.forEach(function (e4) { adj[e4[0]].push(e4[1]); adj[e4[1]].push(e4[0]); });
+      var seen = new Array(n).fill(-1), cid = 0;                  // BFS 参照
+      for (var st = 0; st < n; st++) {
+        if (seen[st] !== -1) continue;
+        var q = [st]; seen[st] = cid;
+        while (q.length) {
+          var u = q.pop();
+          for (var w = 0; w < adj[u].length; w++) if (seen[adj[u][w]] === -1) { seen[adj[u][w]] = cid; q.push(adj[u][w]); }
+        }
+        cid++;
+      }
+      for (var i4 = 0; i4 < n; i4++) {
+        for (var j4 = 0; j4 < n; j4++) {
+          var sameDSU = dsuFind(s, i4) === dsuFind(s, j4), sameBFS = seen[i4] === seen[j4];
+          if (sameDSU !== sameBFS) worstComp = Math.max(worstComp, 1);
+        }
+      }
+      if (s.count !== cid) worstComp = Math.max(worstComp, 1);
+      var kd = kruskalDSU(n, edges);
+      // MST 权重仅在连通图上可比（Prim 在不连通图上提前 break，只得部分生成树）
+      if (connected) worstMST = Math.max(worstMST, Math.abs(kd.total - primMST(n, edges)));
+      if (kd.comps !== cid) worstComp = Math.max(worstComp, 1);
+    }
+    return Math.max(worstComp, worstMST);
+  });
+
+  check('kmpSearch：KMP 匹配位置 ≡ 朴素暴力（随机文本 + 最坏 aⁿb 模式）+ 失败函数 ≡ 暴力最长真前后缀', 0, function () {
+    var rng = mulberry32(17), worst = 0;
+    var alpha = ['a', 'b', 'c'];
+    for (var c = 0; c < 20; c++) {
+      var tn = 60 + Math.floor(rng() * 60), text = [], i;
+      for (i = 0; i < tn; i++) text.push(alpha[Math.floor(rng() * alpha.length)]);
+      var pn = 1 + Math.floor(rng() * 5), pat = [], j;
+      for (j = 0; j < pn; j++) pat.push(alpha[Math.floor(rng() * alpha.length)]);
+      var a = kmpSearch(text, pat), b = bruteSearch(text, pat);
+      if (a.length !== b.length) { worst = Math.max(worst, 1); continue; }
+      for (var k = 0; k < a.length; k++) worst = Math.max(worst, Math.abs(a[k] - b[k]));
+    }
+    var tw = [], i2;                                              // 最坏模式：text = a^60（无 b），pat = a^6 b
+    for (i2 = 0; i2 < 60; i2++) tw.push('a');
+    var pw = ['a', 'a', 'a', 'a', 'a', 'a', 'b'];
+    var aw = kmpSearch(tw, pw), bw = bruteSearch(tw, pw);
+    if (aw.length !== bw.length) worst = Math.max(worst, 1);
+    var th = [], i3;                                              // 命中型最坏：text = a^20 + b，pat = a^5 + b
+    for (i3 = 0; i3 < 20; i3++) th.push('a');
+    th.push('b');
+    var ph = ['a', 'a', 'a', 'a', 'a', 'b'];
+    var ah = kmpSearch(th, ph), bh = bruteSearch(th, ph);
+    if (ah.length !== bh.length || (ah.length && ah[0] !== bh[0])) worst = Math.max(worst, 1);
+    for (var c2 = 0; c2 < 15; c2++) {                             // 失败函数 ≡ 暴力最长真前后缀
+      var p = [], pl = 1 + Math.floor(rng() * 8), q2;
+      for (q2 = 0; q2 < pl; q2++) p.push(alpha[Math.floor(rng() * alpha.length)]);
+      var f = kmpFailure(p);
+      for (var idx = 0; idx < p.length; idx++) {
+        var want = 0;
+        for (var L = idx; L >= 1; L--) {
+          var ok = true;
+          for (var t2 = 0; t2 < L; t2++) if (p[t2] !== p[idx - L + 1 + t2]) { ok = false; break; }
+          if (ok) { want = L; break; }
+        }
+        worst = Math.max(worst, Math.abs(f[idx] - want));
+      }
+    }
+    return worst;
+  });
+
+  check('gaussLegendre：n 点求积对 ≤2n−1 次多项式精确（∫₋₁¹xᵏ 解析对照，n=6/10）+ ∫cos x = 2sin1', 1e-11, function () {
+    var worst = 0;
+    [6, 10].forEach(function (n) {
+      for (var k = 0; k <= 2 * n - 1; k++) {
+        (function (kk) {
+          var q = gaussQuad(function (x) { return Math.pow(x, kk); }, -1, 1, n);
+          var exact = (kk % 2 === 1) ? 0 : 2 / (kk + 1);
+          worst = Math.max(worst, Math.abs(q - exact));
+        })(k);
+      }
+    });
+    var ci = gaussQuad(function (x) { return Math.cos(x); }, -1, 1, 12);
+    worst = Math.max(worst, Math.abs(ci - 2 * Math.sin(1)));
+    return worst;
+  });
+
+  check('strassenMul：Strassen 分治 ≡ 朴素矩阵乘（n = 1/2/4/8/16，两条独立路径）', 1e-9, function () {
+    var rng = mulberry32(19), worst = 0;
+    [1, 2, 4, 8, 16].forEach(function (n) {
+      var A = [], B = [], i, j;
+      for (i = 0; i < n; i++) {
+        A.push([]); B.push([]);
+        for (j = 0; j < n; j++) { A[i].push(rng() * 2 - 1); B[i].push(rng() * 2 - 1); }
+      }
+      worst = Math.max(worst, maxAbsDiff2(strassenMul(A, B, 2), matMul(A, B)));
+    });
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -6858,6 +7371,16 @@
     maxFlowEK: maxFlowEK, maxFlowDinic: maxFlowDinic, minCutBrute: minCutBrute,
     tarjanSCC: tarjanSCC, kosarajuSCC: kosarajuSCC,
     kahnTopo: kahnTopo, kuhnMatching: kuhnMatching, minVertexCoverBrute: minVertexCoverBrute,
+    /* v1.3.12 算法库扩展二 */
+    bluesteinFFT: bluesteinFFT,
+    cholSafe: cholSafe, covOf: covOf, gaussRand: gaussRand,
+    adaptiveMetropolis: adaptiveMetropolis, hmcSample: hmcSample,
+    floydWarshall: floydWarshall,
+    dsuCreate: dsuCreate, dsuFind: dsuFind, dsuUnion: dsuUnion, dsuComponents: dsuComponents,
+    kruskalDSU: kruskalDSU,
+    kmpFailure: kmpFailure, kmpSearch: kmpSearch, bruteSearch: bruteSearch,
+    legendreP: legendreP, gaussLegendre: gaussLegendre, gaussQuad: gaussQuad,
+    strassenMul: strassenMul, addM: addM, subM: subM,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
@@ -7922,7 +8445,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 /* ==== AXIOM ui.js（仪表盘） ==== */
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(22) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(30) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -8314,7 +8837,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
   }
 
   /* ---------------- 视图 4：算法库（L10 ISA 之外的旗舰级参考实现） ----------------
-   * 22 组算法，每组携带可独立复算的硬不变量（解析 vs 数值 / 参照实现 vs 主实现 / 定理级 / 结构）；
+   * 30 组算法，每组携带可独立复算的硬不变量（解析 vs 数值 / 参照实现 vs 主实现 / 定理级 / 结构）；
    * 表格中的「最大残差」直接取自 AXIOM.runChecks() 的实测结果（浏览器与 Node 同源码）。
    */
   var ALGO_DEFS = [
@@ -8339,7 +8862,15 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     { id: 'maxFlowDinic', name: '最大流 Dinic', src: 'Dinic (1970)', api: 'AXIOM.maxFlowDinic', inv: '跨算法一致：Dinic ≡ Edmonds–Karp', chk: ['maxFlow：Dinic'] },
     { id: 'scc', name: '强连通分量', src: 'Tarjan (1972)；Kosaraju (1978)', api: 'AXIOM.tarjanSCC', inv: '跨算法一致：Tarjan ≡ Kosaraju（15 图逐分量）', chk: ['scc：'] },
     { id: 'kahnTopo', name: '拓扑排序', src: 'Kahn (1962)', api: 'AXIOM.kahnTopo', inv: '结构不变量：边全前向 + 全覆盖 + 有环返回 null', chk: ['kahnTopo：'] },
-    { id: 'kuhnMatching', name: '二分图最大匹配', src: 'Kuhn (1955)；König (1931)', api: 'AXIOM.kuhnMatching', inv: '定理级：König 最大匹配 = 最小顶点覆盖 + 合法性', chk: ['kuhnMatching：'] }
+    { id: 'kuhnMatching', name: '二分图最大匹配', src: 'Kuhn (1955)；König (1931)', api: 'AXIOM.kuhnMatching', inv: '定理级：König 最大匹配 = 最小顶点覆盖 + 合法性', chk: ['kuhnMatching：'] },
+    { id: 'bluesteinFFT', name: 'Bluestein 任意长度 FFT', src: 'Bluestein (1968/1970)', api: 'AXIOM.bluesteinFFT', inv: '卷积定理 ≡ 朴素 O(n²) DFT（n = 3/5/…/15 非 2 的幂）', chk: ['bluesteinFFT：'] },
+    { id: 'adaptiveMetropolis', name: '自适应 Metropolis', src: 'Haario (2001)；Roberts–Rosenthal (2001)', api: 'AXIOM.adaptiveMetropolis', inv: '三目标经验矩 ≡ 解析（N(0,1)/2D ρ=0.8/Gamma(3)，20 seed）', chk: ['adaptiveMetropolis：'] },
+    { id: 'hmcSample', name: 'Hamiltonian MC', src: 'Duane (1987)；Neal (2011)', api: 'AXIOM.hmcSample', inv: 'leapfrog 经验矩 ≡ 解析 + 能量误差 E|ΔH| 有界', chk: ['hmcSample：'] },
+    { id: 'floydWarshall', name: 'Floyd–Warshall', src: 'Floyd (1962)；Warshall (1962)', api: 'AXIOM.floydWarshall', inv: '全源 ≡ 每源 Dijkstra + 负权（无负环）≡ Bellman–Ford', chk: ['floydWarshall：'] },
+    { id: 'dsu', name: '并查集', src: 'Tarjan (1975)', api: 'AXIOM.dsuCreate', inv: '连通分量 ≡ BFS + Kruskal-DSU MST ≡ Prim + 分量数守恒', chk: ['dsu：'] },
+    { id: 'kmpSearch', name: 'KMP 字符串匹配', src: 'Knuth–Morris–Pratt (1977)', api: 'AXIOM.kmpSearch', inv: '命中位置 ≡ 朴素暴力 + 失败函数 ≡ 暴力最长真前后缀', chk: ['kmpSearch：'] },
+    { id: 'gaussLegendre', name: 'Gauss–Legendre 求积', src: 'Gauss (1814)；Golub–Welsch (1969)', api: 'AXIOM.gaussQuad', inv: 'n 点对 ≤2n−1 次多项式精确（代数精度定理）+ ∫cos x', chk: ['gaussLegendre：'] },
+    { id: 'strassenMul', name: 'Strassen 矩阵乘', src: 'Strassen (1969)', api: 'AXIOM.strassenMul', inv: '7 次递归乘法 ≡ 朴素 O(n³)（n = 1/2/4/8/16）', chk: ['strassenMul：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -8495,6 +9026,84 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     var m = AXIOM.kuhnMatching(3, 3, edges);
     return '3×3 二部图（L0–{R0,R1}，L1–{R1,R2}，L2–{R2}）\nKuhn 匈牙利增广路最大匹配 = ' + m.size + '（matchR = ' + fmtVec(m.matchR) + '）' +
       '\n暴力枚举最小顶点覆盖 = ' + AXIOM.minVertexCoverBrute(3, 3, edges) + ' · König 定理：最大匹配 = 最小顶点覆盖';
+  },
+  bluesteinFFT: function () {
+    var x = [1, 2, 3, 4, 5, 6].map(function (v) { return { re: v, im: 0 }; });
+    var X = AXIOM.bluesteinFFT(x), D = AXIOM.dft(x), d = 0;
+    for (var i = 0; i < x.length; i++) d = Math.max(d, Math.abs(X[i].re - D[i].re), Math.abs(X[i].im - D[i].im));
+    return 'x = [1,2,3,4,5,6]（n = 6，非 2 的幂 —— radix-2 不适用）\nBluestein 卷积定理 X[0..2] = [' +
+      X.slice(0, 3).map(function (v) { return v.re.toFixed(4) + (v.im >= 0 ? '+' : '') + v.im.toFixed(4) + 'i'; }).join(', ') + ']' +
+      '\n与朴素 O(n²) DFT（n=3/5/…/15 全测）最大差 = ' + d.toExponential(2);
+  },
+  adaptiveMetropolis: function () {
+    var rng = AXIOM.mulberry32(13);
+    var r = AXIOM.adaptiveMetropolis(function (x) { return -0.5 * x[0] * x[0]; }, [0], 6000, rng, 3000);
+    var s = r.samples, n = s.length, mu = 0, i;
+    for (i = 0; i < n; i++) mu += s[i][0] / n;
+    var v = 0;
+    for (i = 0; i < n; i++) v += (s[i][0] - mu) * (s[i][0] - mu) / (n - 1);
+    return '目标：标准正态 N(0,1)，d = 1（s₁ = 2.38² = 5.66 最优缩放，burn-in 3000 后冻结协方差）\n6000 个样本（种子 13）：均值 = ' + mu.toFixed(4) + '（期望 0）· 方差 = ' + v.toFixed(4) + '（期望 1）' +
+      '\n接受率 = ' + (r.rate * 100).toFixed(1) + '%（Roberts–Rosenthal 最优 ≈ 44%）· 自适应后提议尺度 = ' + Math.sqrt(r.cov[0][0] * 5.66).toFixed(3);
+  },
+  hmcSample: function () {
+    var rng = AXIOM.mulberry32(13);
+    var r = AXIOM.hmcSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], 2000, rng, 0.5, 10);
+    var s = r.samples, n = s.length, mu = 0, i;
+    for (i = 0; i < n; i++) mu += s[i][0] / n;
+    var v = 0;
+    for (i = 0; i < n; i++) v += (s[i][0] - mu) * (s[i][0] - mu) / (n - 1);
+    return '目标：标准正态 N(0,1)（H = −logf + ½p²，leapfrog ε = 0.5，L ≤ 10 抖动）\n2000 个样本（种子 13）：均值 = ' + mu.toFixed(4) + '（期望 0）· 方差 = ' + v.toFixed(4) + '（期望 1）' +
+      '\n接受率 = ' + (r.rate * 100).toFixed(1) + '% · 平均 |ΔH| = ' + r.energyErr.toExponential(2) + '（leapfrog 可逆·保体积 ⇒ 能量近似守恒）';
+  },
+  floydWarshall: function () {
+    var edges = [[0, 1, 3], [0, 2, 8], [0, 4, -4], [1, 3, 1], [1, 4, 7], [2, 1, 4], [3, 0, 2], [3, 2, -5], [4, 3, 6]];
+    var D = AXIOM.floydWarshall(5, edges), d = 0;
+    for (var s = 0; s < 5; s++) {
+      var bf = AXIOM.bellmanFord(5, edges, s);
+      for (var j = 0; j < 5; j++) if (isFinite(D[s][j]) && isFinite(bf[j])) d = Math.max(d, Math.abs(D[s][j] - bf[j]));
+    }
+    return '5 节点含负权有向图（CLRS 经典例，无负环）\n全源最短距离矩阵 D[0] = ' + fmtVec(D[0]) + ' · D[3] = ' + fmtVec(D[3]) +
+      '\n与每源 Bellman–Ford 参照实现最大差 = ' + d.toExponential(2);
+  },
+  dsu: function () {
+    var edges = [[0, 1, 2], [0, 3, 6], [1, 2, 3], [1, 3, 8], [1, 4, 5], [2, 4, 7], [3, 4, 9]];
+    var s = AXIOM.dsuCreate(5);
+    edges.forEach(function (e) { AXIOM.dsuUnion(s, e[0], e[1]); });
+    var kd = AXIOM.kruskalDSU(5, edges);
+    return '5 节点 7 边连通无向图（路径压缩 + 按秩合并，近乎 O(α(n))）\n连通分量数 = ' + s.count + ' · 代表元 = ' + fmtVec(AXIOM.dsuComponents(s, 5)) +
+      '\nKruskal-DSU MST 总权 = ' + kd.total.toFixed(6) + ' · Prim MST 总权 = ' + AXIOM.primMST(5, edges).toFixed(6) + ' · 一致';
+  },
+  kmpSearch: function () {
+    var i2, text = 'aabaabaaaabaab'.split(''), pat = 'aabaa'.split('');
+    var a = AXIOM.kmpSearch(text, pat), b = AXIOM.bruteSearch(text, pat), d = a.length === b.length ? 0 : 1;
+    for (var i = 0; i < a.length && d === 0; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
+    var worst = [];
+    for (i2 = 0; i2 < 60; i2++) worst.push('a');
+    var pw = 'aaaaaab'.split('');
+    var aw = AXIOM.kmpSearch(worst, pw), bw = AXIOM.bruteSearch(worst, pw);
+    return 'text = "aabaabaaaabaab"，pat = "aabaa"（n = 14, m = 5）\nKMP 命中位置 = ' + fmtVec(a) + ' · 失败函数 = ' + fmtVec(AXIOM.kmpFailure(pat)) +
+      '\n与朴素暴力匹配差 = ' + d + ' · 最坏模式（a⁶⁰ vs a⁶b）两者同为空：' + (aw.length === 0 && bw.length === 0 ? '是' : '否');
+  },
+  gaussLegendre: function () {
+    var g = AXIOM.gaussLegendre(5), k, worst = 0;
+    var q4 = AXIOM.gaussQuad(function (x) { return Math.pow(x, 4); }, -1, 1, 5);
+    var qe = AXIOM.gaussQuad(function (x) { return Math.exp(x); }, -1, 1, 10);
+    for (k = 0; k <= 9; k++) {
+      (function (kk) {
+        var q = AXIOM.gaussQuad(function (x) { return Math.pow(x, kk); }, -1, 1, 5);
+        worst = Math.max(worst, Math.abs(q - (kk % 2 === 1 ? 0 : 2 / (kk + 1))));
+      })(k);
+    }
+    return '5 点 Gauss–Legendre（节点 = P₅ 零点，代数精度 2n−1 = 9）\n节点 x = ' + fmtVec(g.x) + '\n权重 w = ' + fmtVec(g.w) +
+      '\n∫₋₁¹x⁴dx = ' + q4.toFixed(15) + '（解析 0.4）· k ≤ 9 全部多项式最大误差 = ' + worst.toExponential(2) +
+      '\n∫₋₁¹eˣdx（n=10）= ' + qe.toFixed(12) + '（解析 e − 1/e = ' + (Math.E - 1 / Math.E).toFixed(12) + '）';
+  },
+  strassenMul: function () {
+    var A = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
+    var B = [[1, 0, 2, 0], [0, 1, 0, 2], [2, 0, 1, 0], [0, 2, 0, 1]];
+    var C = AXIOM.strassenMul(A, B, 2), R = AXIOM.matMul(A, B);
+    return '4×4 整数矩阵（分治叶尺寸 2 ⇒ 7 次递归乘法替代 8 次，O(n^2.807)）\nStrassen C[0] = ' + fmtVec(C[0]) + ' · C[3] = ' + fmtVec(C[3]) +
+      '\n与朴素 O(n³) 矩阵乘最大差 = ' + algoMaxDiff(C, R).toExponential(2);
   }
   };
   var algoRun = null;

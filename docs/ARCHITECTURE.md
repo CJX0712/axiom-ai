@@ -130,12 +130,15 @@ algo      svd luDecompose fft dft pageRank dijkstra bellmanFord sliceSample newt
           bisect kadane
           qrEigenvalues maxFlowEK maxFlowDinic minCutBrute tarjanSCC kosarajuSCC
           kahnTopo kuhnMatching minVertexCoverBrute
+          bluesteinFFT adaptiveMetropolis hmcSample floydWarshall
+          dsuCreate dsuFind dsuUnion kruskalDSU kmpSearch kmpFailure
+          gaussLegendre gaussQuad strassenMul
 selftest  runChecks() → { total, passed, results[] }
 ```
 
-> `algo` 组（v1.3.8 起，集大成验证算法库）为 **L10 原子指令 ISA 之外的旗舰级算法参考实现**：不占 1024 网格，但同样各带一条可独立复算的硬不变量（计入核心不变量 329 项）。详见 `docs/ALGORITHMS.md` 与 README §7.5。
+> `algo` 组（v1.3.8 起，集大成验证算法库）为 **L10 原子指令 ISA 之外的旗舰级算法参考实现**：不占 1024 网格，但同样各带一条可独立复算的硬不变量（计入核心不变量 338 项）。详见 `docs/ALGORITHMS.md` 与 README §7.5。
 >
-> **UI 层（v1.3.11）**：浏览器仪表盘新增第七个视图「算法库 · 22」，逐一列出 22 组算法的世界顶级来源、AXIOM 实现 API、硬不变量、对应检查项数与实测最大残差（取自 `AXIOM.runChecks()`，与 Node 同源码），并为每组提供「▶ 运行」按钮执行固定输入的真实计算演示（另有「运行全部 22 组演示」批量执行）。此前算法层只在 Node 侧可见 —— 本次将其在旗舰单文件中补为可见可跑。
+> **UI 层（v1.3.11 起）**：浏览器仪表盘第七个视图「算法库 · 30」（v1.3.11 首发 22 组，v1.3.12 扩至 30 组），逐一列出 30 组算法的世界顶级来源、AXIOM 实现 API、硬不变量、对应检查项数与实测最大残差（取自 `AXIOM.runChecks()`，与 Node 同源码），并为每组提供「▶ 运行」按钮执行固定输入的真实计算演示（另有「运行全部 30 组演示」批量执行）。此前算法层只在 Node 侧可见 —— 本次将其在旗舰单文件中补为可见可跑。
 
 ## 5. L9 组合应用层（管线编排）
 

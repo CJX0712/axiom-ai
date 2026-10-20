@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(22) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(30) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -392,7 +392,7 @@
   }
 
   /* ---------------- 视图 4：算法库（L10 ISA 之外的旗舰级参考实现） ----------------
-   * 22 组算法，每组携带可独立复算的硬不变量（解析 vs 数值 / 参照实现 vs 主实现 / 定理级 / 结构）；
+   * 30 组算法，每组携带可独立复算的硬不变量（解析 vs 数值 / 参照实现 vs 主实现 / 定理级 / 结构）；
    * 表格中的「最大残差」直接取自 AXIOM.runChecks() 的实测结果（浏览器与 Node 同源码）。
    */
   var ALGO_DEFS = [
@@ -417,7 +417,15 @@
     { id: 'maxFlowDinic', name: '最大流 Dinic', src: 'Dinic (1970)', api: 'AXIOM.maxFlowDinic', inv: '跨算法一致：Dinic ≡ Edmonds–Karp', chk: ['maxFlow：Dinic'] },
     { id: 'scc', name: '强连通分量', src: 'Tarjan (1972)；Kosaraju (1978)', api: 'AXIOM.tarjanSCC', inv: '跨算法一致：Tarjan ≡ Kosaraju（15 图逐分量）', chk: ['scc：'] },
     { id: 'kahnTopo', name: '拓扑排序', src: 'Kahn (1962)', api: 'AXIOM.kahnTopo', inv: '结构不变量：边全前向 + 全覆盖 + 有环返回 null', chk: ['kahnTopo：'] },
-    { id: 'kuhnMatching', name: '二分图最大匹配', src: 'Kuhn (1955)；König (1931)', api: 'AXIOM.kuhnMatching', inv: '定理级：König 最大匹配 = 最小顶点覆盖 + 合法性', chk: ['kuhnMatching：'] }
+    { id: 'kuhnMatching', name: '二分图最大匹配', src: 'Kuhn (1955)；König (1931)', api: 'AXIOM.kuhnMatching', inv: '定理级：König 最大匹配 = 最小顶点覆盖 + 合法性', chk: ['kuhnMatching：'] },
+    { id: 'bluesteinFFT', name: 'Bluestein 任意长度 FFT', src: 'Bluestein (1968/1970)', api: 'AXIOM.bluesteinFFT', inv: '卷积定理 ≡ 朴素 O(n²) DFT（n = 3/5/…/15 非 2 的幂）', chk: ['bluesteinFFT：'] },
+    { id: 'adaptiveMetropolis', name: '自适应 Metropolis', src: 'Haario (2001)；Roberts–Rosenthal (2001)', api: 'AXIOM.adaptiveMetropolis', inv: '三目标经验矩 ≡ 解析（N(0,1)/2D ρ=0.8/Gamma(3)，20 seed）', chk: ['adaptiveMetropolis：'] },
+    { id: 'hmcSample', name: 'Hamiltonian MC', src: 'Duane (1987)；Neal (2011)', api: 'AXIOM.hmcSample', inv: 'leapfrog 经验矩 ≡ 解析 + 能量误差 E|ΔH| 有界', chk: ['hmcSample：'] },
+    { id: 'floydWarshall', name: 'Floyd–Warshall', src: 'Floyd (1962)；Warshall (1962)', api: 'AXIOM.floydWarshall', inv: '全源 ≡ 每源 Dijkstra + 负权（无负环）≡ Bellman–Ford', chk: ['floydWarshall：'] },
+    { id: 'dsu', name: '并查集', src: 'Tarjan (1975)', api: 'AXIOM.dsuCreate', inv: '连通分量 ≡ BFS + Kruskal-DSU MST ≡ Prim + 分量数守恒', chk: ['dsu：'] },
+    { id: 'kmpSearch', name: 'KMP 字符串匹配', src: 'Knuth–Morris–Pratt (1977)', api: 'AXIOM.kmpSearch', inv: '命中位置 ≡ 朴素暴力 + 失败函数 ≡ 暴力最长真前后缀', chk: ['kmpSearch：'] },
+    { id: 'gaussLegendre', name: 'Gauss–Legendre 求积', src: 'Gauss (1814)；Golub–Welsch (1969)', api: 'AXIOM.gaussQuad', inv: 'n 点对 ≤2n−1 次多项式精确（代数精度定理）+ ∫cos x', chk: ['gaussLegendre：'] },
+    { id: 'strassenMul', name: 'Strassen 矩阵乘', src: 'Strassen (1969)', api: 'AXIOM.strassenMul', inv: '7 次递归乘法 ≡ 朴素 O(n³)（n = 1/2/4/8/16）', chk: ['strassenMul：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -573,6 +581,84 @@
     var m = AXIOM.kuhnMatching(3, 3, edges);
     return '3×3 二部图（L0–{R0,R1}，L1–{R1,R2}，L2–{R2}）\nKuhn 匈牙利增广路最大匹配 = ' + m.size + '（matchR = ' + fmtVec(m.matchR) + '）' +
       '\n暴力枚举最小顶点覆盖 = ' + AXIOM.minVertexCoverBrute(3, 3, edges) + ' · König 定理：最大匹配 = 最小顶点覆盖';
+  },
+  bluesteinFFT: function () {
+    var x = [1, 2, 3, 4, 5, 6].map(function (v) { return { re: v, im: 0 }; });
+    var X = AXIOM.bluesteinFFT(x), D = AXIOM.dft(x), d = 0;
+    for (var i = 0; i < x.length; i++) d = Math.max(d, Math.abs(X[i].re - D[i].re), Math.abs(X[i].im - D[i].im));
+    return 'x = [1,2,3,4,5,6]（n = 6，非 2 的幂 —— radix-2 不适用）\nBluestein 卷积定理 X[0..2] = [' +
+      X.slice(0, 3).map(function (v) { return v.re.toFixed(4) + (v.im >= 0 ? '+' : '') + v.im.toFixed(4) + 'i'; }).join(', ') + ']' +
+      '\n与朴素 O(n²) DFT（n=3/5/…/15 全测）最大差 = ' + d.toExponential(2);
+  },
+  adaptiveMetropolis: function () {
+    var rng = AXIOM.mulberry32(13);
+    var r = AXIOM.adaptiveMetropolis(function (x) { return -0.5 * x[0] * x[0]; }, [0], 6000, rng, 3000);
+    var s = r.samples, n = s.length, mu = 0, i;
+    for (i = 0; i < n; i++) mu += s[i][0] / n;
+    var v = 0;
+    for (i = 0; i < n; i++) v += (s[i][0] - mu) * (s[i][0] - mu) / (n - 1);
+    return '目标：标准正态 N(0,1)，d = 1（s₁ = 2.38² = 5.66 最优缩放，burn-in 3000 后冻结协方差）\n6000 个样本（种子 13）：均值 = ' + mu.toFixed(4) + '（期望 0）· 方差 = ' + v.toFixed(4) + '（期望 1）' +
+      '\n接受率 = ' + (r.rate * 100).toFixed(1) + '%（Roberts–Rosenthal 最优 ≈ 44%）· 自适应后提议尺度 = ' + Math.sqrt(r.cov[0][0] * 5.66).toFixed(3);
+  },
+  hmcSample: function () {
+    var rng = AXIOM.mulberry32(13);
+    var r = AXIOM.hmcSample(function (x) { return -0.5 * x[0] * x[0]; }, function (x) { return [-x[0]]; }, [0], 2000, rng, 0.5, 10);
+    var s = r.samples, n = s.length, mu = 0, i;
+    for (i = 0; i < n; i++) mu += s[i][0] / n;
+    var v = 0;
+    for (i = 0; i < n; i++) v += (s[i][0] - mu) * (s[i][0] - mu) / (n - 1);
+    return '目标：标准正态 N(0,1)（H = −logf + ½p²，leapfrog ε = 0.5，L ≤ 10 抖动）\n2000 个样本（种子 13）：均值 = ' + mu.toFixed(4) + '（期望 0）· 方差 = ' + v.toFixed(4) + '（期望 1）' +
+      '\n接受率 = ' + (r.rate * 100).toFixed(1) + '% · 平均 |ΔH| = ' + r.energyErr.toExponential(2) + '（leapfrog 可逆·保体积 ⇒ 能量近似守恒）';
+  },
+  floydWarshall: function () {
+    var edges = [[0, 1, 3], [0, 2, 8], [0, 4, -4], [1, 3, 1], [1, 4, 7], [2, 1, 4], [3, 0, 2], [3, 2, -5], [4, 3, 6]];
+    var D = AXIOM.floydWarshall(5, edges), d = 0;
+    for (var s = 0; s < 5; s++) {
+      var bf = AXIOM.bellmanFord(5, edges, s);
+      for (var j = 0; j < 5; j++) if (isFinite(D[s][j]) && isFinite(bf[j])) d = Math.max(d, Math.abs(D[s][j] - bf[j]));
+    }
+    return '5 节点含负权有向图（CLRS 经典例，无负环）\n全源最短距离矩阵 D[0] = ' + fmtVec(D[0]) + ' · D[3] = ' + fmtVec(D[3]) +
+      '\n与每源 Bellman–Ford 参照实现最大差 = ' + d.toExponential(2);
+  },
+  dsu: function () {
+    var edges = [[0, 1, 2], [0, 3, 6], [1, 2, 3], [1, 3, 8], [1, 4, 5], [2, 4, 7], [3, 4, 9]];
+    var s = AXIOM.dsuCreate(5);
+    edges.forEach(function (e) { AXIOM.dsuUnion(s, e[0], e[1]); });
+    var kd = AXIOM.kruskalDSU(5, edges);
+    return '5 节点 7 边连通无向图（路径压缩 + 按秩合并，近乎 O(α(n))）\n连通分量数 = ' + s.count + ' · 代表元 = ' + fmtVec(AXIOM.dsuComponents(s, 5)) +
+      '\nKruskal-DSU MST 总权 = ' + kd.total.toFixed(6) + ' · Prim MST 总权 = ' + AXIOM.primMST(5, edges).toFixed(6) + ' · 一致';
+  },
+  kmpSearch: function () {
+    var i2, text = 'aabaabaaaabaab'.split(''), pat = 'aabaa'.split('');
+    var a = AXIOM.kmpSearch(text, pat), b = AXIOM.bruteSearch(text, pat), d = a.length === b.length ? 0 : 1;
+    for (var i = 0; i < a.length && d === 0; i++) d = Math.max(d, Math.abs(a[i] - b[i]));
+    var worst = [];
+    for (i2 = 0; i2 < 60; i2++) worst.push('a');
+    var pw = 'aaaaaab'.split('');
+    var aw = AXIOM.kmpSearch(worst, pw), bw = AXIOM.bruteSearch(worst, pw);
+    return 'text = "aabaabaaaabaab"，pat = "aabaa"（n = 14, m = 5）\nKMP 命中位置 = ' + fmtVec(a) + ' · 失败函数 = ' + fmtVec(AXIOM.kmpFailure(pat)) +
+      '\n与朴素暴力匹配差 = ' + d + ' · 最坏模式（a⁶⁰ vs a⁶b）两者同为空：' + (aw.length === 0 && bw.length === 0 ? '是' : '否');
+  },
+  gaussLegendre: function () {
+    var g = AXIOM.gaussLegendre(5), k, worst = 0;
+    var q4 = AXIOM.gaussQuad(function (x) { return Math.pow(x, 4); }, -1, 1, 5);
+    var qe = AXIOM.gaussQuad(function (x) { return Math.exp(x); }, -1, 1, 10);
+    for (k = 0; k <= 9; k++) {
+      (function (kk) {
+        var q = AXIOM.gaussQuad(function (x) { return Math.pow(x, kk); }, -1, 1, 5);
+        worst = Math.max(worst, Math.abs(q - (kk % 2 === 1 ? 0 : 2 / (kk + 1))));
+      })(k);
+    }
+    return '5 点 Gauss–Legendre（节点 = P₅ 零点，代数精度 2n−1 = 9）\n节点 x = ' + fmtVec(g.x) + '\n权重 w = ' + fmtVec(g.w) +
+      '\n∫₋₁¹x⁴dx = ' + q4.toFixed(15) + '（解析 0.4）· k ≤ 9 全部多项式最大误差 = ' + worst.toExponential(2) +
+      '\n∫₋₁¹eˣdx（n=10）= ' + qe.toFixed(12) + '（解析 e − 1/e = ' + (Math.E - 1 / Math.E).toFixed(12) + '）';
+  },
+  strassenMul: function () {
+    var A = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16]];
+    var B = [[1, 0, 2, 0], [0, 1, 0, 2], [2, 0, 1, 0], [0, 2, 0, 1]];
+    var C = AXIOM.strassenMul(A, B, 2), R = AXIOM.matMul(A, B);
+    return '4×4 整数矩阵（分治叶尺寸 2 ⇒ 7 次递归乘法替代 8 次，O(n^2.807)）\nStrassen C[0] = ' + fmtVec(C[0]) + ' · C[3] = ' + fmtVec(C[3]) +
+      '\n与朴素 O(n³) 矩阵乘最大差 = ' + algoMaxDiff(C, R).toExponential(2);
   }
   };
   var algoRun = null;

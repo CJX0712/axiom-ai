@@ -1,5 +1,24 @@
 # 更新日志
 
+## [1.3.12] - 2026-10-21
+
+### 算法库扩展二（不占 ISA 网格的旗舰算法层再 +8 组 → 30 组）
+
+- **新增 8 组算法 + 9 条硬不变量（核心不变量 329 → 338）**，全部 25-seed 稳健性扫描通过（worst 残差见下）：
+  - **Bluestein 任意长度 FFT**（Bluestein 1968/1970）：chirp 序列循环卷积 + radix-2；非 2 的幂长度 ≡ 朴素 O(n²) DFT，2 的幂 ≡ radix-2 —— 3.15e-14
+  - **自适应 Metropolis**（Haario 2001；Roberts–Rosenthal 2001）：协方差自适应随机游走（s_d = 2.38²/d，burn 后冻结）；三目标经验矩（N(0,1) / 2D ρ=0.8 / Gamma(k=3)）≡ 解析，20 seed —— 2.76e-2
+  - **Hamiltonian Monte Carlo**（Duane 1987；Neal 2011）：leapfrog 辛积分 + Metropolis + 轨迹抖动；经验矩 ≡ 解析 + leapfrog 能量误差 E|ΔH| 有界（可逆保体积）—— 2.42e-2 / 3.0e-2
+  - **Floyd–Warshall**（Floyd 1962；Warshall 1962）：全源最短路 DP O(n³)；≡ 每源 Dijkstra + 负权无负环 ≡ 每源 Bellman–Ford —— 7.11e-15
+  - **并查集 DSU**（Tarjan 1975）：路径压缩 + 按秩合并；连通分量 ≡ BFS + Kruskal-DSU MST ≡ Prim + 分量数守恒 —— 7.11e-15
+  - **KMP 字符串匹配**（Knuth–Morris–Pratt 1977）：失败函数预处理 + 单遍扫描；命中位置 ≡ 朴素暴力 + 失败函数 ≡ 暴力最长真前后缀 —— 0（精确）
+  - **Gauss–Legendre 求积**（Gauss 1814；Golub–Welsch 1969）：Newton 求 Pₙ 零点，w = 2/((1−x²)P'ₙ²)；定理级 n 点对 ≤2n−1 次多项式精确 + ∫cos x = 2sin1 —— 5.55e-16
+  - **Strassen 矩阵乘**（Strassen 1969）：7 次递归乘法分治（O(n^2.807)）；≡ 朴素 O(n³)（n = 1/2/4/8/16）—— 6.88e-15
+- **沙盒抓获第 6 项不稳（与 v1.3.9 MST 教训同类）**：并查集检查体最初随机稀疏图未保证连通 → Prim 提前 break 只得部分生成树、权重无法与 Kruskal-DSU 比较 → 25-seed 扫描 7/25 失败（worst 34.1）；修复为「半数图建生成树保连通（比 MST）+ 半数随机稀疏（只比分量）」后 9/9 全稳
+- **MCMC 残差口径统一**：adaptiveMetropolis / hmcSample 检查口径与既有 sliceSample 对齐为「多 seed 平均后与解析比较」（衡量偏差 = 遍历性/正确性），而非「各 seed 最大偏差的平均」（受样本量支配的方差口径）
+- **UI 算法库视图扩至 30 组**：清单表与 8 组新「▶ 运行」真实计算 demo 齐备（Bluestein 输出 DFT 对比、AM/HMC 输出经验矩 vs 解析、Floyd 输出全源距离矩阵、DSU 输出分量数与 MST 总权、KMP 输出命中位置、Gauss–Legendre 输出 ∫cos x、Strassen 输出 C 与朴素对照）
+- **指标**：核心不变量 **329 → 338** · 无头 **339 → 348/348** · UI 冒烟 **33/33 不变**（算法库断言 22→30 数据行 / 31 按钮）· verified **811/1024 不变** · axiom.html **649.5 → 685.6 KB**
+- **文档**：README §7.5 表 +8 行并改 v1.3.8–v1.3.12、用法示例加 9 个新 API、路线图勾选；`docs/ALGORITHMS.md` 第 24–31 节 + 稳健性表 +8 行、头部计数与 UI 层条数同步；`docs/ARCHITECTURE.md` 加 9 个新 API 与 338 计数；VERIFICATION/ISA-1024 自动重生成
+
 ## [1.3.11] - 2026-10-20
 
 ### 算法库 UI 层（第七视图）+ SVD ζ=0 边界缺陷修复
