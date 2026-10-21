@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(36) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(39) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -431,7 +431,11 @@
     { id: 'mcmfSSP', name: '最小费用最大流', src: 'Ford–Fulkerson (1956)；Busacker–Gowen', api: 'AXIOM.mcmfSSP', inv: 'SSP+Johnson 势能 ≡ SSP+Bellman–Ford ≡ EK（max-flow 值，DAG 含负费用）', chk: ['mcmfSSP：'] },
     { id: 'nutsGenUTurn', name: '泛化 U-turn NUTS', src: 'Betancourt (2017)；Hoffman–Gelman (2014)', api: 'AXIOM.nutsGenUTurn', inv: '逐维速度判据经验矩 ≡ 解析（2D 强相关 ρ=0.95，20 seed 池化）+ 判据语义钉死 + 严格细化经典判据', chk: ['nutsGenUTurn：'] },
     { id: 'nttConvolve', name: 'NTT 数论变换', src: 'Cooley–Tukey；CRT（数论 FFT）', api: 'AXIOM.nttConvolveExact', inv: 'NTT（模 p）≡ 直接卷积 ≡ 朴素 mod-DFT + CRT 重组 ≡ 精确整数卷积', chk: ['nttConvolve：'] },
-    { id: 'hopcroftKarp', name: 'Hopcroft–Karp 二分图最大匹配', src: 'Hopcroft–Karp (1973)', api: 'AXIOM.hopcroftKarp', inv: '最大匹配 ≡ Kuhn + 匹配合法性 + 终止时无残留增广路（O(E√V)）', chk: ['hopcroftKarp：'] }
+    { id: 'hopcroftKarp', name: 'Hopcroft–Karp 二分图最大匹配', src: 'Hopcroft–Karp (1973)', api: 'AXIOM.hopcroftKarp', inv: '最大匹配 ≡ Kuhn + 匹配合法性 + 终止时无残留增广路（O(E√V)）', chk: ['hopcroftKarp：'] },
+    /* v1.3.15 算法库扩展五 */
+    { id: 'blossomMatching', name: 'Edmonds blossom 一般图最大匹配', src: 'Edmonds (1965)；Berge (1957)', api: 'AXIOM.blossomMatching', inv: '最大匹配 ≡ 暴力枚举全部匹配子集 + 合法性 + 极大性 + 二分图退化 ≡ Hopcroft–Karp', chk: ['blossomMatching：'] },
+    { id: 'splitRadixFFT', name: 'Split-radix FFT', src: 'Yavne (1968)；Duhamel–Hollmann (1984)', api: 'AXIOM.splitRadixFFT', inv: '共轭对 L 型分解 ≡ 朴素 DFT ≙ fft（radix-2）（2 的幂最低运算量档）', chk: ['splitRadixFFT：'] },
+    { id: 'stoerWagner', name: 'Stoer–Wagner 全局最小割', src: 'Stoer & Wagner (1997)', api: 'AXIOM.stoerWagner', inv: '全局最小割 ≡ 暴力枚举 2ⁿ 划分 ≙ n−1 次 s-t 最小割（无向图 Gomory–Hu）', chk: ['stoerWagner：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -740,6 +744,63 @@
     return '5×5 二分图 11 条边（Hopcroft–Karp O(E√V) vs Kuhn O(VE)）\n' +
       'HK 匹配数 = ' + hk.size + ' · Kuhn 匹配数 = ' + kn.size + '（一致 ⇒ 双方均为最大匹配）\n' +
       'HK 匹配对 = [' + pairs.join(', ') + ']\n终止时无残留增广路 ⇒ 匹配极大';
+  },
+  blossomMatching: function () {
+    // 奇数环 K3 与 5 环：二分图算法在此必然失效（一般图才需要处理奇环）
+    var edges = [[0, 1], [1, 2], [2, 0], [2, 3], [3, 4], [4, 5], [5, 3], [5, 0]];
+    var n = 6;
+    var bl = AXIOM.blossomMatching(n, edges);
+    var bf = (function (es) {                              // 参照：枚举全部匹配子集取最大（2^8）
+      function rec(idx, occ) {
+        if (idx === es.length) return 0;
+        var skip = rec(idx + 1, occ);
+        var take = 0, a = es[idx][0], b = es[idx][1];
+        if (!(occ & (1 << a)) && !(occ & (1 << b))) take = 1 + rec(idx + 1, occ | (1 << a) | (1 << b));
+        return take > skip ? take : skip;
+      }
+      return rec(0, 0);
+    })(edges);
+    var pairs = [];
+    for (var i = 0; i < bl.pairs.length; i++) pairs.push(bl.pairs[i][0] + '–' + bl.pairs[i][1]);
+    return '6 点一般图 8 条边（含三角形奇环 0-1-2 与奇环 3-4-5）\n' +
+      'blossom 匹配数 = ' + bl.size + ' · 暴力枚举全部匹配子集 = ' + bf +
+      '（一致 ⇒ ' + (bl.size === bf ? '确为最大匹配' : '❌ 不一致') + '）\n' +
+      '匹配对 = [' + pairs.join(', ') + ']\n' +
+      '二分图算法（Kuhn/Hopcroft–Karp）在奇环上无定义 ⇒ 本结果由 Edmonds 缩花算法给出';
+  },
+  splitRadixFFT: function () {
+    var N = 16, x = [], i;
+    var rng = AXIOM.mulberry32(2026);
+    for (i = 0; i < N; i++) x.push({ re: Math.round((rng() * 20 - 10) * 100) / 100, im: 0 });
+    var sr = AXIOM.splitRadixFFT(x), ref = AXIOM.dft(x), base = AXIOM.fft(x);
+    var w1 = 0, w2 = 0;
+    for (i = 0; i < N; i++) {
+      w1 = Math.max(w1, Math.abs(sr[i].re - ref[i].re), Math.abs(sr[i].im - ref[i].im));
+      w2 = Math.max(w2, Math.abs(sr[i].re - base[i].re), Math.abs(sr[i].im - base[i].im));
+    }
+    function f8(v) { return (v.re.toFixed(3) + (v.im < 0 ? '−' : '+') + Math.abs(v.im).toFixed(3) + 'i'); }
+    return '长度 16 实信号 Split-radix FFT（X_k = E[k] + Wᵏ·A[k] + W³ᵏ·B[k]）\n' +
+      'X[0] = ' + f8(sr[0]) + '  X[1] = ' + f8(sr[1]) + '  X[8] = ' + f8(sr[8]) + '\n' +
+      '≡ 朴素 DFT 最大差 = ' + w1.toExponential(2) + '\n' +
+      '≙ fft（radix-2）最大差 = ' + w2.toExponential(2);
+  },
+  stoerWagner: function () {
+    // 8 点无向图，桥 3–4（权 3）即全局最小割
+    var n = 8, edges = [[0, 1, 7], [0, 2, 5], [1, 2, 9], [1, 3, 4], [2, 4, 6], [3, 4, 3], [3, 5, 8], [4, 5, 2], [5, 6, 11], [5, 7, 4], [6, 7, 6]];
+    var sw = AXIOM.stoerWagner(n, edges);
+    // 参照：n−1 次 s-t 最大流最小割
+    var cap = [], i;
+    for (i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+    for (i = 0; i < edges.length; i++) { cap[edges[i][0]][edges[i][1]] += edges[i][2]; cap[edges[i][1]][edges[i][0]] += edges[i][2]; }
+    var best = Infinity;
+    for (var t = 1; t < n; t++) {
+      var f = AXIOM.maxFlowEK(n, cap.map(function (r) { return r.slice(); }), 0, t);
+      if (f < best) best = f;
+    }
+    return '8 点无向图 11 条边（枢纽边 3–4 权重 3）\n' +
+      'Stoer–Wagner 全局最小割 = ' + sw + '\n' +
+      'n−1 次 s-t 最小割（maxFlowEK）最小 = ' + best + '\n' +
+      '两路一致 ⇒ 最大邻接序缩并与 Gomory–Hu 性质互相印证';
   }
   };
   var algoRun = null;

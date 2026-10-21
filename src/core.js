@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.14';
+  var VERSION = '1.3.15';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4453,6 +4453,171 @@
     return false;
   }
 
+  /* ④ Edmonds blossom：一般图最大匹配（Berge 1957 花树缩并，超越二分图的严格更强结果）
+     不变量 ≙ 暴力枚举全部匹配子集（绝对 ground truth）+ 匹配合法性 + 极大性
+     + 二分图退化 ≙ hopcroftKarp */
+  function blossomMatching(n, edges) {
+    var adj = [], i;
+    for (i = 0; i < n; i++) adj.push([]);
+    for (i = 0; i < edges.length; i++) { adj[edges[i][0]].push(edges[i][1]); adj[edges[i][1]].push(edges[i][0]); }
+    var match = new Array(n).fill(-1);
+    var p = new Array(n).fill(-1);
+    var base = new Array(n);
+    var used = new Array(n).fill(false);
+    var bl = new Array(n).fill(false);
+    var usedL = new Array(n).fill(false);
+    function findBase(v) { return base[v] === v ? v : (base[v] = findBase(base[v])); }
+    function lca(a, b) {                                        // 最近公共花根
+      usedL.fill(false);
+      for (; ;) { a = findBase(a); usedL[a] = true; if (match[a] === -1) break; a = p[match[a]]; }
+      for (; ;) {
+        b = findBase(b);
+        if (usedL[b]) return b;
+        if (match[b] === -1) return -1;                         // 健壮守卫：不在同一棵交错树
+        b = p[match[b]];
+      }
+    }
+    function markPath(v, b, children) {                         // 沿两侧向上标记待缩并的花
+      while (findBase(v) !== b) {
+        bl[findBase(v)] = bl[findBase(match[v])] = true;
+        p[v] = children;
+        children = match[v];
+        v = p[match[v]];
+      }
+    }
+    function findPath(root) {                                   // BFS 找增广路带动缩花
+      used.fill(false); p.fill(-1); bl.fill(false);
+      for (var k = 0; k < n; k++) base[k] = k;
+      used[root] = true;
+      var q = [root], qh = 0;
+      while (qh < q.length) {
+        var v = q[qh++];
+        for (var e = 0; e < adj[v].length; e++) {
+          var u = adj[v][e];
+          if (findBase(v) === findBase(u) || match[v] === u) continue;
+          if (u === root || (match[u] !== -1 && p[match[u]] !== -1)) {   // 偶环 ⇒ 缩花
+            var cb = lca(v, u);
+            bl.fill(false);
+            markPath(v, cb, u);
+            markPath(u, cb, v);
+            for (var w = 0; w < n; w++) {
+              if (bl[findBase(w)]) {
+                base[w] = cb;
+                if (!used[w]) { used[w] = true; q.push(w); }
+              }
+            }
+          } else if (p[u] === -1) {
+            p[u] = v;
+            if (match[u] === -1) return u;
+            var mu = match[u];
+            used[mu] = true; q.push(mu);
+          }
+        }
+      }
+      return -1;
+    }
+    for (i = 0; i < n; i++) {
+      if (match[i] === -1) {
+        var vv = findPath(i);
+        while (vv !== -1) {
+          var pv = p[vv], nv = match[pv];
+          match[vv] = pv; match[pv] = vv;
+          vv = nv;
+        }
+      }
+    }
+    var size = 0, pairs = [];
+    for (i = 0; i < n; i++) if (match[i] !== -1 && i < match[i]) { size++; pairs.push([i, match[i]]); }
+    return { size: size, match: match, pairs: pairs };
+  }
+  function _bruteMaxMatching(n, edges) {                        // 参照：枚举全部匹配子集取最大
+    var m = edges.length;
+    function rec(idx, occ) {
+      if (idx === m) return 0;
+      var skip = rec(idx + 1, occ);
+      var take = 0, bu = edges[idx][0], bv = edges[idx][1];
+      if (!(occ & (1 << bu)) && !(occ & (1 << bv))) take = 1 + rec(idx + 1, occ | (1 << bu) | (1 << bv));
+      return take > skip ? take : skip;
+    }
+    return rec(0, 0);
+  }
+
+  /* ⑤ Split-radix FFT（Yavne 1968 / Duhamel–Hollmann 1984）：2 的幂长度，共轭对 L 型分解
+     X_k = E[k mod N/2] + W_N^k·A[k mod N/4] + W_N^{3k}·B[k mod N/4]
+     E = SRFFT(x[2m]) 长度 N/2；A = SRFFT(x[4m+1])、B = SRFFT(x[4m+3]) 长度 N/4
+     递归式 T(N) = T(N/2) + 2T(N/4) + Θ(N) —— 2 的幂长度已知最低运算量一档
+     不变量 ≙ dft（朴素 O(n²)）≙ fft（既有 radix-2） */
+  function splitRadixFFT(x) {
+    var n = x.length, i;
+    if (n === 1) return [{ re: x[0].re, im: x[0].im }];
+    if (n === 2) return [{ re: x[0].re + x[1].re, im: x[0].im + x[1].im },
+    { re: x[0].re - x[1].re, im: x[0].im - x[1].im }];
+    var half = n >> 1, quart = n >> 2;
+    var even = [], o1 = [], o3 = [];
+    for (i = 0; i < half; i++) even.push(x[2 * i]);
+    for (i = 0; i < quart; i++) { o1.push(x[4 * i + 1]); o3.push(x[4 * i + 3]); }
+    var E = splitRadixFFT(even), A = splitRadixFFT(o1), B = splitRadixFFT(o3);
+    var out = [], k;
+    for (k = 0; k < n; k++) {
+      var a1 = -2 * Math.PI * k / n, wr = Math.cos(a1), wi = Math.sin(a1);
+      var a3 = -2 * Math.PI * 3 * k / n, wr3 = Math.cos(a3), wi3 = Math.sin(a3);
+      var er = E[k % half].re, ei = E[k % half].im;
+      var ar = A[k % quart].re, ai = A[k % quart].im;
+      var br = B[k % quart].re, bi = B[k % quart].im;
+      var t1r = wr * ar - wi * ai, t1i = wr * ai + wi * ar;
+      var t2r = wr3 * br - wi3 * bi, t2i = wr3 * bi + wi3 * br;
+      out.push({ re: er + t1r + t2r, im: ei + t1i + t2i });
+    }
+    return out;
+  }
+
+  /* ⑥ Stoer–Wagner 全局最小割（1997，O(n³)）：最大邻接序逐相缩并，不求 s-t 割即得全局最小割
+     不变量 ≙ 暴力枚举 2ⁿ 划分最小割 ≙ n−1 次 s-t 最小割（maxFlowEK，无向图 Gomory–Hu 性质） */
+  function stoerWagner(n, edges) {
+    var w = [], i, j;
+    for (i = 0; i < n; i++) w.push(new Array(n).fill(0));
+    for (i = 0; i < edges.length; i++) {
+      var u = edges[i][0], v = edges[i][1], wt = edges[i][2];
+      w[u][v] += wt; w[v][u] += wt;
+    }
+    var alive = []; for (i = 0; i < n; i++) alive.push(i);
+    var best = Infinity;
+    while (alive.length > 1) {
+      var ws = new Array(n).fill(0), added = new Array(n).fill(false);
+      var prev = -1, ph = alive.length, sel = -1;
+      for (var it = 0; it < ph; it++) {
+        sel = -1;
+        for (j = 0; j < ph; j++) { var v = alive[j]; if (!added[v] && (sel === -1 || ws[sel] < ws[v])) sel = v; }
+        added[sel] = true;
+        if (it === ph - 1) {                                    // 该相最后一个加入点：ws 即候选割值
+          if (ws[sel] < best) best = ws[sel];
+          for (j = 0; j < n; j++) {                             // 缩并 sel 入 prev
+            w[prev][j] += w[sel][j]; w[j][prev] += w[j][sel];
+            w[sel][j] = 0; w[j][sel] = 0;
+          }
+          alive.splice(alive.indexOf(sel), 1);
+        } else {
+          prev = sel;
+          for (j = 0; j < ph; j++) { var vv = alive[j]; ws[vv] += w[sel][vv]; }
+        }
+      }
+    }
+    return best;
+  }
+  function _bruteMinCut(n, edges) {                              // 参照：枚举全部 2ⁿ 划分（固定 0 在一侧去重）
+    var best = Infinity, i;
+    for (var mask = 1; mask < (1 << n); mask++) {
+      if (mask & 1) continue;
+      var s = 0;
+      for (i = 0; i < edges.length; i++) {
+        var bu = (mask >> edges[i][0]) & 1, bv = (mask >> edges[i][1]) & 1;
+        if (bu !== bv) s += edges[i][2];
+      }
+      if (s < best) best = s;
+    }
+    return best;
+  }
+
   /* ③ 最小费用最大流 MCMF：主实现 SSP + Johnson 势能（Dijkstra，虚拟超源 Bellman–Ford 初始化势能
      保证约化费用 ≥ 0），参照 SSP + Bellman–Ford（实际费用最短路）。不变量 ≙ 彼此 ≙ maxFlowEK（max-flow 值） */
   function _mcmfBuild(n, edges) {                                   // 残差图 G[u] = [{to,cap,cost,rev}]
@@ -7791,6 +7956,96 @@
     return Math.max(worst, legalBad, augBad);
   });
 
+  /* ② Edmonds blossom：一般图最大匹配 ≡ 暴力枚举（200 图）+ 合法性 + 极大性 + 二分图退化 ≡ hopcroftKarp */
+  check('blossomMatching：一般图最大匹配 ≡ 暴力枚举全部匹配子集（200 图）+ 匹配合法性 + 极大性 + 二分图退化 ≡ hopcroftKarp（120 图）', 0, function () {
+    var worst = 0, legalBad = 0, maxBad = 0, tested = 0, i, k;
+    for (var g = 0; g < 200; g++) {
+      var rng = mulberry32(300 + g);
+      var n = 4 + Math.floor(rng() * 4);
+      var maxE = 4 + Math.floor(rng() * 5);
+      var eg = [], seen = {};
+      for (k = 0; k < maxE; k++) {
+        var u = Math.floor(rng() * n), v = Math.floor(rng() * n);
+        if (u === v) continue;
+        var key = Math.min(u, v) + '_' + Math.max(u, v);
+        if (seen[key]) continue;
+        seen[key] = 1; eg.push([u, v]);
+      }
+      if (eg.length === 0) continue;
+      tested++;
+      var rb = blossomMatching(n, eg);
+      worst = Math.max(worst, Math.abs(rb.size - _bruteMaxMatching(n, eg)));   // ≙ 暴力（ground truth）
+      var cnt = new Array(n).fill(0);
+      for (k = 0; k < n; k++) if (rb.match[k] !== -1 && k < rb.match[k]) { cnt[k]++; cnt[rb.match[k]]++; }
+      for (k = 0; k < n; k++) if (cnt[k] > 1) legalBad++;                       // 每点至多一条匹配边
+      for (k = 0; k < eg.length; k++) {                                          // 极大性：未选中边必有端点已匹配
+        var a = eg[k][0], b = eg[k][1];
+        if (rb.match[a] === b) continue;
+        if (rb.match[a] === -1 && rb.match[b] === -1) maxBad++;
+      }
+    }
+    if (tested === 0) return 1;
+    // 二分图退化 ≡ hopcroftKarp（已独立 ≡ Kuhn）
+    var worstHK = 0;
+    for (g = 0; g < 120; g++) {
+      var rng2 = mulberry32(9000 + g);
+      var L = 3 + Math.floor(rng2() * 4), R = 3 + Math.floor(rng2() * 4), nn = L + R;
+      var bg = [], bh = [], seeing = {};
+      for (k = 0; k < 4 + Math.floor(rng2() * 8); k++) {
+        var bl2 = Math.floor(rng2() * L), br2 = Math.floor(rng2() * R);
+        if (seeing[bl2 + '_' + br2]) continue;
+        seeing[bl2 + '_' + br2] = 1;
+        bg.push([bl2, L + br2]); bh.push([bl2, br2]);                            // 绝对索引 / 右部相对索引
+      }
+      worstHK = Math.max(worstHK, Math.abs(blossomMatching(nn, bg).size - hopcroftKarp(L, R, bh).size));
+    }
+    return Math.max(worst, legalBad, maxBad, worstHK);
+  });
+
+  /* ③ Split-radix FFT ≡ 朴素 DFT ≙ fft（radix-2），N = 2..64 */
+  check('splitRadixFFT：Split-radix FFT ≡ 朴素 DFT ≙ fft（radix-2）（N = 2/4/8/16/32/64）', 1e-9, function () {
+    var worst = 0, k, i;
+    for (var lg = 1; lg <= 6; lg++) {
+      var N = 1 << lg, rng = mulberry32(400 + lg), inp = [];
+      for (i = 0; i < N; i++) inp.push({ re: rng() * 2 - 1, im: rng() * 2 - 1 });
+      var A = splitRadixFFT(inp), B = dft(inp), C = fft(inp);
+      for (k = 0; k < N; k++) {
+        worst = Math.max(worst, Math.abs(A[k].re - B[k].re), Math.abs(A[k].im - B[k].im),
+          Math.abs(A[k].re - C[k].re), Math.abs(A[k].im - C[k].im));
+      }
+    }
+    return worst;
+  });
+
+  /* ④ Stoer–Wagner 全局最小割 ≡ 暴力枚举 2ⁿ 划分 ≙ n−1 次 s-t 最小割（maxFlowEK） */
+  check('stoerWagner：全局最小割 ≡ 暴力枚举 2ⁿ 划分 ≙ n−1 次 s-t 最小割 maxFlowEK（150 图）', 0, function () {
+    var worst = 0, tested = 0, i, k;
+    for (var g = 0; g < 150; g++) {
+      var rng = mulberry32(6000 + g);
+      var n = 4 + Math.floor(rng() * 5);
+      var eg = [], seen = {};
+      for (k = 0; k < n + Math.floor(rng() * 5); k++) {
+        var u = Math.floor(rng() * n), v = Math.floor(rng() * n);
+        if (u === v) continue;
+        var key = Math.min(u, v) + '_' + Math.max(u, v);
+        if (seen[key]) continue;
+        seen[key] = 1; eg.push([u, v, 1 + Math.floor(rng() * 9)]);
+      }
+      if (eg.length < n - 1) continue;
+      tested++;
+      var sw = stoerWagner(n, eg);
+      worst = Math.max(worst, Math.abs(sw - _bruteMinCut(n, eg)));               // ≙ 暴力 2ⁿ 划分
+      var cap = [];                                                              // ≙ n−1 次 s-t 最小割
+      for (i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+      for (i = 0; i < eg.length; i++) { cap[eg[i][0]][eg[i][1]] += eg[i][2]; cap[eg[i][1]][eg[i][0]] += eg[i][2]; }
+      var best = Infinity;
+      for (var t = 1; t < n; t++) { var f = maxFlowEK(n, cap.map(function (r) { return r.slice(); }), 0, t); if (f < best) best = f; }
+      worst = Math.max(worst, Math.abs(sw - best));
+    }
+    if (tested === 0) return 1;
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -7934,6 +8189,10 @@
     nutsGenUTurn: nutsGenUTurn,
     nttConvolve: nttConvolve, nttConvolveExact: nttConvolveExact,
     hopcroftKarp: hopcroftKarp,
+    /* v1.3.15 算法库扩展五 */
+    blossomMatching: blossomMatching,
+    splitRadixFFT: splitRadixFFT,
+    stoerWagner: stoerWagner,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
