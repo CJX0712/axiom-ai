@@ -2,7 +2,7 @@
 
 > 本文件由 `node tools/gen-verification.js` 从真实运行结果生成，请勿手改。
 > 运行方式：`node test/run.js`（Node 22 实测，零依赖，确定性种子，可复现）
-> 结果：**核心不变量 350/350 PASS · 注册表完整性 10/10 PASS · 总计 360/360 全绿**
+> 结果：**核心不变量 353/353 PASS · 注册表完整性 10/10 PASS · 总计 363/363 全绿**
 
 ## 1. 核心不变量全表（实测残差）
 
@@ -360,6 +360,9 @@
 | ✅ | gomoryHu：Gomory–Hu 树 ≡ 暴力枚举 2^(n−1) 最小 s-t 割（所有点对路径最小边 == 精确最小割，120 图） | 0 | 0 |
 | ✅ | radix4FFT：Radix-4 FFT ≡ 朴素 DFT ≙ fft（radix-2）（N = 4/16/64/256） | 1.43e-12 | 1.00e-9 |
 | ✅ | nutsDiagMass：对角质量矩阵自适应（Stan warmup）—— 拟合质量矩阵 ≡ 目标协方差对角（2D 异方差 σ²=[4,1]，20 seed 稳健） | 5.21e-2 | 1.00e-1 |
+| ✅ | pushRelabel：Push-Relabel 最大流 ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（整数容量，25 图） | 0 | 0 |
+| ✅ | hungarianMaxWeight：Hungarian 最大权二分匹配 ≙ mcmfSSPRef（二分图 MCMF：source→左→右→sink）≙ 暴力排列（n≤8，25 图） | 0 | 0 |
+| ✅ | stableMarriage：Gale–Shapley 稳定婚姻 —— 完美匹配 + 稳定（无 blocking pair），男主动与女主动均得稳定匹配（25 实例） | 0 | 0 |
 
 ## 2. 注册表完整性（10/10）
 
@@ -402,15 +405,15 @@
 
 | 级别 | 残差量级 | 项数 | 说明 |
 |---|---|---|---|
-| 精确 0 | = 0 | 197 | 恒等式、枚举判定、结构不变量 |
-| 机器精度 | ≤ 1e-14 | 278 | 矩阵分解/恒等式/精确算术 |
+| 精确 0 | = 0 | 200 | 恒等式、枚举判定、结构不变量 |
+| 机器精度 | ≤ 1e-14 | 281 | 矩阵分解/恒等式/精确算术 |
 | 算法收敛 | 1e-13 ~ 1e-6 | 36 | 迭代算法、逼近公式（erf/A&S、gelu）、梯度检验 |
 | 统计估计 | > 1e-6 | 36 | Box–Muller 矩估计、类别采样频率（蒙特卡洛固有） |
 
 ## 5. 复现方式
 
 ```bash
-node test/run.js                  # 全量 360 项，失败退出码 1
+node test/run.js                  # 全量 363 项，失败退出码 1
 node tools/gen-verification.js     # 重新生成本报告
 node tools/gen-registry.js         # 重新生成 1024 微指令注册表
 ```

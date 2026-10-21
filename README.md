@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-350%2F350-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-353%2F353-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
-> **十层架构 × 1024 微指令 × 350 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
+> **十层架构 × 1024 微指令 × 353 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
 >
 > 作者：**晨星** · License: MIT · [github.com/CJX0712/axiom-ai](https://github.com/CJX0712/axiom-ai)
 
@@ -23,8 +23,8 @@ AXIOM 是一套**指令集架构（ISA）级别的 AI 系统**：把"世界顶�
 **核心主张：AI 的每一层都必须可被独立复算验证。** 不是"训练出来了就看效果"，而是每个算法携带一条可被第三方用完全不同的方法（解析解、暴力枚举、参照实现）交叉验证的硬不变量。
 
 ```
-npm test          # → 360/360：350 核心不变量 + 10 注册表完整性，UI 冒烟 42/42，全绿
-open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / 算法库（42 组，可运行演示）/ L9 管线编排 / 三个训练演示 / 导出
+npm test          # → 363/363：353 核心不变量 + 10 注册表完整性，UI 冒烟 45/45，全绿
+open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / 算法库（45 组，可运行演示）/ L9 管线编排 / 三个训练演示 / 导出
 ```
 
 ## 2. 零重写 · 集大成
@@ -72,11 +72,11 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 axiom-ai/
 ├── axiom.html              # ★ 单文件应用（构建产物，零依赖，双击即用）
 ├── src/
-│   ├── core.js             # 数学与算法核心（UMD，浏览器/Node 双端同源，350 项不变量 + 集大成算法库 42 组）
+│   ├── core.js             # 数学与算法核心（UMD，浏览器/Node 双端同源，353 项不变量 + 集大成算法库 45 组）
 │   ├── registry.js         # 1024 微指令注册表（自动生成，勿手改）
 │   └── ui.js               # 仪表盘 UI（7 视图，含算法库与 L9 管线编排）
 ├── test/
-│   ├── run.js              # 无头自检：350 不变量 + 10 注册表完整性
+│   ├── run.js              # 无头自检：353 不变量 + 10 注册表完整性
 │   └── ui-smoke.js         # UI 冒烟测试（Node DOM 垫片执行全部渲染路径）
 ├── tools/
 │   ├── gen-registry.js     # 从分类学生成 1024 指令（含完整性断言）
@@ -85,7 +85,7 @@ axiom-ai/
 │   └── build.js            # 打包单文件 HTML（构建期语法预检）
 ├── docs/
 │   ├── ARCHITECTURE.md     # 十层架构 + 指令集规范
-│   ├── VERIFICATION.md     # 350 项不变量残差全表（自动生成）
+│   ├── VERIFICATION.md     # 353 项不变量残差全表（自动生成）
 │   └── ISA-1024.md         # 1024 条微指令完整规格表（自动生成）
 ├── package.json            # test / build / gen:* 脚本
 ├── LICENSE                 # MIT
@@ -98,7 +98,7 @@ axiom-ai/
 
 ```bash
 # 无头自检（Node ≥ 14，零依赖）
-node test/run.js        # 360 项：350 不变量 + 10 注册表完整性
+node test/run.js        # 363 项：353 不变量 + 10 注册表完整性
 node test/ui-smoke.js   # 26 项：UI 渲染/交互/管线/演示计算路径
 # 或 npm test（两者串联）
 
@@ -111,7 +111,7 @@ node tools/gen-isa-doc.js
 node tools/build.js
 ```
 
-浏览器用法：直接打开 `axiom.html`，七个视图——**架构总览 / 指令集（1024，可搜索过滤）/ 实时自检 / 算法库（42 组，每组可一键运行演示）/ 管线编排（L9）/ 演示实验室 / 导出**。
+浏览器用法：直接打开 `axiom.html`，七个视图——**架构总览 / 指令集（1024，可搜索过滤）/ 实时自检 / 算法库（45 组，每组可一键运行演示）/ 管线编排（L9）/ 演示实验室 / 导出**。
 
 作为库使用（Node 或浏览器 `<script>`）：
 
@@ -119,7 +119,7 @@ node tools/build.js
 const AXIOM = require('./src/core.js');   // 浏览器：window.AXIOM
 const { jacobiEigen, gmmEM, flashAttention, gae, channelCapacity } = AXIOM;
 const eig = jacobiEigen([[4, 1], [1, 3]]);   // { values, vectors }
-AXIOM.runChecks();                            // { total: 350, passed, results }
+AXIOM.runChecks();                            // { total: 353, passed, results }
 ```
 
 ## 6. 验证哲学
@@ -133,7 +133,7 @@ AXIOM.runChecks();                            // { total: 350, passed, results }
 - **恒等式**：(AB)ᵀ=BᵀAᵀ 逐位一致；KL≥0 且 p=q 取等；I(X;Y)=I(Y;X)；D-分离 = 道德图判据 = 暴力条件独立
 - **梯度检验**：MLP 与 BPTT 解析梯度 vs 中心差分 ≤ 1e-6；vjp/jvp 对偶恒等式
 
-全部 350 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 33 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/算法库 42 组演示/管线/三个演示）。
+全部 353 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 33 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/算法库 45 组演示/管线/三个演示）。
 
 ## 7. 设计决策
 
@@ -162,7 +162,7 @@ AXIOM.runChecks();                            // { total: 350, passed, results }
 
 ## 7.5 集大成验证算法库（v1.3.8–v1.3.16）
 
-L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一层**旗舰级算法参考实现**，每条同样携带可独立复算的硬不变量（不占 ISA 网格，计入核心不变量总数 350）。浏览器端在 **「算法库」视图** 中可见可跑：42 组算法的世界顶级来源、硬不变量、实测残差（直接取自 `runChecks()`）一览，每组一个「▶ 运行」按钮执行固定输入的真实计算，另有「运行全部 42 组演示」一键执行：
+L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一层**旗舰级算法参考实现**，每条同样携带可独立复算的硬不变量（不占 ISA 网格，计入核心不变量总数 353）。浏览器端在 **「算法库」视图** 中可见可跑：45 组算法的世界顶级来源、硬不变量、实测残差（直接取自 `runChecks()`）一览，每组一个「▶ 运行」按钮执行固定输入的真实计算，另有「运行全部 45 组演示」一键执行：
 
 | 算法 | 世界顶级来源 | AXIOM 实现 | 硬不变量（独立复算路径） | 实测残差 |
 |---|---|---|---|---|
@@ -208,8 +208,11 @@ L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一�
 | Gomory–Hu 树 | Gomory & Hu (1961) | n−1 次原图最大流缩并（laminar 割） | ≡ 暴力枚举 2^(n−1) s-t 割（所有点对路径最小边 == 精确最小割，**整数 0 容差**，120 图） | 0（精确） |
 | Radix-4 FFT | Cooley–Tukey (1965)；基-4 DIT | 长度 N=4^k 四子问题 + 基-4 蝶形 | ≡ 朴素 O(n²) DFT ≙ fft（radix-2）（N = 4/16/64/256） | 1.4e-12 |
 | NUTS 对角质量矩阵自适应 | Hoffman–Gelman (2014)；Stan warmup | 双平均步长 + Welford 协方差对角自适应 | 拟合对角质量矩阵 ≡ 目标协方差对角（2D 异方差 σ²=[4,1]，20 seed 稳健） | 5.2e-2 |
+| Push-Relabel 最大流 | Goldberg & Tarjan (1988) | 预流推进 + 高度标号（discharge/relabel） | ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（整数容量 25 图，0 精确） | 0（精确） |
+| Hungarian 最大权二分匹配 | Kuhn (1955)；Munkres (1957) | O(n³) 位势法（Kuhn–Munkres） | ≙ mcmfSSPRef（二分图 MCMF）≙ 暴力枚举排列（n≤8，25 图，0 精确） | 0（精确） |
+| Gale–Shapley 稳定婚姻 | Gale & Shapley (1962)；Shapley 诺贝尔 | 求婚者主动算法（man/woman-proposing） | **结构不变量**：输出为完美匹配且稳定（无 blocking pair）；男主动与女主动（角色交换）均得稳定匹配 | 0（结构精确） |
 
-用法：`AXIOM.svd(A)` / `AXIOM.pageRank(n, edges, alpha)` / `AXIOM.fft(complexArray)` / `AXIOM.dijkstra(n, edges, src)` / `AXIOM.sliceSample(logf, x0, N, rng, w, m, burn)` / `AXIOM.heapSort(a)` / `AXIOM.dijkstraHeap(n, edges, src)` / `AXIOM.aStar(n, edges, src, goal, h)` / `AXIOM.fftConvolve(a, b)` / `AXIOM.denseToCSR(M)` / `AXIOM.primMST(n, edges)` / `AXIOM.bisect(f, lo, hi, tol, maxIter)` / `AXIOM.kadane(a)` / `AXIOM.qrEigenvalues(A)` / `AXIOM.maxFlowEK(n, cap, s, t)` / `AXIOM.maxFlowDinic(n, cap, s, t)` / `AXIOM.tarjanSCC(n, edges)` / `AXIOM.kahnTopo(n, edges)` / `AXIOM.bluesteinFFT(x)` / `AXIOM.adaptiveMetropolis(logf, x0, N, rng, burn)` / `AXIOM.hmcSample(logf, gradLogf, x0, N, rng, eps, L)` / `AXIOM.floydWarshall(n, edges)` / `AXIOM.dsuCreate(n)` / `AXIOM.kmpSearch(text, pat)` / `AXIOM.gaussQuad(f, a, b, n)` / `AXIOM.strassenMul(A, B, leaf)` / `AXIOM.kuhnMatching(l, r, edges)` / `AXIOM.mixedRadixFFT(complexArray)` / `AXIOM.nutsSample(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.mcmfSSP(n, s, t, edges)` / `AXIOM.nutsGenUTurn(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.nttConvolveExact(a, b)` / `AXIOM.hopcroftKarp(l, r, edges)` / `AXIOM.blossomMatching(n, edges)` / `AXIOM.splitRadixFFT(complexArray)` / `AXIOM.stoerWagner(n, edges)` / `AXIOM.gomoryHu(n, edges)` / `AXIOM.radix4FFT(complexArray)` / `AXIOM.nutsDiagMass(logf, gradLogf, x0, N, rng, opts)` 等，详见 [docs/ALGORITHMS.md](docs/ALGORITHMS.md)。
+用法：`AXIOM.svd(A)` / `AXIOM.pageRank(n, edges, alpha)` / `AXIOM.fft(complexArray)` / `AXIOM.dijkstra(n, edges, src)` / `AXIOM.sliceSample(logf, x0, N, rng, w, m, burn)` / `AXIOM.heapSort(a)` / `AXIOM.dijkstraHeap(n, edges, src)` / `AXIOM.aStar(n, edges, src, goal, h)` / `AXIOM.fftConvolve(a, b)` / `AXIOM.denseToCSR(M)` / `AXIOM.primMST(n, edges)` / `AXIOM.bisect(f, lo, hi, tol, maxIter)` / `AXIOM.kadane(a)` / `AXIOM.qrEigenvalues(A)` / `AXIOM.maxFlowEK(n, cap, s, t)` / `AXIOM.maxFlowDinic(n, cap, s, t)` / `AXIOM.tarjanSCC(n, edges)` / `AXIOM.kahnTopo(n, edges)` / `AXIOM.bluesteinFFT(x)` / `AXIOM.adaptiveMetropolis(logf, x0, N, rng, burn)` / `AXIOM.hmcSample(logf, gradLogf, x0, N, rng, eps, L)` / `AXIOM.floydWarshall(n, edges)` / `AXIOM.dsuCreate(n)` / `AXIOM.kmpSearch(text, pat)` / `AXIOM.gaussQuad(f, a, b, n)` / `AXIOM.strassenMul(A, B, leaf)` / `AXIOM.kuhnMatching(l, r, edges)` / `AXIOM.mixedRadixFFT(complexArray)` / `AXIOM.nutsSample(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.mcmfSSP(n, s, t, edges)` / `AXIOM.nutsGenUTurn(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.nttConvolveExact(a, b)` / `AXIOM.hopcroftKarp(l, r, edges)` / `AXIOM.blossomMatching(n, edges)` / `AXIOM.splitRadixFFT(complexArray)` / `AXIOM.stoerWagner(n, edges)` / `AXIOM.gomoryHu(n, edges)` / `AXIOM.radix4FFT(complexArray)` / `AXIOM.nutsDiagMass(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.pushRelabel(n, edges, s, t)` / `AXIOM.hungarianMaxWeight(w)` / `AXIOM.stableMarriage(proposerPref, proposeePref)` 等，详见 [docs/ALGORITHMS.md](docs/ALGORITHMS.md)。
 
 ## 8. 路线图
 
@@ -232,7 +235,8 @@ L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一�
 - [x] 算法库扩展四（v1.3.14）：泛化 U-turn NUTS（Betancourt 2017 逐维速度判据 —— 修正经典标量判据在 ρ=0.95 强相关目标上的折叠漏检，残差 2.80e-1 → 1.66e-2）/ NTT 数论变换 + CRT 精确整数卷积（FFT 的有限域对应）/ Hopcroft–Karp 二分图最大匹配（O(E√V)），三条硬不变量全部通过（核心不变量 341 → 344）
 - [x] 算法库扩展五（v1.3.15）：Edmonds blossom 一般图最大匹配（超越二分图，≡ 暴力枚举全部匹配子集）/ Split-radix FFT（Yavne 1968 共轭对 L 型分解，2 的幂已知最低运算量档）/ Stoer–Wagner 全局最小割（≡ 暴力 2ⁿ 划分 ≙ n−1 次 s-t 最小割），三条硬不变量全部 **0 精确**（核心不变量 344 → 347）
 - [x] 算法库扩展六（v1.3.16）：Gomory–Hu 树（Gomory & Hu 1961，n−1 次原图最大流缩并给出所有点对最小割结构，≡ 暴力枚举 2^(n−1) s-t 割，**整数 0 精确**）/ Radix-4 FFT（基-4 DIT，N=4^k 运算量低于纯 radix-2）/ NUTS 对角质量矩阵自适应（Stan warmup + Welford，拟合质量矩阵 ≡ 目标协方差对角），三条硬不变量全部通过（核心不变量 347 → 350，算法库 39 → 42）
-- [ ] 集大成算法库后续扩展（Gomory–Hu 树完整构造的 MCMF 网络单纯形对偶 / Blossom V 最大权匹配 / 任意图最大权匹配 / 多 seed 池化口径下更深入的 NUTS 全质量矩阵自适应）
+- [x] 算法库扩展七（v1.3.17）：Push-Relabel 最大流（Goldberg–Tarjan 1988，预流推进 + 高度标号，≙ maxFlowEK ≙ maxFlowDinic，**整数容量 0 精确**）/ Hungarian 最大权二分匹配（Kuhn–Munkres O(n³) 位势法，≙ mcmfSSPRef ≙ 暴力枚举排列，**0 精确**）/ Gale–Shapley 稳定婚姻（Gale & Shapley 1962，求婚者主动算法，结构不变量：完美匹配 + 无 blocking pair，男主动与女主动均稳定），三条硬不变量全部 **0 精确**（核心不变量 350 → 353，算法库 42 → 45）
+- [ ] 集大成算法库后续扩展（MCMF 网络单纯形对偶 / Blossom V 最大权匹配 / 任意图最大权匹配 / NUTS 全质量矩阵（dense M）自适应 / HMC 自适应步长 dual-averaging）
 
 ## 9. 致谢
 

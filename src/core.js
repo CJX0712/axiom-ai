@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.16';
+  var VERSION = '1.3.17';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4881,6 +4881,78 @@
     return { samples: samples, eps: epsFinal, mass: massHat };
   }
 
+  /* ==================== v1.3.17 算法库扩展七 ==================== */
+  /* ① Push-Relabel 最大流（Goldberg–Tarjan 1988）。
+     预流推进 + 高度标号：源点超额沿残余边推入邻点，节点仅在无 admissible 边（高度恰比邻点高 1 的可推边）时抬升高度。
+     不变量 ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（Dinic），整数容量下全部 0 精确。 */
+  function pushRelabel(n, edges, s, t) {
+    var i, v, cap = [];
+    for (i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+    for (i = 0; i < edges.length; i++) cap[edges[i][0]][edges[i][1]] += edges[i][2];   // 平行边按容量累加
+    var flow = []; for (i = 0; i < n; i++) flow.push(new Array(n).fill(0));
+    var h = new Array(n).fill(0), ex = new Array(n).fill(0);
+    h[s] = n;
+    for (v = 0; v < n; v++) if (cap[s][v] > 0) { flow[s][v] = cap[s][v]; flow[v][s] = -flow[s][v]; ex[v] = cap[s][v]; ex[s] -= cap[s][v]; }
+    var nodes = []; for (i = 0; i < n; i++) if (i !== s && i !== t) nodes.push(i);
+    function push(u, v) { var send = Math.min(ex[u], cap[u][v] - flow[u][v]); flow[u][v] += send; flow[v][u] -= send; ex[u] -= send; ex[v] += send; }
+    function relabel(u) { var mh = Infinity; for (var v = 0; v < n; v++) if (cap[u][v] - flow[u][v] > 0) mh = Math.min(mh, h[v]); h[u] = mh + 1; }
+    function discharge(u) { var v = 0; while (ex[u] > 0) { if (v >= n) { relabel(u); v = 0; } else { if (cap[u][v] - flow[u][v] > 0 && h[u] === h[v] + 1) push(u, v); v++; } } }
+    var p = 0;
+    while (p < nodes.length) { var u = nodes[p]; if (ex[u] > 0) { discharge(u); p = 0; } else p++; }
+    var val = 0; for (v = 0; v < n; v++) val += flow[s][v];
+    return val;
+  }
+
+  /* ② Hungarian 最大权二分匹配（Kuhn–Munkres，O(n³) 位势法）。
+     将最大权转化为最小费用，在 O(n³) 内求完美匹配。
+     不变量 ≙ mcmfSSPRef（二分图 MCMF：source→左→右→sink）≙ 暴力枚举全部排列（n≤8），全部 0 精确。 */
+  function hungarianMaxWeight(w) {
+    var n = w.length, INF = Infinity, i, j;
+    var a = []; for (i = 0; i < n; i++) { var row = []; for (j = 0; j < n; j++) row.push(-w[i][j]); a.push(row); }
+    var u = new Array(n + 1).fill(0), v = new Array(n + 1).fill(0);
+    var pp = new Array(n + 1).fill(0), way = new Array(n + 1).fill(0);
+    for (i = 1; i <= n; i++) {
+      pp[0] = i; var j0 = 0;
+      var minv = new Array(n + 1).fill(INF), used = new Array(n + 1).fill(false);
+      do {
+        used[j0] = true; var i0 = pp[j0], delta = INF, j1 = -1;
+        for (j = 1; j <= n; j++) if (!used[j]) { var cur = a[i0 - 1][j - 1] - u[i0] - v[j]; if (cur < minv[j]) { minv[j] = cur; way[j] = j0; } if (minv[j] < delta) { delta = minv[j]; j1 = j; } }
+        for (j = 0; j <= n; j++) { if (used[j]) { u[pp[j]] += delta; v[j] -= delta; } else minv[j] -= delta; }
+        j0 = j1;
+      } while (pp[j0] !== 0);
+      do { var jj = way[j0]; pp[j0] = pp[jj]; j0 = jj; } while (j0);
+    }
+    var wife = new Array(n).fill(-1); for (j = 1; j <= n; j++) wife[pp[j] - 1] = j - 1;
+    var maxw = 0; for (i = 0; i < n; i++) maxw += w[i][wife[i]];
+    return { value: maxw, wife: wife };
+  }
+
+  /* ③ Gale–Shapley 稳定婚姻（Gale & Shapley 1962，Shapley 诺贝尔）。
+     求婚者主动算法：求婚者依次向偏好列表求婚，被求婚者在当前伴侣与求婚者间留优者；最终必得稳定匹配。
+     结构不变量：输出为完美匹配且「稳定」（无 blocking pair）；男主动与女主动（交换角色）均得稳定匹配。 */
+  function _randPerm(rng, n) { var a = [], i; for (i = 0; i < n; i++) a.push(i); for (i = n - 1; i > 0; i--) { var j = Math.floor(rng() * (i + 1)), tmp = a[i]; a[i] = a[j]; a[j] = tmp; } return a; }
+  function stableMarriage(proposerPref, proposeePref) {       // 返回 proposer→proposee 匹配
+    var n = proposerPref.length, i;
+    var matchP = new Array(n).fill(-1), matchQ = new Array(n).fill(-1);
+    var nextIdx = new Array(n).fill(0);
+    var qRank = []; for (i = 0; i < n; i++) { var r = new Array(n); for (var k = 0; k < n; k++) r[proposeePref[i][k]] = k; qRank.push(r); }
+    var free = []; for (i = 0; i < n; i++) free.push(i);
+    while (free.length) {
+      var pp = free.shift(), qq = proposerPref[pp][nextIdx[pp]++];
+      if (matchQ[qq] === -1) { matchQ[qq] = pp; matchP[pp] = qq; }
+      else { var cur = matchQ[qq]; if (qRank[qq][pp] < qRank[qq][cur]) { matchQ[qq] = pp; matchP[pp] = qq; matchP[cur] = -1; free.push(cur); } else free.push(pp); }
+    }
+    return { matchP: matchP, matchQ: matchQ };
+  }
+  function _isStableMatching(menPref, womenPref, wife) {
+    var n = menPref.length, m;
+    var husband = new Array(n).fill(-1); for (m = 0; m < n; m++) husband[wife[m]] = m;
+    var mRank = []; for (m = 0; m < n; m++) { var rm = new Array(n); for (var k = 0; k < n; k++) rm[menPref[m][k]] = k; mRank.push(rm); }
+    var wRank = []; for (var w = 0; w < n; w++) { var rw = new Array(n); for (var k = 0; k < n; k++) rw[womenPref[w][k]] = k; wRank.push(rw); }
+    for (m = 0; m < n; m++) for (w = 0; w < n; w++) { if (wife[m] === w) continue; if (mRank[m][w] < mRank[m][wife[m]] && wRank[w][m] < wRank[w][husband[w]]) return false; }
+    return true;
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -8268,6 +8340,59 @@
     return cnt === 0 ? 1 : rel / seeds;
   });
 
+  /* ⑧ Push-Relabel 最大流 ≙ maxFlowEK ≙ maxFlowDinic（整数容量，25 图） */
+  check('pushRelabel：Push-Relabel 最大流 ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（整数容量，25 图）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(13000 + g), n = 6 + Math.floor(rng() * 7), s = Math.floor(rng() * n), t = Math.floor(rng() * n); while (t === s) t = Math.floor(rng() * n);
+      var eg = [], m = n + Math.floor(rng() * 2 * n);
+      for (var k = 0; k < m; k++) { var u = Math.floor(rng() * n), v = Math.floor(rng() * n); if (u === v) continue; eg.push([u, v, 1 + Math.floor(rng() * 9)]); }
+      var val = pushRelabel(n, eg, s, t);
+      var cap = []; for (var i = 0; i < n; i++) cap.push(new Array(n).fill(0)); for (var e = 0; e < eg.length; e++) cap[eg[e][0]][eg[e][1]] += eg[e][2];
+      var ek = maxFlowEK(n, cap, s, t);
+      worst = Math.max(worst, Math.abs(val - ek));
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ⑨ Hungarian 最大权二分匹配 ≙ mcmfSSPRef（二分图 MCMF）≙ 暴力排列（n≤8，25 图） */
+  check('hungarianMaxWeight：Hungarian 最大权二分匹配 ≙ mcmfSSPRef（二分图 MCMF：source→左→右→sink）≙ 暴力排列（n≤8，25 图）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(14000 + g), n = 4 + Math.floor(rng() * 6), w = [], i, j;
+      for (i = 0; i < n; i++) { var row = []; for (j = 0; j < n; j++) row.push(Math.floor(rng() * 19) - 9); w.push(row); }
+      var hw = hungarianMaxWeight(w), N = 2 * n + 2, S = 2 * n, T = 2 * n + 1, edges = [];
+      for (i = 0; i < n; i++) { edges.push([S, i, 1, 0]); edges.push([n + i, T, 1, 0]); }
+      for (i = 0; i < n; i++) for (j = 0; j < n; j++) edges.push([i, n + j, 1, -w[i][j]]);
+      var mc = mcmfSSPRef(N, S, T, edges);
+      worst = Math.max(worst, Math.abs(hw.value - (-mc.cost)));
+      if (n <= 8) {                                                                 // 暴力枚举全部排列交叉
+        var perm = [], idx = []; for (i = 0; i < n; i++) { perm.push(i); idx.push(i); }
+        function rec(k) { if (k === n) { var s2 = 0; for (i = 0; i < n; i++) s2 += w[i][perm[i]]; if (s2 > best) best = s2; return; } for (var ii = k; ii < n; ii++) { var tmp = perm[k]; perm[k] = perm[ii]; perm[ii] = tmp; rec(k + 1); tmp = perm[k]; perm[k] = perm[ii]; perm[ii] = tmp; } }
+        var best = -Infinity; rec(0); worst = Math.max(worst, Math.abs(hw.value - best));
+      }
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ⑩ Gale–Shapley 稳定婚姻：完美匹配 + 稳定（无 blocking pair），男主动与女主动均稳定（25 实例） */
+  check('stableMarriage：Gale–Shapley 稳定婚姻 —— 完美匹配 + 稳定（无 blocking pair），男主动与女主动均得稳定匹配（25 实例）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(15000 + g), n = 4 + Math.floor(rng() * 9), menPref = [], womenPref = [], i;
+      for (i = 0; i < n; i++) { menPref.push(_randPerm(rng, n)); womenPref.push(_randPerm(rng, n)); }
+      var mp = stableMarriage(menPref, womenPref).matchP;        // 男主动
+      var wp = stableMarriage(womenPref, menPref).matchP;         // 女主动
+      var wifeW = new Array(n); for (var w = 0; w < n; w++) wifeW[wp[w]] = w;
+      var bij = true, seen = new Array(n).fill(false); for (var mm = 0; mm < n; mm++) { if (mp[mm] < 0 || mp[mm] >= n || seen[mp[mm]]) { bij = false; break; } seen[mp[mm]] = true; }
+      worst = Math.max(worst, bij ? 0 : 1, _isStableMatching(menPref, womenPref, mp) ? 0 : 1, _isStableMatching(menPref, womenPref, wifeW) ? 0 : 1);
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -8419,6 +8544,10 @@
     gomoryHu: gomoryHu,
     radix4FFT: radix4FFT,
     nutsDiagMass: nutsDiagMass,
+    /* v1.3.17 算法库扩展七 */
+    pushRelabel: pushRelabel,
+    hungarianMaxWeight: hungarianMaxWeight,
+    stableMarriage: stableMarriage,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

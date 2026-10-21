@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(42) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(45) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -439,7 +439,11 @@
     /* v1.3.16 算法库扩展六 */
     { id: 'gomoryHu', name: 'Gomory–Hu 树', src: 'Gomory & Hu (1961)', api: 'AXIOM.gomoryHu', inv: '所有点对最小割结构 ≡ 暴力枚举 2^(n−1) s-t 割（路径最小边 == 精确最小割，整数 0 容差）', chk: ['gomoryHu：'] },
     { id: 'radix4FFT', name: 'Radix-4 FFT', src: 'Cooley–Tukey (1965)；基-4 DIT', api: 'AXIOM.radix4FFT', inv: '基-4 DIT ≡ 朴素 O(n²) DFT ≙ fft（radix-2），N = 4^k 运算量更低', chk: ['radix4FFT：'] },
-    { id: 'nutsDiagMass', name: 'NUTS 对角质量矩阵自适应', src: 'Hoffman–Gelman (2014)；Stan warmup', api: 'AXIOM.nutsDiagMass', inv: '对角质量矩阵（Welford warmup）≡ 目标协方差对角（异方差目标拟合质量矩阵 ≈ Σ，20 seed 稳健）', chk: ['nutsDiagMass：'] }
+    { id: 'nutsDiagMass', name: 'NUTS 对角质量矩阵自适应', src: 'Hoffman–Gelman (2014)；Stan warmup', api: 'AXIOM.nutsDiagMass', inv: '对角质量矩阵（Welford warmup）≡ 目标协方差对角（异方差目标拟合质量矩阵 ≈ Σ，20 seed 稳健）', chk: ['nutsDiagMass：'] },
+    /* v1.3.17 算法库扩展七 */
+    { id: 'pushRelabel', name: 'Push-Relabel 最大流', src: 'Goldberg & Tarjan (1988)', api: 'AXIOM.pushRelabel', inv: '预流推进 + 高度标号最大流 ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（整数容量 0 精确）', chk: ['pushRelabel：'] },
+    { id: 'hungarianMaxWeight', name: 'Hungarian 最大权二分匹配', src: 'Kuhn (1955)；Munkres (1957)', api: 'AXIOM.hungarianMaxWeight', inv: 'O(n³) 位势法最大权完美匹配 ≙ mcmfSSPRef（二分图 MCMF）≙ 暴力排列（n≤8，0 精确）', chk: ['hungarianMaxWeight：'] },
+    { id: 'stableMarriage', name: 'Gale–Shapley 稳定婚姻', src: 'Gale & Shapley (1962)；Shapley 诺贝尔', api: 'AXIOM.stableMarriage', inv: '求婚者主动算法 ⇒ 完美匹配且稳定（无 blocking pair）；男主动与女主动均稳定', chk: ['stableMarriage：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -860,6 +864,43 @@
       '理论最优对角质量 = 目标协方差对角 Σ = [4, 1]\n' +
       '拟合误差 = [' + (Math.abs(m0 - 4) / 4 * 100).toFixed(1) + '%, ' + (Math.abs(m1 - 1) / 1 * 100).toFixed(1) + '%] · ' +
       (ok ? '≈ 目标协方差对角 ⇒ 对角度量自适应成功（病态目标混合效率最大化）' : '❌ 偏差偏大');
+  },
+  pushRelabel: function () {
+    // 7 点有向图：Push-Relabel 最大流 ≙ maxFlowEK / maxFlowDinic
+    var n = 7, s = 0, t = 6, edges = [[0,1,3],[0,2,2],[1,3,2],[1,4,4],[2,3,3],[2,5,1],[3,4,1],[3,6,4],[4,6,2],[5,6,3]];
+    var val = AXIOM.pushRelabel(n, edges, s, t);
+    var cap = []; for (var i = 0; i < n; i++) cap.push(new Array(n).fill(0)); for (var e = 0; e < edges.length; e++) cap[edges[e][0]][edges[e][1]] += edges[e][2];
+    var ek = AXIOM.maxFlowEK(n, cap, s, t), di = AXIOM.maxFlowDinic(n, cap, s, t);
+    var ok = (val === ek && ek === di);
+    return '7 点有向图（s=0→t=6）最大流\n' +
+      'Push-Relabel（预流推进 + 高度标号）= ' + val + '\n' +
+      'Edmonds–Karp (maxFlowEK) = ' + ek + ' · Dinic = ' + di + '\n' +
+      (ok ? '三路一致 ⇒ 预流推进法与增广路法在整数容量下等价（0 精确）' : '❌ 不一致');
+  },
+  hungarianMaxWeight: function () {
+    // 5×5 收益矩阵：Hungarian 最大权完美匹配 ≙ 二分图 MCMF
+    var w = [[7,5,11,9,6],[5,4,2,8,7],[9,7,8,3,1],[2,6,4,10,5],[8,3,9,5,11]], n = w.length, N = 2*n+2, S = 2*n, T = 2*n+1, edges = [];
+    for (var i = 0; i < n; i++) { edges.push([S, i, 1, 0]); edges.push([n+i, T, 1, 0]); }
+    for (i = 0; i < n; i++) for (var j = 0; j < n; j++) edges.push([i, n+j, 1, -w[i][j]]);
+    var hw = AXIOM.hungarianMaxWeight(w), mc = AXIOM.mcmfSSPRef(N, S, T, edges);
+    var ok = (hw.value === -mc.cost);
+    return '5×5 收益矩阵（Hungarian 最大权完美匹配）\n' +
+      '最大权 = ' + hw.value + ' · 匹配（左→右）= [' + hw.wife.join(',') + ']\n' +
+      '二分图 MCMF 最小费用 = ' + mc.cost + '（= −最大权 ' + (-mc.cost) + '）\n' +
+      (ok ? '一致 ⇒ O(n³) 位势法等价于最小费用最大流（0 精确）' : '❌ 不一致');
+  },
+  stableMarriage: function () {
+    // 4 人稳定婚姻：男主动得稳定匹配；与女主动（角色交换）均为稳定匹配
+    var n = 4, menPref = [[0,1,2,3],[0,2,1,3],[0,1,3,2],[0,2,3,1]], womenPref = [[0,1,2,3],[1,0,3,2],[0,2,1,3],[1,3,0,2]];
+    var mp = AXIOM.stableMarriage(menPref, womenPref).matchP;     // 男主动
+    var wp = AXIOM.stableMarriage(womenPref, menPref).matchP;      // 女主动
+    var wifeW = []; for (var w = 0; w < n; w++) wifeW[wp[w]] = w;
+    function stable(menP, womenP, wife) { var hus = []; for (var m=0;m<n;m++) hus[wife[m]]=m; var mr=[],wr=[]; for (m=0;m<n;m++){mr[m]=[];for(var k=0;k<n;k++)mr[m][menP[m][k]]=k;} for (var w2=0;w2<n;w2++){wr[w2]=[];for(k=0;k<n;k++)wr[w2][womenP[w2][k]]=k;} for (m=0;m<n;m++) for (w2=0;w2<n;w2++){if(wife[m]===w2)continue; if(mr[m][w2]<mr[m][wife[m]]&&wr[w2][m]<wr[w2][hus[w2]])return false;} return true; }
+    var okM = stable(menPref, womenPref, mp), okW = stable(menPref, womenPref, wifeW);
+    return '4 人稳定婚姻（男主动算法）\n' +
+      '男主动匹配（男→女）= [' + mp.join(',') + '] · 女主动匹配（男→女）= [' + wifeW.join(',') + ']\n' +
+      '男主动稳定 = ' + okM + ' · 女主动稳定 = ' + okW + '\n' +
+      (okM && okW ? '均稳定 ⇒ 求婚者主动算法必终止于无 blocking pair 的完美匹配（Gale–Shapley 定理）' : '❌ 不稳定');
   }
   };
   var algoRun = null;
