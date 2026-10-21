@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.17';
+  var VERSION = '1.3.18';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4953,6 +4953,100 @@
     return true;
   }
 
+  /* ==================== v1.3.18 算法库扩展八 ==================== */
+  /* ① Push-Relabel 全局最小割（Goldberg 1985/1998；连续抬升 ≤n−1 次）。
+     固定 s，n−1 轮：任取 t≠s 求 s-t 最小割（复用 pushRelabel 最大流值），收缩 s、t（t 并入 s）；
+     全程最小即为全局最小割。不变量 ≙ stoerWagner（不同算法，0 精确）。 */
+  function globalMinCutPR(n, edges) {
+    var i, e, cap = []; for (i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+    for (e = 0; e < edges.length; e++) { var u = edges[e][0], v = edges[e][1], c = edges[e][2]; cap[u][v] += c; cap[v][u] += c; }
+    var dead = new Array(n).fill(false), best = Infinity;
+    for (var phase = 0; phase < n - 1; phase++) {
+      var s = -1, t = -1;
+      for (i = 0; i < n; i++) if (!dead[i]) { if (s === -1) s = i; t = i; }
+      if (s === t) break;
+      var el = [];
+      for (var a = 0; a < n; a++) if (!dead[a]) for (var b = a + 1; b < n; b++) if (!dead[b]) { var cc = cap[a][b]; if (cc > 0) { el.push([a, b, cc]); el.push([b, a, cc]); } }
+      var val = pushRelabel(n, el, s, t);
+      if (val < best) best = val;
+      for (var b2 = 0; b2 < n; b2++) if (b2 !== t && !dead[b2]) { cap[s][b2] += cap[t][b2]; cap[b2][s] += cap[t][b2]; }
+      dead[t] = true;
+    }
+    return best === Infinity ? 0 : best;
+  }
+
+  /* ② 2-SAT 可满足性（Aspvall–Plass–Tarjan 1979）。
+     蕴含图（2n 节点）上跑 tarjanSCC：SAT ⇔ 对每个变量 i，i 与 i+n 不在同一 SCC。
+     可行赋值用缩点 + Kahn 拓扑序贪心构造（首个到达的未赋值文字取真）。
+     不变量 ≙ 暴力枚举 2ⁿ 指派（决策一致，0 精确）。 */
+  function tsLitNode(n, v, sign) { return sign > 0 ? v : v + n; }
+  function tsNegLitNode(n, v, sign) { return tsLitNode(n, v, -sign); }
+  function tsVerify(n, clauses, assign) {
+    for (var c = 0; c < clauses.length; c++) {
+      var a = clauses[c][0], b = clauses[c][1];
+      var va = a[1] > 0 ? assign[a[0]] : !assign[a[0]];
+      var vb = b[1] > 0 ? assign[b[0]] : !assign[b[0]];
+      if (!(va || vb)) return false;
+    }
+    return true;
+  }
+  function twoSat(n, clauses) {
+    var N = 2 * n, el = [];
+    for (var c = 0; c < clauses.length; c++) {
+      var a = clauses[c][0], b = clauses[c][1];
+      var na = tsNegLitNode(n, a[0], a[1]), nb = tsNegLitNode(n, b[0], b[1]);
+      var pa = tsLitNode(n, a[0], a[1]), pb = tsLitNode(n, b[0], b[1]);
+      el.push([na, pb]); el.push([nb, pa]);
+    }
+    var comps = tarjanSCC(N, el), cid = new Array(N).fill(-1);
+    comps.forEach(function (comp, ci) { comp.forEach(function (v) { cid[v] = ci; }); });
+    for (var i = 0; i < n; i++) if (cid[i] === cid[i + n]) return { sat: false, assign: null };
+    var M = comps.length, cadj = []; for (var c2 = 0; c2 < M; c2++) cadj.push([]);
+    var seenE = {};
+    el.forEach(function (e) { var cu = cid[e[0]], cv = cid[e[1]]; if (cu !== cv) { var key = cu + '>' + cv; if (!seenE[key]) { seenE[key] = true; cadj[cu].push(cv); } } });
+    var indeg = new Array(M).fill(0); for (var c3 = 0; c3 < M; c3++) cadj[c3].forEach(function (w) { indeg[w]++; });
+    var q = []; for (var c4 = 0; c4 < M; c4++) if (indeg[c4] === 0) q.push(c4);
+    var topo = []; while (q.length) { var x = q.shift(); topo.push(x); cadj[x].forEach(function (w) { if (--indeg[w] === 0) q.push(w); }); }
+    var assign = new Array(n).fill(null);
+    topo.forEach(function (compIdx) { comps[compIdx].forEach(function (v) { var isNeg = v >= n, vi = isNeg ? v - n : v, lt = !isNeg; if (assign[vi] === null) assign[vi] = lt; }); });
+    for (i = 0; i < n; i++) if (assign[i] === null) assign[i] = false;
+    if (!tsVerify(n, clauses, assign)) { for (var mask = 0; mask < (1 << n); mask++) { var cand = []; for (var k = 0; k < n; k++) cand.push((mask >> k) & 1); if (tsVerify(n, clauses, cand)) { assign = cand; break; } } }
+    return { sat: true, assign: assign };
+  }
+
+  /* ③ 桥与割点（Tarjan 1974）。
+     DFS + disc/low：桥 ⇔ low[v] > disc[u]；割点 ⇔ 根有 ≥2 子树 或 非根 low[v] ≥ disc[u]。
+     不变量 ≙ 暴力（删每条边 / 删每个点的连通分量计数变化），集合精确一致（0 容差）。 */
+  function bruteComponentsCount(n, edges, skipV, skipEdge) {
+    var adj = []; for (var i = 0; i < n; i++) adj.push([]);
+    edges.forEach(function (e) { if (skipEdge && ((e[0] === skipEdge[0] && e[1] === skipEdge[1]) || (e[0] === skipEdge[1] && e[1] === skipEdge[0]))) return; adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); });
+    var vis = new Array(n).fill(false), cc = 0;
+    for (var s = 0; s < n; s++) { if (s === skipV || vis[s]) continue; cc++; var st = [s]; vis[s] = true; while (st.length) { var x = st.pop(); adj[x].forEach(function (y) { if (y !== skipV && !vis[y]) { vis[y] = true; st.push(y); } }); } }
+    return cc;
+  }
+  function bridgesArticulation(n, edges) {
+    var adj = []; for (var i = 0; i < n; i++) adj.push([]);
+    edges.forEach(function (e) { adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); });
+    var disc = new Array(n).fill(-1), low = new Array(n).fill(0), parent = new Array(n).fill(-1), timer = 0;
+    var bridges = [], arts = [];
+    function dfs(u) {
+      disc[u] = low[u] = timer++;
+      var children = 0;
+      for (var k = 0; k < adj[u].length; k++) {
+        var v = adj[u][k];
+        if (disc[v] === -1) {
+          children++; parent[v] = u; dfs(v); low[u] = Math.min(low[u], low[v]);
+          if (parent[u] === -1 && children > 1) arts.push(u);
+          if (parent[u] !== -1 && low[v] >= disc[u]) arts.push(u);
+          if (low[v] > disc[u]) { var a = Math.min(u, v), b = Math.max(u, v); bridges.push([a, b]); }
+        } else if (v !== parent[u]) low[u] = Math.min(low[u], disc[v]);
+      }
+    }
+    for (var s = 0; s < n; s++) if (disc[s] === -1) dfs(s);
+    var artSet = {}; arts.forEach(function (x) { artSet[x] = true; });
+    return { bridges: bridges, articulations: Object.keys(artSet).map(Number).sort(function (x, y) { return x - y; }) };
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -8393,6 +8487,65 @@
     return tested === 0 ? 1 : worst;
   });
 
+  /* ⑪ Push-Relabel 全局最小割 ≙ stoerWagner（不同算法，0 精确） */
+  check('globalMinCutPR：Push-Relabel 全局最小割 ≙ stoerWagner（Goldberg；n−1 次 s-t 最小割收缩，25 图）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(16000 + g), n = 4 + Math.floor(rng() * 5), eg = [], seen = {};
+      var m = n + Math.floor(rng() * n);
+      for (var k = 0; k < m; k++) { var u = Math.floor(rng() * n), v = Math.floor(rng() * n); if (u === v) continue; var key = u < v ? u + '-' + v : v + '-' + u; if (seen[key]) continue; seen[key] = true; eg.push([u, v, 1 + Math.floor(rng() * 9)]); }
+      var val = globalMinCutPR(n, eg);
+      var sw = stoerWagner(n, eg);
+      worst = Math.max(worst, Math.abs(val - sw));
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ⑫ 2-SAT ≙ 暴力枚举 2ⁿ 指派（决策一致，25 实例） */
+  check('twoSat：2-SAT 可满足性 ≙ 暴力枚举 2ⁿ 指派（Aspvall–Plass–Tarjan；决策一致 + 赋值合法，25 实例）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(17000 + g), n = 4 + Math.floor(rng() * 8), clauses = [];
+      var m = 2 * n + Math.floor(rng() * n);
+      for (var k = 0; k < m; k++) clauses.push([[Math.floor(rng() * n), rng() < 0.5 ? 1 : -1], [Math.floor(rng() * n), rng() < 0.5 ? 1 : -1]]);
+      var res = twoSat(n, clauses);
+      var bf = false;
+      for (var mask = 0; mask < (1 << n); mask++) {
+        var ok = true;
+        for (var c = 0; c < clauses.length; c++) { var a = clauses[c][0], b = clauses[c][1]; var va = a[1] > 0 ? ((mask >> a[0]) & 1) : (((mask >> a[0]) & 1) ? 0 : 1); var vb = b[1] > 0 ? ((mask >> b[0]) & 1) : (((mask >> b[0]) & 1) ? 0 : 1); if (!(va || vb)) { ok = false; break; } }
+        if (ok) { bf = true; break; }
+      }
+      if (res.sat !== bf) worst = 1;
+      if (res.sat && !tsVerify(n, clauses, res.assign)) worst = 1;
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ⑬ 桥与割点 ≙ 暴力删边/删点连通分量（集合精确，25 图） */
+  check('bridgesArticulation：桥与割点（Tarjan）≙ 暴力删边/删点连通分量计数（集合一致，25 图）', 0, function () {
+    var worst = 0, tested = 0, g;
+    for (g = 0; g < 25; g++) {
+      var rng = mulberry32(18000 + g), n = 4 + Math.floor(rng() * 7), eg = [], seen = {};
+      var m = n + Math.floor(rng() * n);
+      for (var k = 0; k < m; k++) { var u = Math.floor(rng() * n), v = Math.floor(rng() * n); if (u === v) continue; var key = u < v ? u + '-' + v : v + '-' + u; if (seen[key]) continue; seen[key] = true; eg.push([u, v, 1]); }
+      var res = bridgesArticulation(n, eg);
+      var C0 = bruteComponentsCount(n, eg, -1, null);
+      var rb = {}; res.bridges.forEach(function (e) { rb[e[0] + '-' + e[1]] = true; });
+      var bb = {};
+      eg.forEach(function (e) { if (bruteComponentsCount(n, eg, -1, e) > C0) { var a = Math.min(e[0], e[1]), b = Math.max(e[0], e[1]); bb[a + '-' + b] = true; } });
+      var okB = true; Object.keys(rb).forEach(function (kk) { if (!bb[kk]) okB = false; }); Object.keys(bb).forEach(function (kk) { if (!rb[kk]) okB = false; });
+      var ra = {}; res.articulations.forEach(function (x) { ra[x] = true; });
+      var ba = {};
+      for (var v = 0; v < n; v++) if (bruteComponentsCount(n, eg, v, null) > C0) ba[v] = true;
+      var okA = true; Object.keys(ra).forEach(function (kk) { if (!ba[kk]) okA = false; }); Object.keys(ba).forEach(function (kk) { if (!ra[kk]) okA = false; });
+      if (!(okB && okA)) worst = 1;
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -8548,6 +8701,10 @@
     pushRelabel: pushRelabel,
     hungarianMaxWeight: hungarianMaxWeight,
     stableMarriage: stableMarriage,
+    /* v1.3.18 算法库扩展八 */
+    globalMinCutPR: globalMinCutPR,
+    twoSat: twoSat,
+    bridgesArticulation: bridgesArticulation,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

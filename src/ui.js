@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(45) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(48) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -443,7 +443,11 @@
     /* v1.3.17 算法库扩展七 */
     { id: 'pushRelabel', name: 'Push-Relabel 最大流', src: 'Goldberg & Tarjan (1988)', api: 'AXIOM.pushRelabel', inv: '预流推进 + 高度标号最大流 ≙ maxFlowEK（Edmonds–Karp）≙ maxFlowDinic（整数容量 0 精确）', chk: ['pushRelabel：'] },
     { id: 'hungarianMaxWeight', name: 'Hungarian 最大权二分匹配', src: 'Kuhn (1955)；Munkres (1957)', api: 'AXIOM.hungarianMaxWeight', inv: 'O(n³) 位势法最大权完美匹配 ≙ mcmfSSPRef（二分图 MCMF）≙ 暴力排列（n≤8，0 精确）', chk: ['hungarianMaxWeight：'] },
-    { id: 'stableMarriage', name: 'Gale–Shapley 稳定婚姻', src: 'Gale & Shapley (1962)；Shapley 诺贝尔', api: 'AXIOM.stableMarriage', inv: '求婚者主动算法 ⇒ 完美匹配且稳定（无 blocking pair）；男主动与女主动均稳定', chk: ['stableMarriage：'] }
+    { id: 'stableMarriage', name: 'Gale–Shapley 稳定婚姻', src: 'Gale & Shapley (1962)；Shapley 诺贝尔', api: 'AXIOM.stableMarriage', inv: '求婚者主动算法 ⇒ 完美匹配且稳定（无 blocking pair）；男主动与女主动均稳定', chk: ['stableMarriage：'] },
+    /* v1.3.18 算法库扩展八 */
+    { id: 'globalMinCutPR', name: 'Push-Relabel 全局最小割', src: 'Goldberg (1985/1998)', api: 'AXIOM.globalMinCutPR', inv: 'n−1 次 s-t 最小割收缩 ≙ stoerWagner（不同算法，全局最小割 0 精确）', chk: ['globalMinCutPR：'] },
+    { id: 'twoSat', name: '2-SAT 可满足性', src: 'Aspvall–Plass–Tarjan (1979)', api: 'AXIOM.twoSat', inv: '蕴含图 SCC：SAT ⇔ 变量与其否定不同 SCC ≙ 暴力枚举 2ⁿ 指派（决策 0 精确）', chk: ['twoSat：'] },
+    { id: 'bridgesArticulation', name: '桥与割点', src: 'Tarjan (1974)', api: 'AXIOM.bridgesArticulation', inv: 'DFS disc/low：桥 low[v]>disc[u]；割点 low[v]≥disc[u] ≙ 暴力删边/删点连通分量（集合 0 精确）', chk: ['bridgesArticulation：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -901,6 +905,40 @@
       '男主动匹配（男→女）= [' + mp.join(',') + '] · 女主动匹配（男→女）= [' + wifeW.join(',') + ']\n' +
       '男主动稳定 = ' + okM + ' · 女主动稳定 = ' + okW + '\n' +
       (okM && okW ? '均稳定 ⇒ 求婚者主动算法必终止于无 blocking pair 的完美匹配（Gale–Shapley 定理）' : '❌ 不稳定');
+  },
+  globalMinCutPR: function () {
+    // 6 点无向加权图：全局最小割（Goldberg 收缩法）≙ Stoer–Wagner
+    var n = 6, edges = [[0,1,2],[0,2,3],[1,2,1],[1,3,4],[2,3,2],[3,4,3],[3,5,2],[4,5,4]];
+    var val = AXIOM.globalMinCutPR(n, edges);
+    var sw = AXIOM.stoerWagner(n, edges);
+    var ok = (val === sw);
+    return '6 点无向加权图（Goldberg 全局最小割：固定 s，n−1 次 s-t 最小割收缩）\n' +
+      'Push-Relabel 全局最小割 = ' + val + '\n' +
+      'Stoer–Wagner（不同算法）   = ' + sw + '\n' +
+      (ok ? '两独立算法一致 ⇒ 全局最小割值正确（0 精确）' : '❌ 不一致');
+  },
+  twoSat: function () {
+    // 具体 2-SAT：(x0∨x1)∧(¬x0∨x2)∧(¬x1∨¬x2)∧(x0∨¬x2)
+    var n = 3, clauses = [[[0,1],[1,1]],[[0,-1],[2,1]],[[1,-1],[2,-1]],[[0,1],[2,-1]]];
+    var res = AXIOM.twoSat(n, clauses);
+    var sat = res.sat, assign = res.assign;
+    var allOk = sat ? clauses.every(function (cl) { var a = cl[0], b = cl[1]; var va = a[1] > 0 ? assign[a[0]] : !assign[a[0]]; var vb = b[1] > 0 ? assign[b[0]] : !assign[b[0]]; return va || vb; }) : false;
+    return '2-SAT 实例（3 变量）\n' +
+      '子句：(x0∨x1)∧(¬x0∨x2)∧(¬x1∨¬x2)∧(x0∨¬x2)\n' +
+      '可满足 = ' + sat + (sat ? ' · 可行赋值 x = [' + assign.join(',') + ']' : '') + '\n' +
+      (sat ? (allOk ? '赋值满足全部子句 ⇒ 蕴含图 SCC 构造有效（Aspvall–Plass–Tarjan）' : '❌ 赋值非法') : '不可满足 ⇔ 某变量与其否定同 SCC');
+  },
+  bridgesArticulation: function () {
+    // 具体图：含桥与割点（Tarjan disc/low）≙ 暴力删边/删点
+    var n = 7, edges = [[0,1],[1,2],[2,0],[2,3],[3,4],[4,5],[5,3],[4,6]];
+    var res = AXIOM.bridgesArticulation(n, edges);
+    function comps(skipV, skipE) { var adj = []; for (var i = 0; i < n; i++) adj.push([]); edges.forEach(function (e) { if (skipE && ((e[0] === skipE[0] && e[1] === skipE[1]) || (e[0] === skipE[1] && e[1] === skipE[0]))) return; if (e[0] === skipV || e[1] === skipV) return; adj[e[0]].push(e[1]); adj[e[1]].push(e[0]); }); var vis = new Array(n).fill(false), cc = 0; for (var s = 0; s < n; s++) { if (s === skipV || vis[s]) continue; cc++; var st = [s]; vis[s] = true; while (st.length) { var x = st.pop(); adj[x].forEach(function (y) { if (y !== skipV && !vis[y]) { vis[y] = true; st.push(y); } }); } } return cc; }
+    var C0 = comps(-1, null), okB = res.bridges.every(function (e) { return comps(-1, e) === C0 + 1; });
+    var okA = res.articulations.every(function (v) { return comps(v, null) === C0 + 1; });
+    return '7 点图（Tarjan 桥/割点）\n' +
+      '桥 = [' + res.bridges.map(function (e) { return e[0] + '-' + e[1]; }).join(', ') + ']\n' +
+      '割点 = [' + res.articulations.join(', ') + ']\n' +
+      (okB && okA ? '删桥/删点均使连通分量 +1 ⇒ 判定与暴力一致（0 精确）' : '❌ 不一致');
   }
   };
   var algoRun = null;
