@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(39) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(42) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -435,7 +435,11 @@
     /* v1.3.15 算法库扩展五 */
     { id: 'blossomMatching', name: 'Edmonds blossom 一般图最大匹配', src: 'Edmonds (1965)；Berge (1957)', api: 'AXIOM.blossomMatching', inv: '最大匹配 ≡ 暴力枚举全部匹配子集 + 合法性 + 极大性 + 二分图退化 ≡ Hopcroft–Karp', chk: ['blossomMatching：'] },
     { id: 'splitRadixFFT', name: 'Split-radix FFT', src: 'Yavne (1968)；Duhamel–Hollmann (1984)', api: 'AXIOM.splitRadixFFT', inv: '共轭对 L 型分解 ≡ 朴素 DFT ≙ fft（radix-2）（2 的幂最低运算量档）', chk: ['splitRadixFFT：'] },
-    { id: 'stoerWagner', name: 'Stoer–Wagner 全局最小割', src: 'Stoer & Wagner (1997)', api: 'AXIOM.stoerWagner', inv: '全局最小割 ≡ 暴力枚举 2ⁿ 划分 ≙ n−1 次 s-t 最小割（无向图 Gomory–Hu）', chk: ['stoerWagner：'] }
+    { id: 'stoerWagner', name: 'Stoer–Wagner 全局最小割', src: 'Stoer & Wagner (1997)', api: 'AXIOM.stoerWagner', inv: '全局最小割 ≡ 暴力枚举 2ⁿ 划分 ≙ n−1 次 s-t 最小割（无向图 Gomory–Hu）', chk: ['stoerWagner：'] },
+    /* v1.3.16 算法库扩展六 */
+    { id: 'gomoryHu', name: 'Gomory–Hu 树', src: 'Gomory & Hu (1961)', api: 'AXIOM.gomoryHu', inv: '所有点对最小割结构 ≡ 暴力枚举 2^(n−1) s-t 割（路径最小边 == 精确最小割，整数 0 容差）', chk: ['gomoryHu：'] },
+    { id: 'radix4FFT', name: 'Radix-4 FFT', src: 'Cooley–Tukey (1965)；基-4 DIT', api: 'AXIOM.radix4FFT', inv: '基-4 DIT ≡ 朴素 O(n²) DFT ≙ fft（radix-2），N = 4^k 运算量更低', chk: ['radix4FFT：'] },
+    { id: 'nutsDiagMass', name: 'NUTS 对角质量矩阵自适应', src: 'Hoffman–Gelman (2014)；Stan warmup', api: 'AXIOM.nutsDiagMass', inv: '对角质量矩阵（Welford warmup）≡ 目标协方差对角（异方差目标拟合质量矩阵 ≈ Σ，20 seed 稳健）', chk: ['nutsDiagMass：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -801,6 +805,61 @@
       'Stoer–Wagner 全局最小割 = ' + sw + '\n' +
       'n−1 次 s-t 最小割（maxFlowEK）最小 = ' + best + '\n' +
       '两路一致 ⇒ 最大邻接序缩并与 Gomory–Hu 性质互相印证';
+  },
+  gomoryHu: function () {
+    // 6 点无向图：Gomory–Hu 树给出「所有点对最小割」结构（路径最小边 == 精确最小割）
+    var n = 6, edges = [[0, 1, 7], [0, 2, 4], [1, 2, 3], [1, 3, 5], [2, 4, 6], [3, 4, 2], [3, 5, 8], [4, 5, 9]];
+    var gh = AXIOM.gomoryHu(n, edges);
+    // 暴力参照：任一对 (u,v) 的精确最小 s-t 割
+    var u = 0, v = 5;
+    var pm = gh.pathMin(u, v), bf = (function (n, edges, s, t) {
+      var rest = [], i; for (i = 0; i < n; i++) if (i !== s && i !== t) rest.push(i);
+      var R = rest.length, cap = {};
+      edges.forEach(function (e) { var k = Math.min(e[0], e[1]) + '_' + Math.max(e[0], e[1]); cap[k] = (cap[k] || 0) + e[2]; });
+      function cb(a, b) { return cap[Math.min(a, b) + '_' + Math.max(a, b)] || 0; }
+      var best = Infinity;
+      for (var mask = 0; mask < (1 << R); mask++) {
+        var cut = cb(s, t);
+        for (i = 0; i < R; i++) { var rv = rest[i]; if ((mask >> i) & 1) cut += cb(s, rv); else cut += cb(t, rv); }
+        for (i = 0; i < R; i++) for (var j = i + 1; j < R; j++) if (((mask >> i) & 1) !== ((mask >> j) & 1)) cut += cb(rest[i], rest[j]);
+        if (cut < best) best = cut;
+      }
+      return best;
+    })(n, edges, u, v);
+    var tes = gh.tree.map(function (e) { return e.u + '–' + e.v + '(w=' + e.w + ')'; });
+    return '6 点无向图 8 条边（Gomory–Hu 树 ' + tes.length + ' 条边）\n' +
+      '树边 = [' + tes.join(', ') + ']\n' +
+      '树全局最小割（最小边权）= ' + gh.value + '\n' +
+      '点对 (0,5) 路径最小边（树给出）= ' + pm + ' · 暴力枚举 2^(n−1) 精确最小割 = ' + bf + '\n' +
+      (pm === bf ? '一致 ⇒ 树结构即所有点对最小割的精确紧缩表示' : '❌ 不一致');
+  },
+  radix4FFT: function () {
+    var N = 16, x = [], i;
+    var rng = AXIOM.mulberry32(314);
+    for (i = 0; i < N; i++) x.push({ re: Math.round((rng() * 20 - 10) * 100) / 100, im: Math.round((rng() * 20 - 10) * 100) / 100 });
+    var r4 = AXIOM.radix4FFT(x), ref = AXIOM.dft(x), base = AXIOM.fft(x), w1 = 0, w2 = 0;
+    for (i = 0; i < N; i++) {
+      w1 = Math.max(w1, Math.abs(r4[i].re - ref[i].re), Math.abs(r4[i].im - ref[i].im));
+      w2 = Math.max(w2, Math.abs(r4[i].re - base[i].re), Math.abs(r4[i].im - base[i].im));
+    }
+    function f8(v) { return (v.re.toFixed(3) + (v.im < 0 ? '−' : '+') + Math.abs(v.im).toFixed(3) + 'i'); }
+    return '长度 16 复信号 Radix-4 FFT（基-4 DIT 蝶形，N=4^k 最低乘法档）\n' +
+      'X[0] = ' + f8(r4[0]) + '  X[1] = ' + f8(r4[1]) + '  X[8] = ' + f8(r4[8]) + '\n' +
+      '≡ 朴素 O(n²) DFT 最大差 = ' + w1.toExponential(2) + '\n' +
+      '≙ fft（radix-2）最大差 = ' + w2.toExponential(2);
+  },
+  nutsDiagMass: function () {
+    // 2D 异方差高斯 σ²=[4,1]：对角质量矩阵自适应应把 M 拟合为 diag(Σ)=diag(4,1)
+    function makeGauss(s0, s1) { var i0 = 1 / (s0 * s0), i1 = 1 / (s1 * s1); return { logf: function (q) { return -0.5 * (q[0] * q[0] * i0 + q[1] * q[1] * i1); }, grad: function (q) { return [-q[0] * i0, -q[1] * i1]; } }; }
+    var rng = AXIOM.mulberry32(777), g = makeGauss(2, 1);
+    var res = AXIOM.nutsDiagMass(g.logf, g.grad, [0, 0], 800, rng, { warmup: 2500, eps0: 0.3 });
+    var m0 = res.mass[0], m1 = res.mass[1];
+    var ok = Math.abs(m0 - 4) / 4 < 0.15 && Math.abs(m1 - 1) / 1 < 0.15;
+    return '2D 异方差高斯 σ²=[4,1]（无对角质量时条件数 4，混合偏慢）\n' +
+      'NUTS 对角质量矩阵自适应（Welford warmup）拟合质量矩阵 M = [' + m0.toFixed(3) + ', ' + m1.toFixed(3) + ']\n' +
+      '理论最优对角质量 = 目标协方差对角 Σ = [4, 1]\n' +
+      '拟合误差 = [' + (Math.abs(m0 - 4) / 4 * 100).toFixed(1) + '%, ' + (Math.abs(m1 - 1) / 1 * 100).toFixed(1) + '%] · ' +
+      (ok ? '≈ 目标协方差对角 ⇒ 对角度量自适应成功（病态目标混合效率最大化）' : '❌ 偏差偏大');
   }
   };
   var algoRun = null;

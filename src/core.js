@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.15';
+  var VERSION = '1.3.16';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -4701,6 +4701,186 @@
     return { value: totalFlow, cost: totalCost };
   }
 
+  /* ==================== v1.3.16 算法库扩展六 ==================== */
+  /* ① Gomory–Hu 树：无向图「所有点对最小割」的结构（Gomory & Hu 1961）。
+     经 n−1 次原图最大流构造一棵树：任两点 u,v 间最小割 = 树中 u–v 路径上的最小边权。
+     不变量 ≙ 暴力枚举 2^(n−1) 个 s-t 割（绝对 ground truth），逐对精确相等（整数 0 容差）。 */
+  function _bruteMinCutPair(n, edges, s, t) {                      // 参照：枚举全部 2^(n−2) 个 s-t 割（s 固定一侧、t 另一侧）
+    var rest = [], i;
+    for (i = 0; i < n; i++) if (i !== s && i !== t) rest.push(i);
+    var R = rest.length, cap = {};
+    edges.forEach(function (e) { var k = Math.min(e[0], e[1]) + '_' + Math.max(e[0], e[1]); cap[k] = (cap[k] || 0) + e[2]; });
+    function cb(a, b) { return cap[Math.min(a, b) + '_' + Math.max(a, b)] || 0; }
+    var best = Infinity;
+    for (var mask = 0; mask < (1 << R); mask++) {
+      var cut = cb(s, t);                                          // s–t 边恒跨割（s∈A, t∈B）
+      for (i = 0; i < R; i++) {
+        var rv = rest[i];
+        if ((mask >> i) & 1) cut += cb(s, rv);                     // rv 与 t 同侧：仅 s–rv 跨割
+        else cut += cb(t, rv);                                     // rv 与 s 同侧：仅 t–rv 跨割
+      }
+      for (i = 0; i < R; i++) for (var j = i + 1; j < R; j++) {
+        if (((mask >> i) & 1) !== ((mask >> j) & 1)) cut += cb(rest[i], rest[j]);
+      }
+      if (cut < best) best = cut;
+    }
+    return best;
+  }
+  function gomoryHu(n, edges) {
+    var cap = []; for (var i = 0; i < n; i++) cap.push(new Array(n).fill(0));
+    for (var e = 0; e < edges.length; e++) { var u = edges[e][0], v = edges[e][1], c = edges[e][2]; cap[u][v] += c; cap[v][u] += c; }
+    var nextId = 0;
+    function maxFlowCut(s, t) {                                     // EK + 残差可达集 → min s-t 割（源侧顶点集）
+      var G = cap.map(function (r) { return r.slice(); }), flow = 0;
+      while (true) {
+        var prev = new Array(n).fill(-1), q = [s], head = 0, found = false;
+        while (head < q.length && !found) {
+          var uu = q[head++];
+          for (var v = 0; v < n; v++) if (G[uu][v] > 0 && prev[v] === -1) { prev[v] = uu; if (v === t) { found = true; break; } q.push(v); }
+        }
+        if (!found) break;
+        var f = Infinity; for (var v = t; v !== s; v = prev[v]) f = Math.min(f, G[prev[v]][v]);
+        for (var v = t; v !== s; v = prev[v]) { G[prev[v]][v] -= f; G[v][prev[v]] += f; }
+        flow += f;
+      }
+      var vis = new Array(n).fill(false); vis[s] = true; var st = [s];
+      while (st.length) { var uu = st.pop(); for (var v = 0; v < n; v++) if (G[uu][v] > 0 && !vis[v]) { vis[v] = true; st.push(v); } }
+      return { value: flow, cut: vis };
+    }
+    function makeNode(verts) { return { id: nextId++, verts: verts, adj: [] }; }
+    var all = []; for (var i = 0; i < n; i++) all.push(i);
+    var nodes = [makeNode(all)];
+    while (true) {
+      var S = null;
+      for (var i = 0; i < nodes.length; i++) if (nodes[i].verts.length > 1) { S = nodes[i]; break; }
+      if (!S) break;
+      var s = S.verts[0], t = S.verts[1];
+      var res = maxFlowCut(s, t), w = res.value, cut = res.cut, S1v = [], S2v = [];
+      for (var k = 0; k < S.verts.length; k++) { var vv = S.verts[k]; if (cut[vv]) S1v.push(vv); else S2v.push(vv); }
+      var S1 = makeNode(S1v), S2 = makeNode(S2v);
+      for (var a = 0; a < S.adj.length; a++) {                     // 重路由 S 的边到 S1/S2（依 laminar 性质判侧）
+        var nb = S.adj[a].node, c = S.adj[a].w, side = cut[nb.verts[0]] ? S1 : S2;
+        side.adj.push({ node: nb, w: c });
+        for (var b = 0; b < nb.adj.length; b++) if (nb.adj[b].node === S) { nb.adj[b].node = side; break; }
+      }
+      for (var i = 0; i < nodes.length; i++) if (nodes[i] === S) { nodes[i] = S1; break; }
+      nodes.push(S2);
+      S1.adj.push({ node: S2, w: w }); S2.adj.push({ node: S1, w: w });
+    }
+    var treeEdges = [];                                             // 收集树边（按 id 去重）
+    nodes.forEach(function (nd) { nd.adj.forEach(function (en) { if (nd.id < en.node.id) treeEdges.push({ u: nd.verts[0], v: en.node.verts[0], w: en.w }); }); });
+    function pathMin(u, v) {                                        // 树中 u–v 路径上的最小边权
+      var nu = null, nv = null;
+      nodes.forEach(function (nd) { if (nd.verts.indexOf(u) >= 0) nu = nd; if (nd.verts.indexOf(v) >= 0) nv = nd; });
+      var dist = {}, prevEdge = {}, q = [nu], head = 0; dist[nu.id] = 0;
+      while (head < q.length) { var cur = q[head++]; cur.adj.forEach(function (en) { var other = en.node; if (dist[other.id] === undefined) { dist[other.id] = dist[cur.id] + 1; prevEdge[other.id] = { from: cur.id, w: en.w }; q.push(other); } }); }
+      var minw = Infinity, cur = nv.id;
+      while (cur !== nu.id) { var pe = prevEdge[cur]; if (pe.w < minw) minw = pe.w; cur = pe.from; }
+      return minw;
+    }
+    var value = Infinity;
+    treeEdges.forEach(function (e) { if (e.w < value) value = e.w; });
+    return { tree: treeEdges, pathMin: pathMin, value: (treeEdges.length ? value : 0) };
+  }
+
+  /* ② Radix-4 FFT（Cooley–Tukey 基-4 DIT）：长度 N=4^k 的 DFT 分解为 4 个 N/4 子问题，
+     蝶形复用 radix-2 的 4 点 DFT，运算量低于纯 radix-2。不变量 ≙ 朴素 O(n²) DFT ≙ fft（radix-2）。 */
+  function radix4FFT(x) {
+    var N = x.length;
+    if (N === 1) return [{ re: x[0].re, im: x[0].im }];
+    var m = N / 4, X0 = [], X1 = [], X2 = [], X3 = [], p;
+    for (p = 0; p < m; p++) { X0.push(x[4 * p]); X1.push(x[4 * p + 1]); X2.push(x[4 * p + 2]); X3.push(x[4 * p + 3]); }
+    var Y0 = radix4FFT(X0), Y1 = radix4FFT(X1), Y2 = radix4FFT(X2), Y3 = radix4FFT(X3);
+    var out = []; for (p = 0; p < N; p++) out.push({ re: 0, im: 0 });
+    function mul(a, b) { return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re }; }
+    for (p = 0; p < m; p++) {
+      var theta = -2 * Math.PI * p / N, wr = Math.cos(theta), wi = Math.sin(theta);
+      var w2r = wr * wr - wi * wi, w2i = 2 * wr * wi;
+      var w3r = w2r * wr - w2i * wi, w3i = w2r * wi + w2i * wr;
+      var B = mul(Y1[p], { re: wr, im: wi }), C = mul(Y2[p], { re: w2r, im: w2i }), D = mul(Y3[p], { re: w3r, im: w3i }), A = Y0[p];
+      out[p].re = A.re + B.re + C.re + D.re;          out[p].im = A.im + B.im + C.im + D.im;
+      out[p + m].re = A.re + B.im - C.re - D.im;      out[p + m].im = A.im - B.re - C.im + D.re;
+      out[p + 2 * m].re = A.re - B.re + C.re - D.re;  out[p + 2 * m].im = A.im - B.im + C.im - D.im;
+      out[p + 3 * m].re = A.re - B.im - C.re + D.im;  out[p + 3 * m].im = A.im + B.re - C.im - D.re;
+    }
+    return out;
+  }
+
+  /* ③ NUTS 对角质量矩阵自适应（Hoffman–Gelman 2014 双平均步长 + Stan 对角质量矩阵 warmup 自适应）：
+     在 warmup 期内用 Welford 估计目标协方差对角，将对角质量矩阵 M 设为 diag(Σ)（最优对角度量），
+     使病态/异方差目标的混合效率最大化。不变量：拟合质量矩阵 ≈ 目标协方差对角（多 seed 稳健）。 */
+  function nutsDiagMass(logf, gradLogf, x0, N, rng, opts) {
+    opts = opts || {};
+    var d = x0.length, delta = (opts.delta != null) ? opts.delta : 0.65, maxDepth = opts.maxDepth || 10;
+    var t0 = 10, gamma = 0.05, kappa = 0.75, warmup = opts.warmup || 2500, eps0 = opts.eps0 || 0.3;
+    var mu = Math.log(10 * eps0), m = 0, Hbar = 0, logEps = Math.log(eps0), logEpsBar = logEps;
+    var x = x0.slice(), grad0 = gradLogf(x), mass = new Array(d).fill(1), invMass = new Array(d).fill(1);
+    var mean = new Array(d).fill(0), M2 = new Array(d).fill(0), count = 0;
+    function welford(s) { count++; for (var i = 0; i < d; i++) { var dl = s[i] - mean[i]; mean[i] += dl / count; M2[i] += dl * (s[i] - mean[i]); } }
+    function kinetic(p) { var s = 0; for (var i = 0; i < d; i++) s += p[i] * p[i] * invMass[i]; return 0.5 * s; }
+    function turn(diff, pP, pM) { var dpP = 0, dpM = 0; for (var i = 0; i < d; i++) { dpP += diff[i] * pP[i]; dpM += diff[i] * pM[i]; } return (dpP < 0) || (dpM < 0); }
+    function leapfrog(q, p, g, eps) {
+      var q1 = q.slice(), p1 = p.slice(), i;
+      for (i = 0; i < d; i++) p1[i] += 0.5 * eps * g[i];
+      for (i = 0; i < d; i++) q1[i] += eps * invMass[i] * p1[i];
+      var g1 = gradLogf(q1);
+      for (i = 0; i < d; i++) p1[i] += 0.5 * eps * g1[i];
+      return { q: q1, p: p1, U: -logf(q1), grad: g1 };
+    }
+    function buildTree(z, u, v, depth, eps) {
+      if (depth === 0) {
+        var z1 = leapfrog(z.q, z.p, z.grad, v * eps); z1.H0 = z.H0;
+        var Hp = z1.U + kinetic(z1.p), nn = (Math.log(u) <= -Hp) ? 1 : 0, alpha = Math.min(1, Math.exp(-Hp + z.H0));
+        return { zmin: z1, zmax: z1, znew: z1, n: nn, s: 1, alpha: alpha, nalpha: 1 };
+      }
+      var t = buildTree(z, u, v, depth - 1, eps);
+      if (t.s === -1) return t;
+      var t2 = (v === -1) ? buildTree(t.zmin, u, v, depth - 1, eps) : buildTree(t.zmax, u, v, depth - 1, eps);
+      var znew;
+      if (t2.n > 0 && (t.n + t2.n) > 0 && rng() < t2.n / (t.n + t2.n)) znew = t2.znew; else znew = t.znew;
+      var nn = t.n + t2.n, alpha = t.alpha + t2.alpha, nalpha = t.nalpha + t2.nalpha, s = t.s * t2.s, zmin, zmax;
+      if (v === -1) { zmin = t2.zmin; zmax = t.zmax; } else { zmin = t.zmin; zmax = t2.zmax; }
+      var diff = _vecSub(zmax.q, zmin.q);
+      if (turn(diff, zmax.p, zmin.p)) s = -1;
+      return { zmin: zmin, zmax: zmax, znew: znew, n: nn, s: s, alpha: alpha, nalpha: nalpha };
+    }
+    function runTrajectory(eps) {
+      var U0 = -logf(x), p0 = [], i;
+      for (i = 0; i < d; i++) p0.push(Math.sqrt(mass[i]) * gaussRand(rng));
+      var H0 = U0 + kinetic(p0), u = rng() * Math.exp(-H0);
+      var z = { q: x.slice(), p: p0.slice(), U: U0, grad: grad0.slice(), H0: H0 }, zmin = z, zmax = z, n = 1, s = 1, depth = 0, alpha = 0, nalpha = 0;
+      var xn = x.slice(), Un = U0, gn = grad0.slice(), hasNew = false;
+      while (s === 1 && depth < maxDepth) {
+        var v = (rng() < 0.5) ? -1 : 1;
+        var tree = (v === -1) ? buildTree(zmin, u, v, depth, eps) : buildTree(zmax, u, v, depth, eps);
+        if (v === -1) zmin = tree.zmin; else zmax = tree.zmax;
+        alpha += tree.alpha; nalpha += tree.nalpha;
+        if (tree.s === 1) {
+          if (tree.n > 0) {
+            if (!hasNew || rng() < tree.n / (n + tree.n)) { xn = tree.znew.q.slice(); Un = tree.znew.U; gn = tree.znew.grad.slice(); hasNew = true; }
+            n += tree.n;
+          }
+        } else s = -1;
+        var diff = _vecSub(zmax.q, zmin.q);
+        if (turn(diff, zmax.p, zmin.p)) s = -1;
+        depth++;
+      }
+      return { x: xn, U: Un, grad: gn, alpha: nalpha > 0 ? alpha / nalpha : 1, s: s };
+    }
+    for (var w = 0; w < warmup; w++) {
+      var r = runTrajectory(Math.exp(logEps)); x = r.x; grad0 = r.grad; welford(x); m++;
+      Hbar = (1 - 1 / (m + t0)) * Hbar + (1 / (m + t0)) * (delta - r.alpha);
+      logEps = mu - (Math.sqrt(m) / gamma) * Hbar; logEps = Math.max(-7, Math.min(1.1, logEps));
+      logEpsBar = Math.pow(m, -kappa) * logEps + (1 - Math.pow(m, -kappa)) * logEpsBar; logEpsBar = Math.max(-7, Math.min(1.1, logEpsBar));
+    }
+    var massHat = [];
+    for (var i = 0; i < d; i++) { var vv = (count > 1) ? (M2[i] / (count - 1)) : 1; if (vv < 1e-6) vv = 1e-6; massHat.push(vv); }
+    for (var i = 0; i < d; i++) { mass[i] = massHat[i]; invMass[i] = 1 / mass[i]; }
+    var epsFinal = Math.exp(logEpsBar), samples = [];
+    for (var c = 0; c < N; c++) { var r2 = runTrajectory(epsFinal); x = r2.x; grad0 = r2.grad; samples.push(x.slice()); }
+    return { samples: samples, eps: epsFinal, mass: massHat };
+  }
+
   var checks = [];
   function check(name, tol, run) { checks.push({ name: name, tol: tol, run: run }); }
 
@@ -8046,6 +8226,48 @@
     return worst;
   });
 
+  /* ⑤ Gomory–Hu 树 ≡ 暴力枚举 2^(n−1) 最小 s-t 割（所有点对路径最小边 == 精确最小割，120 图） */
+  check('gomoryHu：Gomory–Hu 树 ≡ 暴力枚举 2^(n−1) 最小 s-t 割（所有点对路径最小边 == 精确最小割，120 图）', 0, function () {
+    var worst = 0, tested = 0, i, k;
+    for (var g = 0; g < 120; g++) {
+      var rng = mulberry32(9000 + g), n = 5 + Math.floor(rng() * 4), eg = [], seen = {};
+      for (i = 1; i < n; i++) { var u = Math.floor(rng() * i), key = Math.min(i, u) + '_' + Math.max(i, u); seen[key] = 1; eg.push([u, i, 1 + Math.floor(rng() * 9)]); }
+      var extra = n + Math.floor(rng() * n);
+      for (k = 0; k < extra; k++) { var a = Math.floor(rng() * n), b = Math.floor(rng() * n); if (a === b) continue; var key = Math.min(a, b) + '_' + Math.max(a, b); if (seen[key]) continue; seen[key] = 1; eg.push([a, b, 1 + Math.floor(rng() * 9)]); }
+      tested++;
+      var gh = gomoryHu(n, eg);
+      for (var u2 = 0; u2 < n; u2++) for (var v2 = u2 + 1; v2 < n; v2++) {
+        var bf = _bruteMinCutPair(n, eg, u2, v2);
+        worst = Math.max(worst, Math.abs(gh.pathMin(u2, v2) - bf));
+      }
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ⑥ Radix-4 FFT ≡ 朴素 DFT ≙ fft（radix-2）（N = 4/16/64/256） */
+  check('radix4FFT：Radix-4 FFT ≡ 朴素 DFT ≙ fft（radix-2）（N = 4/16/64/256）', 1e-9, function () {
+    var worst = 0, k, i, sizes = [4, 16, 64, 256];
+    for (var s = 0; s < sizes.length; s++) {
+      var N = sizes[s], rng = mulberry32(700 + N), inp = [];
+      for (i = 0; i < N; i++) inp.push({ re: rng() * 2 - 1, im: rng() * 2 - 1 });
+      var A = radix4FFT(inp), B = dft(inp), C = fft(inp);
+      for (k = 0; k < N; k++) worst = Math.max(worst, Math.abs(A[k].re - B[k].re), Math.abs(A[k].im - B[k].im), Math.abs(A[k].re - C[k].re), Math.abs(A[k].im - C[k].im));
+    }
+    return worst;
+  });
+
+  /* ⑦ NUTS 对角质量矩阵自适应：拟合质量矩阵 ≡ 目标协方差对角（2D 异方差 σ²=[4,1]，20 seed 稳健） */
+  check('nutsDiagMass：对角质量矩阵自适应（Stan warmup）—— 拟合质量矩阵 ≡ 目标协方差对角（2D 异方差 σ²=[4,1]，20 seed 稳健）', 0.1, function () {
+    function makeGauss2(s0, s1) { var inv0 = 1 / (s0 * s0), inv1 = 1 / (s1 * s1); return { logf: function (q) { return -0.5 * (q[0] * q[0] * inv0 + q[1] * q[1] * inv1); }, grad: function (q) { return [-q[0] * inv0, -q[1] * inv1]; } }; }
+    var trueVar = [4, 1], seeds = 20, rel = 0, cnt = 0;
+    for (var sd = 0; sd < seeds; sd++) {
+      var rng = mulberry32(11000 + sd), g = makeGauss2(2, 1), res = nutsDiagMass(g.logf, g.grad, [0, 0], 600, rng, { warmup: 2500, eps0: 0.3 });
+      var e = 0; for (var i = 0; i < 2; i++) e += Math.abs(res.mass[i] - trueVar[i]) / trueVar[i];
+      rel += e / 2; cnt++;
+    }
+    return cnt === 0 ? 1 : rel / seeds;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -8193,6 +8415,10 @@
     blossomMatching: blossomMatching,
     splitRadixFFT: splitRadixFFT,
     stoerWagner: stoerWagner,
+    /* v1.3.16 算法库扩展六 */
+    gomoryHu: gomoryHu,
+    radix4FFT: radix4FFT,
+    nutsDiagMass: nutsDiagMass,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
