@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(48) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(51) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -447,7 +447,11 @@
     /* v1.3.18 算法库扩展八 */
     { id: 'globalMinCutPR', name: 'Push-Relabel 全局最小割', src: 'Goldberg (1985/1998)', api: 'AXIOM.globalMinCutPR', inv: 'n−1 次 s-t 最小割收缩 ≙ stoerWagner（不同算法，全局最小割 0 精确）', chk: ['globalMinCutPR：'] },
     { id: 'twoSat', name: '2-SAT 可满足性', src: 'Aspvall–Plass–Tarjan (1979)', api: 'AXIOM.twoSat', inv: '蕴含图 SCC：SAT ⇔ 变量与其否定不同 SCC ≙ 暴力枚举 2ⁿ 指派（决策 0 精确）', chk: ['twoSat：'] },
-    { id: 'bridgesArticulation', name: '桥与割点', src: 'Tarjan (1974)', api: 'AXIOM.bridgesArticulation', inv: 'DFS disc/low：桥 low[v]>disc[u]；割点 low[v]≥disc[u] ≙ 暴力删边/删点连通分量（集合 0 精确）', chk: ['bridgesArticulation：'] }
+    { id: 'bridgesArticulation', name: '桥与割点', src: 'Tarjan (1974)', api: 'AXIOM.bridgesArticulation', inv: 'DFS disc/low：桥 low[v]>disc[u]；割点 low[v]≥disc[u] ≙ 暴力删边/删点连通分量（集合 0 精确）', chk: ['bridgesArticulation：'] },
+    /* v1.3.19 算法库扩展九 */
+    { id: 'auctionAssignment', name: '拍卖算法（指派问题）', src: 'Bertsekas (1981)', api: 'AXIOM.auctionAssignment', inv: 'ε-标度价格拍卖（每相重启匹配、保留价格）≡ hungarianMaxWeight(−cost) ≙ 暴力排列（整数 0 精确）', chk: ['auctionAssignment：'] },
+    { id: 'topTradingCycles', name: 'Top Trading Cycles', src: 'Shapley & Scarf (1974)', api: 'AXIOM.topTradingCycles', inv: '顶交易循环 = 唯一弱核分配（严格偏好，Roth–Postlewaite 1977）且在强核中 ≙ 暴力枚举 n! 配置（0 精确）', chk: ['topTradingCycles：'] },
+    { id: 'simplexLP', name: '两阶段单纯形 LP', src: 'Dantzig (1947)；Bland (1977)', api: 'AXIOM.simplexLP', inv: '≤/≥/= 混合约束 + Bland 防循环；最优目标 ≡ 暴力顶点枚举（约束等式组合，1e-9 容差）', chk: ['simplexLP：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -939,6 +943,86 @@
       '桥 = [' + res.bridges.map(function (e) { return e[0] + '-' + e[1]; }).join(', ') + ']\n' +
       '割点 = [' + res.articulations.join(', ') + ']\n' +
       (okB && okA ? '删桥/删点均使连通分量 +1 ⇒ 判定与暴力一致（0 精确）' : '❌ 不一致');
+  },
+  auctionAssignment: function () {
+    // 5×5 整数费用矩阵：ε-标度拍卖 ≙ Hungarian（库内另一种算法）
+    var cost = [[9,2,7,8,5],[4,9,6,3,7],[8,5,3,9,2],[6,3,8,5,9],[5,7,4,6,8]];
+    var r = AXIOM.auctionAssignment(cost);
+    var h = AXIOM.hungarianMaxWeight(cost.map(function (row) { return row.map(function (v) { return -v; }); }));
+    var ok = (r.totalCost === -h.value);
+    return '5×5 整数费用矩阵（指派问题：最小总费用）\n' +
+      '拍卖算法匹配（人→物）= [' + r.assign.join(',') + '] · 总费用 = ' + r.totalCost + '\n' +
+      'Hungarian（位势法，库内独立实现）= ' + (-h.value) + '\n' +
+      (ok ? '两种独立算法一致 ⇒ ε-标度价格拍卖正确（整数 0 精确）' : '❌ 不一致');
+  },
+  topTradingCycles: function () {
+    // 5 人房屋市场：禀赋置换 + 严格偏好；TTC 输出 = 唯一弱核分配（暴力枚举 5! 配置核扫描）
+    var endow = [2, 0, 4, 1, 3];
+    var prefs = [[4,3,2,1,0],[3,1,0,4,2],[0,2,4,3,1],[1,4,3,0,2],[2,0,3,1,4]];
+    var n = 5, r = AXIOM.topTradingCycles(endow, prefs);
+    var rank = [];
+    for (var i = 0; i < n; i++) { var rr = {}; for (var k = 0; k < n; k++) rr[prefs[i][k]] = k; rank.push(rr); }
+    function perms(k) { var res = [], a = [], used = []; for (var x = 0; x < k; x++) used.push(false); (function rec() { if (a.length === k) { res.push(a.slice()); return; } for (var y = 0; y < k; y++) { if (used[y]) continue; used[y] = true; a.push(y); rec(); used[y] = false; a.pop(); } })(); return res; }
+    function blocked(alloc, weak) {
+      for (var mask = 1; mask < (1 << n); mask++) {
+        var S = []; for (var i2 = 0; i2 < n; i2++) if (mask & (1 << i2)) S.push(i2);
+        var endowH = S.map(function (a) { return endow[a]; });
+        var ps = perms(S.length);
+        for (var pi = 0; pi < ps.length; pi++) {
+          var allW = true, anyS = false, allS = true;
+          for (var t = 0; t < S.length; t++) {
+            var cu = alloc[S[t]], ne = endowH[ps[pi][t]];
+            if (rank[S[t]][ne] > rank[S[t]][cu]) allW = false;
+            if (rank[S[t]][ne] < rank[S[t]][cu]) anyS = true; else allS = false;
+          }
+          if (weak ? (allW && anyS) : allS) return true;
+        }
+      }
+      return false;
+    }
+    var bijection = new Set(r.alloc).size === n;
+    var ir = true; for (i = 0; i < n; i++) if (rank[i][r.alloc[i]] > rank[i][endow[i]]) ir = false;
+    var noBlock = !blocked(r.alloc, false);
+    // 弱核唯一性：无其他配置 weakly-unblocked
+    var unique = true, ps2 = perms(n);
+    for (var p = 0; p < ps2.length; p++) {
+      var al = ps2[p], same = al.every(function (v, t) { return v === r.alloc[t]; });
+      if (same) continue;
+      var ir2 = true; for (var i3 = 0; i3 < n; i3++) if (rank[i3][al[i3]] > rank[i3][endow[i3]]) { ir2 = false; break; }
+      if (ir2 && !blocked(al, true)) { unique = false; break; }
+    }
+    var ok = bijection && ir && noBlock && unique;
+    return '5 人房屋市场（禀赋置换 + 严格偏好）\n' +
+      '禀赋（人→房）= [' + endow.join(',') + '] · TTC 配置 = [' + r.alloc.join(',') + ']\n' +
+      '双射 = ' + bijection + ' · 个人理性 = ' + ir + ' · 无强阻塞联盟 = ' + noBlock + ' · 弱核唯一 = ' + unique + '\n' +
+      (ok ? '⇒ TTC = 唯一弱核分配（Roth–Postlewaite 1977，0 精确）' : '❌ 与暴力核扫描不一致');
+  },
+  simplexLP: function () {
+    // max 3x₀+2x₁  s.t. x₀+x₁≤4 · x₀+3x₁≥3 · x₀−x₁=1 · 0≤x≤5（混合方向）
+    var c = [3, 2], A = [[1, 1], [1, 3], [1, -1]], b = [4, 3, 1], senses = ['le', 'ge', 'eq'], U = 5;
+    var r = AXIOM.simplexLP(c, A, b, senses, { upper: U });
+    // 暴力顶点枚举（约束取等式组合）
+    var rows = A.map(function (row, i) { return [row.slice(), b[i]]; });
+    for (var j = 0; j < 2; j++) { var e1 = [0, 0]; e1[j] = 1; rows.push([e1, 0]); var e2 = [0, 0]; e2[j] = 1; rows.push([e2, U]); }
+    var best = -Infinity;
+    for (var a = 0; a < rows.length; a++) for (var bb = a + 1; bb < rows.length; bb++) {
+      var sol = AXIOM.solveLinear([rows[a][0], rows[bb][0]], [rows[a][1], rows[bb][1]]);
+      if (!sol) continue;
+      var ok = true;
+      for (var i = 0; i < A.length; i++) {
+        var s = A[i][0] * sol[0] + A[i][1] * sol[1];
+        if (senses[i] === 'le' && s > b[i] + 1e-7) ok = false;
+        if (senses[i] === 'ge' && s < b[i] - 1e-7) ok = false;
+        if (senses[i] === 'eq' && Math.abs(s - b[i]) > 1e-7) ok = false;
+      }
+      if (sol[0] < -1e-7 || sol[0] > U + 1e-7 || sol[1] < -1e-7 || sol[1] > U + 1e-7) ok = false;
+      if (ok) best = Math.max(best, c[0] * sol[0] + c[1] * sol[1]);
+    }
+    var agree = (r.status === 'optimal' && Math.abs(r.obj - best) <= 1e-9);
+    return 'LP：max 3x₀+2x₁  s.t. x₀+x₁≤4 · x₀+3x₁≥3 · x₀−x₁=1 · 0≤x≤5\n' +
+      '两阶段单纯形（Bland 防循环）解 x = [' + r.x.map(function (v) { return v.toFixed(4); }).join(', ') + '] · 最优值 = ' + r.obj.toFixed(6) + '\n' +
+      '暴力顶点枚举（15 个等式组合）最优值 = ' + best.toFixed(6) + '\n' +
+      (agree ? '算法与暴力枚举一致 ⇒ 两阶段单纯形正确（混合 ≤/≥/= 方向）' : '❌ 不一致');
   }
   };
   var algoRun = null;
