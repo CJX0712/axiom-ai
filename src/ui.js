@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(60) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(63) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -462,7 +462,11 @@
     { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] },
     { id: 'ahoCorasick', name: 'Aho–Corasick 多模式匹配', src: 'Aho & Corasick (1975)', api: 'AXIOM.ahoCorasick', inv: '匹配集 ≡ 暴力逐起点逐模式扫描（0 精确）+ fail 深度严格递减 + 转移 ≡ 最长后缀 + out ≡ 后缀模式集', chk: ['ahoCorasick：'] },
     { id: 'cdclSat', name: 'CDCL SAT 求解（1UIP 学习）', src: 'Marques-Silva & Sakallah (1996)；GRASP/Chaff (2001)', api: 'AXIOM.cdclSat', inv: 'SAT/UNSAT ≡ 暴力 2ⁿ 枚举 ≡ 纯 DPLL + 模型合法 + 学习子句被原公式蕴涵 + 鸽巢原理必 UNSAT（0 精确）', chk: ['cdclSat：'] },
-    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] }
+    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] },
+    /* v1.3.23 算法库扩展十三 */
+    { id: 'maxWeightMatching', name: 'Edmonds 带权带花树（一般图最大权匹配）', src: 'Edmonds (1965)；Gabow (1985)；Kolmogorov (2009)', api: 'AXIOM.maxWeightMatching', inv: '最大权匹配 ≡ 暴力枚举全部匹配子集（n≤10，0 精确）+ 权全 1 退化 ≡ blossomMatching 最大基数 + 匹配合法（对称对合）', chk: ['maxWeightMatching：'] },
+    { id: 'arithmeticCoding', name: '算术编码（无损压缩）', src: 'Witten–Neal–Cleary (1987)', api: 'AXIOM.arithmeticEncode / AXIOM.arithmeticDecode', inv: 'round-trip ≡ 原消息（0 误差）+ 码长 ∈ [理想−1，理想+2]（Shannon 界）+ Σp=1 + 高概率符号大幅压缩', chk: ['arithmeticEncode/arithmeticDecode：'] },
+    { id: 'dct', name: '正交归一 DCT-II / IDCT', src: 'Ahmed–Natarajan–Rao (1974)；JPEG/MPEG', api: 'AXIOM.dct / AXIOM.idct', inv: 'IDCT(DCT(x)) ≡ x（完美重构 ≤1e-12）+ CᵀC=I 基正交归一 + Parseval 能量守恒 + 直流分量 X₀=√(1/N)·Σx', chk: ['dct/idct：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1280,6 +1284,58 @@
       '后缀嵌套："NANA" ' + mkr.count + ' 次（区间 [' + mkr.lo + ', ' + mkr.hi + ') ⊂ ANA 区间）· 不命中串 "ZZZ" ' + nkr.count + ' 次（C 表缺键即返回空）\n' +
       (B.bwt === bwtB && inv === t && got.positions.join(',') === brute.join(',') && lfOK ?
         '变换 / 逆变换 / 检索三路与暴力一致（0 精确）' : '❌ 不一致');
+  },
+  maxWeightMatching: function () {
+    var n = 6, edges = [[0, 1, 3], [0, 2, 5], [1, 2, 2], [1, 3, 4], [2, 4, 7], [3, 4, 6], [3, 5, 8], [4, 5, 1]], i;
+    var r = AXIOM.maxWeightMatching(n, edges);          // 6 顶点一般图（含奇环 0-1-2，触发带花树收缩）
+    function brute(nv, eg) {                             // 暴力：枚举全部匹配子集取最大权
+      var m = eg.length;
+      function rec(idx, occ) {
+        if (idx === m) return 0;
+        var skip = rec(idx + 1, occ), bu = eg[idx][0], bv = eg[idx][1], bw = eg[idx][2], take = 0;
+        if (!(occ & (1 << bu)) && !(occ & (1 << bv))) take = bw + rec(idx + 1, occ | (1 << bu) | (1 << bv));
+        return take > skip ? take : skip;
+      }
+      return rec(0, 0);
+    }
+    var bf = brute(n, edges), pairs = [];
+    for (i = 0; i < n; i++) if (r.match[i] !== -1 && i < r.match[i]) pairs.push(i + '–' + r.match[i]);
+    var deg = AXIOM.blossomMatching(n, edges.map(function (e) { return [e[0], e[1]]; })).size;
+    return '6 顶点一般图（8 条边，奇环 0-1-2 触发带花树收缩）\n' +
+      '最大权匹配对 = [' + pairs.join(', ') + '] · 总权 = ' + r.weight + '\n' +
+      '暴力枚举全部匹配子集 → 最大权 = ' + bf + ' ⇒ 一致 = ' + (r.weight === bf) + '\n' +
+      '权全 1 退化 ≡ blossomMatching 最大基数 = ' + deg + ' 对（1 个顶点未匹配）\n' +
+      (r.weight === bf ? '原始-对偶带权带花树 ≙ 暴力 ground truth（0 精确）' : '❌ 不一致');
+  },
+  arithmeticCoding: function () {
+    var freq = [9, 3, 1], syms = [0, 0, 0, 1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0], i;
+    var T = freq.reduce(function (a, b) { return a + b; }, 0);
+    var enc = AXIOM.arithmeticEncode(syms, freq), dec = AXIOM.arithmeticDecode(enc.lo, enc.length, freq);
+    var ok = dec.length === syms.length && dec.every(function (v, idx) { return v === syms[idx]; });
+    var bits = enc.denom.toString(2).length - enc.width.toString(2).length + 1, ideal = 0, naive = syms.length * Math.log2(3);
+    for (i = 0; i < syms.length; i++) ideal += -Math.log2(freq[syms[i]] / T);
+    return '信源分布 freq = [' + freq.join(', ') + ']（p = ' + freq.map(function (f) { return (f / T).toFixed(3); }).join(' / ') + '）\n' +
+      '消息（' + syms.length + ' 符号）= [' + syms.join(',') + ']\n' +
+      '编码区间下界 lo = ' + enc.lo.toString() + '（BigInt）· 区间宽度 Πp = ' + enc.width + ' / ' + enc.denom + '\n' +
+      '解码 round-trip ≡ 原消息 = ' + ok + '\n' +
+      '码长 ≈ ' + bits + ' bits · 理想（Shannon）= ' + ideal.toFixed(2) + ' bits · 朴素 3 符号定长 = ' + naive.toFixed(2) + ' bits\n' +
+      '压缩比 = ' + (naive / bits).toFixed(2) + '× · 码长 ∈ [理想−1, 理想+2] = ' + (bits >= ideal - 1 && bits <= ideal + 2);
+  },
+  dct: function () {
+    var x = [1, 2, 3, 4, 3, 2, 1, 0], N = x.length, i, a, b, k;
+    var X = AXIOM.dct(x), xr = AXIOM.idct(X), rec = 0, orth = 0, e1 = 0, e2 = 0, sum = 0;
+    for (i = 0; i < N; i++) rec = Math.max(rec, Math.abs(xr[i] - x[i]));
+    for (a = 0; a < N; a++) for (b = 0; b < N; b++) {
+      var ca = a === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), cb = b === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), dot = 0;
+      for (k = 0; k < N; k++) dot += ca * cb * Math.cos(Math.PI * (2 * k + 1) * a / (2 * N)) * Math.cos(Math.PI * (2 * k + 1) * b / (2 * N));
+      orth = Math.max(orth, Math.abs(dot - (a === b ? 1 : 0)));
+    }
+    for (i = 0; i < N; i++) { e1 += x[i] * x[i]; e2 += X[i] * X[i]; sum += x[i]; }
+    return '信号 x = [' + x.join(', ') + ']（N = ' + N + '）\n' +
+      'DCT-II 谱 X = [' + X.map(function (v) { return v.toFixed(4); }).join(', ') + ']\n' +
+      '直流分量 X₀ = ' + X[0].toFixed(6) + ' = √(1/' + N + ')·Σx = ' + (Math.sqrt(1 / N) * sum).toFixed(6) + '\n' +
+      '完美重构 ‖IDCT(DCT(x)) − x‖∞ = ' + rec.toExponential(2) + ' · 基正交性 ‖CᵀC − I‖∞ = ' + orth.toExponential(2) + '\n' +
+      'Parseval 能量守恒 ‖x‖² = ' + e1.toFixed(4) + ' ≡ ‖X‖² = ' + e2.toFixed(4) + '（差 ' + Math.abs(e1 - e2).toExponential(2) + '）';
   }
   };
   var algoRun = null;

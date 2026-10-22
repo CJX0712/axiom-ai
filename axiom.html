@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.22';
+  var VERSION = '1.3.23';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -10363,6 +10363,329 @@
     return tested === 0 ? 1 : worst;
   });
 
+  /* ==================== v1.3.23 算法库扩展十三 ==================== */
+
+  /* ---------- ① Edmonds 带权带花树（最大权匹配，一般图；Edmonds 1965 / Gabow / Kolmogorov 2009 Blossom V 思想）
+       原始-对偶：lab 为对偶变量，dist(e)=lab[u]+lab[v]−2w；带紧边 dist=0 时增广，遇奇环收缩为花（blossom），
+       增广后按花内结构（flower/get_pr/rotate）展开恢复匹配。移植自 e-maxx 加权 blossom（UOJ #81 验证实现）。
+       不变量 ≙ 暴力枚举全部匹配子集（n≤10，0 精确）+ 权全 1 退化 ≡ blossomMatching 最大基数 */
+  function maxWeightMatching(n, edges) {
+    var M = 2 * n, INF = 1e18, i, u, v, w, U, V, W;
+    function mk2D(sz) { var a = new Array(sz); for (var i2 = 0; i2 < sz; i2++) a[i2] = new Array(sz); return a; }
+    var g = mk2D(M + 1);
+    for (u = 0; u <= M; u++) for (v = 0; v <= M; v++) g[u][v] = { u: u, v: v, w: 0 };
+    var match = new Array(M + 1).fill(0), slack = new Array(M + 1).fill(0), st = new Array(M + 1).fill(0);
+    var pa = new Array(M + 1).fill(0), Sarr = new Array(M + 1).fill(0), vis = new Array(M + 1).fill(0), lab = new Array(M + 1).fill(0);
+    var flower_from = mk2D(M + 1);
+    for (u = 0; u <= M; u++) for (v = 0; v <= M; v++) flower_from[u][v] = 0;
+    var flower = new Array(M + 1);
+    for (i = 0; i <= M; i++) flower[i] = [];
+    var n_x = n, q = [], qh = 0;
+    function e(uu, vv, ww) { return { u: uu, v: vv, w: ww }; }
+    function dist(edge) { return lab[edge.u] + lab[edge.v] - edge.w * 2; }
+    function update_slack(uu, x) { if (!slack[x] || dist(g[uu][x]) < dist(g[slack[x]][x])) slack[x] = uu; }
+    function set_slack(x) {
+      slack[x] = 0;
+      for (var uu = 1; uu <= n; uu++) if (g[uu][x].w > 0 && st[uu] !== x && Sarr[st[uu]] === 0) update_slack(uu, x);
+    }
+    function q_push(x) { if (x <= n) { q.push(x); return; } for (var k = 0; k < flower[x].length; k++) q_push(flower[x][k]); }
+    function set_st(x, b) { st[x] = b; if (x <= n) return; for (var k = 0; k < flower[x].length; k++) set_st(flower[x][k], b); }
+    function get_pr(b, xr) {
+      var fb = flower[b], pr = fb.indexOf(xr);
+      if (pr % 2 === 1) { var tail = fb.slice(1); tail.reverse(); flower[b] = [fb[0]].concat(tail); return fb.length - pr; }
+      return pr;
+    }
+    function set_match(uu, vv) {
+      match[uu] = g[uu][vv].v;
+      if (uu <= n) return;
+      var e2 = g[uu][vv], xr = flower_from[uu][e2.u], pr = get_pr(uu, xr);
+      for (var k = 0; k < pr; k++) set_match(flower[uu][k], flower[uu][k ^ 1]);
+      set_match(xr, vv);
+      var fb = flower[uu], rot = fb.splice(0, pr);
+      for (var k2 = 0; k2 < rot.length; k2++) fb.push(rot[k2]);
+    }
+    function augment(uu, vv) {
+      var xnv = st[match[uu]];
+      set_match(uu, vv);
+      if (!xnv) return;
+      set_match(xnv, st[pa[xnv]]);
+      augment(st[pa[xnv]], xnv);
+    }
+    function get_lca(uu, vv) {
+      var t = (get_lca._t = (get_lca._t || 0) + 1);
+      while (uu || vv) {
+        if (uu === 0) { var sw = uu; uu = vv; vv = sw; continue; }
+        if (vis[uu] === t) return uu;
+        vis[uu] = t;
+        uu = st[match[uu]];
+        if (uu) uu = st[pa[uu]];
+        var sw2 = uu; uu = vv; vv = sw2;
+      }
+      return 0;
+    }
+    function add_blossom(uu, lca, vv) {
+      var b = n + 1;
+      while (b <= n_x && st[b]) b++;
+      if (b > n_x) n_x++;
+      lab[b] = 0; Sarr[b] = 0; match[b] = match[lca];
+      flower[b].length = 0; flower[b].push(lca);
+      var x, y;
+      x = uu;
+      while (x !== lca) { y = st[match[x]]; flower[b].push(x); flower[b].push(y); q_push(y); x = st[pa[y]]; }
+      var tail = flower[b].slice(1); tail.reverse(); flower[b] = [flower[b][0]].concat(tail);
+      x = vv;
+      while (x !== lca) { y = st[match[x]]; flower[b].push(x); flower[b].push(y); q_push(y); x = st[pa[y]]; }
+      set_st(b, b);
+      for (var bx = 1; bx <= n_x; bx++) { g[b][bx].w = 0; g[bx][b].w = 0; }
+      for (var bx2 = 1; bx2 <= n; bx2++) flower_from[b][bx2] = 0;
+      for (var i2 = 0; i2 < flower[b].length; i2++) {
+        var xs = flower[b][i2];
+        for (var xx = 1; xx <= n_x; xx++)
+          if (g[b][xx].w === 0 || dist(g[xs][xx]) < dist(g[b][xx])) { g[b][xx] = e(g[xs][xx].u, g[xs][xx].v, g[xs][xx].w); g[xx][b] = e(g[xx][xs].u, g[xx][xs].v, g[xx][xs].w); }
+        for (var xx2 = 1; xx2 <= n; xx2++) if (flower_from[xs][xx2]) flower_from[b][xx2] = xs;
+      }
+      set_slack(b);
+    }
+    function expand_blossom(b) {
+      for (var k = 0; k < flower[b].length; k++) set_st(flower[b][k], flower[b][k]);
+      var xr = flower_from[b][g[b][pa[b]].u], pr = get_pr(b, xr);
+      for (var j = 0; j < pr; j += 2) {
+        var xs = flower[b][j], xns = flower[b][j + 1];
+        pa[xs] = g[xns][xs].u; Sarr[xs] = 1; Sarr[xns] = 0; slack[xs] = 0; set_slack(xns); q_push(xns);
+      }
+      Sarr[xr] = 1; pa[xr] = pa[b];
+      for (var k2 = pr + 1; k2 < flower[b].length; k2++) { var xs2 = flower[b][k2]; Sarr[xs2] = -1; set_slack(xs2); }
+      st[b] = 0;
+    }
+    function on_found_edge(edge) {
+      var u2 = st[edge.u], v2 = st[edge.v];
+      if (Sarr[v2] === -1) {
+        pa[v2] = edge.u; Sarr[v2] = 1;
+        var nu = st[match[v2]]; slack[v2] = slack[nu] = 0; Sarr[nu] = 0; q_push(nu);
+      } else if (Sarr[v2] === 0) {
+        var lca = get_lca(u2, v2);
+        if (!lca) { augment(u2, v2); augment(v2, u2); return 1; }
+        else add_blossom(u2, lca, v2);
+      }
+      return 0;
+    }
+    function matching() {
+      for (var xi = 1; xi <= n_x; xi++) { Sarr[xi] = -1; slack[xi] = 0; }
+      q.length = 0; qh = 0;
+      for (var x = 1; x <= n_x; x++) if (st[x] === x && !match[x]) { pa[x] = 0; Sarr[x] = 0; q_push(x); }
+      if (q.length === 0) return 0;
+      for (; ;) {
+        while (qh < q.length) {
+          var uu = q[qh++];
+          if (Sarr[st[uu]] === 1) continue;
+          for (var vv = 1; vv <= n; vv++)
+            if (g[uu][vv].w > 0 && st[uu] !== st[vv]) {
+              if (dist(g[uu][vv]) === 0) { if (on_found_edge(g[uu][vv])) return 1; }
+              else update_slack(uu, st[vv]);
+            }
+        }
+        var d = INF;
+        for (var bb = n + 1; bb <= n_x; bb++) if (st[bb] === bb && Sarr[bb] === 1) d = Math.min(d, Math.floor(lab[bb] / 2));
+        for (var xx = 1; xx <= n_x; xx++)
+          if (st[xx] === xx && slack[xx]) {
+            if (Sarr[xx] === -1) d = Math.min(d, dist(g[slack[xx]][xx]));
+            else if (Sarr[xx] === 0) d = Math.min(d, Math.floor(dist(g[slack[xx]][xx]) / 2));
+          }
+        for (var u2 = 1; u2 <= n; u2++) {
+          if (Sarr[st[u2]] === 0) { if (lab[u2] <= d) return 0; lab[u2] -= d; }
+          else if (Sarr[st[u2]] === 1) lab[u2] += d;
+        }
+        for (var bb2 = n + 1; bb2 <= n_x; bb2++)
+          if (st[bb2] === bb2) {
+            if (Sarr[st[bb2]] === 0) lab[bb2] += d * 2;
+            else if (Sarr[st[bb2]] === 1) lab[bb2] -= d * 2;
+          }
+        q.length = 0; qh = 0;
+        for (var xx2 = 1; xx2 <= n_x; xx2++)
+          if (st[xx2] === xx2 && slack[xx2] && st[slack[xx2]] !== xx2 && dist(g[slack[xx2]][xx2]) === 0)
+            if (on_found_edge(g[slack[xx2]][xx2])) return 1;
+        for (var bb3 = n + 1; bb3 <= n_x; bb3++)
+          if (st[bb3] === bb3 && Sarr[bb3] === 1 && lab[bb3] === 0) expand_blossom(bb3);
+      }
+      return 0;
+    }
+    for (i = 0; i < edges.length; i++) { U = edges[i][0] + 1; V = edges[i][1] + 1; W = edges[i][2]; if (g[U][V].w < W) { g[U][V].w = W; g[V][U].w = W; } }
+    for (u = 0; u <= n; u++) { st[u] = u; flower[u].length = 0; }
+    var w_max = 0;
+    for (u = 1; u <= n; u++) for (v = 1; v <= n; v++) { flower_from[u][v] = (u === v ? u : 0); w_max = Math.max(w_max, g[u][v].w); }
+    for (u = 1; u <= n; u++) lab[u] = w_max;
+    var ans = 0;
+    while (matching()) { }
+    for (u = 1; u <= n; u++) if (match[u] && match[u] < u) ans += g[u][match[u]].w;
+    var mm = new Array(n).fill(-1);
+    for (i = 1; i <= n; i++) mm[i - 1] = match[i] ? match[i] - 1 : -1;
+    return { weight: ans, match: mm };
+  }
+  function _bruteMaxWeightMatching(n, edges) {        // 参照：枚举全部匹配子集取最大权
+    var m = edges.length;
+    function rec(idx, occ) {
+      if (idx === m) return 0;
+      var skip = rec(idx + 1, occ);
+      var bu = edges[idx][0], bv = edges[idx][1], bw = edges[idx][2], take = 0;
+      if (!(occ & (1 << bu)) && !(occ & (1 << bv))) take = bw + rec(idx + 1, occ | (1 << bu) | (1 << bv));
+      return take > skip ? take : skip;
+    }
+    return rec(0, 0);
+  }
+
+  /* ---------- ② 算术编码（Witten–Neal–Cleary 1987；整数区间精确版，BigInt）
+       freq 整数频率 → 累计 c[0..m]，总量 T。逐符号把区间 [lo,hi)（以 D=T^k 为单位）缩窄到 [c[s],c[s+1])。
+       编码输出区间下界 lo（BigInt）；解码从高位到低位逐符号反演（c[s] ≤ ⌊cur/denom⌋ < c[s+1]，后缀 lo=(cur−c[s]·denom)/f）。
+       编解码互为精确逆（无损）；码长 ≈ −log₂(Πp) = 信源熵 + O(1)。 */
+  function arithmeticEncode(symbols, freq) {
+    var m = freq.length, c = [0n], i;
+    for (i = 0; i < m; i++) c.push(c[i] + BigInt(freq[i]));
+    var T = c[m];
+    if (T <= 0n) throw new Error('arithmeticEncode：freq 总量须 > 0');
+    var lo = 0n, hi = 1n, D = 1n;
+    for (i = 0; i < symbols.length; i++) {
+      var s = symbols[i];
+      if (s < 0 || s >= m) throw new Error('arithmeticEncode：符号越界');
+      var span = hi - lo, nlo = lo * T + span * c[s], nhi = lo * T + span * c[s + 1];
+      lo = nlo; hi = nhi; D = D * T;
+    }
+    return { lo: lo, hi: hi, width: hi - lo, denom: D, freq: freq.slice(), length: symbols.length };
+  }
+  function arithmeticDecode(lo, length, freq) {
+    var m = freq.length, c = [0n], i;
+    for (i = 0; i < m; i++) c.push(c[i] + BigInt(freq[i]));
+    var T = c[m], out = [];
+    if (length === 0) return out;
+    var denom = T ** BigInt(length - 1), cur = lo;
+    for (var step = 0; step < length; step++) {
+      var d = cur / denom, s = 0;
+      while (c[s + 1] <= d) s++;
+      out.push(s);
+      var f = c[s + 1] - c[s];
+      cur = (cur - c[s] * denom) / f;
+      denom = denom / T;
+    }
+    return out;
+  }
+  function _arithBits(enc) {                            // 码长 ≈ ⌈log₂(denom/width)⌉+1（位长差，误差 ≤1）
+    return enc.denom.toString(2).length - enc.width.toString(2).length + 1;
+  }
+
+  /* ---------- ③ 正交归一 DCT-II / IDCT（DCT-III）（Ahmed–Natarajan–Rao 1974，JPEG/MPEG 谱基）
+       X[k] = a_k·Σₙ x[n]·cos(π(2n+1)k/(2N))，a₀=√(1/N)，a_k=√(2/N)。矩阵 C 正交 ⇒ C⁻¹ = Cᵀ（即 IDCT）。
+       不变量：IDCT(DCT(x)) ≡ x（完美重构 ≤1e-12）+ CᵀC = I（基正交归一）+ Parseval 能量守恒 + 直流 X₀=√(1/N)·Σx */
+  function dct(x) {
+    var N = x.length, X = new Array(N), i, k;
+    for (k = 0; k < N; k++) {
+      var s = 0;
+      for (i = 0; i < N; i++) s += x[i] * Math.cos(Math.PI * (2 * i + 1) * k / (2 * N));
+      X[k] = Math.sqrt(k === 0 ? 1 / N : 2 / N) * s;
+    }
+    return X;
+  }
+  function idct(X) {
+    var N = X.length, x = new Array(N), i, k;
+    for (i = 0; i < N; i++) {
+      var s = 0;
+      for (k = 0; k < N; k++) s += Math.sqrt(k === 0 ? 1 / N : 2 / N) * X[k] * Math.cos(Math.PI * (2 * i + 1) * k / (2 * N));
+      x[i] = s;
+    }
+    return x;
+  }
+
+  check('maxWeightMatching：一般图最大权匹配（Edmonds 带权带花树）≡ 暴力枚举全部匹配子集（n≤10，0 精确）+ 权全 1 退化 ≡ blossomMatching 最大基数 + 匹配合法（对称对合）', 0, function () {
+    var worst = 0, legalBad = 0, tested = 0;
+    for (var g = 0; g < 150; g++) {
+      var rng = mulberry32(70000 + g);
+      var n = 2 + Math.floor(rng() * 9);
+      var maxE = 3 + Math.floor(rng() * 9), eg = [], seen = {};
+      for (var k = 0; k < maxE; k++) {
+        var u = Math.floor(rng() * n), v = Math.floor(rng() * n);
+        if (u === v) continue;
+        var key = Math.min(u, v) + '_' + Math.max(u, v);
+        if (seen[key]) continue; seen[key] = 1;
+        eg.push([u, v, 1 + Math.floor(rng() * 20)]);
+      }
+      if (eg.length === 0) continue;
+      tested++;
+      var r = maxWeightMatching(n, eg);
+      worst = Math.max(worst, Math.abs(r.weight - _bruteMaxWeightMatching(n, eg)));   // ≙ 暴力 ground truth
+      for (var i = 0; i < n; i++) if (r.match[i] !== -1 && (r.match[i] === i || r.match[i] < 0 || r.match[i] >= n || r.match[r.match[i]] !== i)) legalBad++;
+    }
+    // 权全 1：最大权 = 最大基数 ≡ 项目内 blossomMatching（n≤12）
+    var worstDeg = 0;
+    for (var g2 = 0; g2 < 80; g2++) {
+      var rng2 = mulberry32(90000 + g2);
+      var n2 = 3 + Math.floor(rng2() * 10), eg2 = [], seen2 = {};
+      for (var k2 = 0; k2 < n2 * 2; k2++) {
+        var u2 = Math.floor(rng2() * n2), v2 = Math.floor(rng2() * n2);
+        if (u2 === v2) continue;
+        var key2 = Math.min(u2, v2) + '_' + Math.max(u2, v2);
+        if (seen2[key2]) continue; seen2[key2] = 1; eg2.push([u2, v2, 1]);
+      }
+      if (eg2.length === 0) continue;
+      var r2 = maxWeightMatching(n2, eg2), card = 0;
+      for (var i2 = 0; i2 < n2; i2++) if (r2.match[i2] !== -1 && i2 < r2.match[i2]) card++;
+      worstDeg = Math.max(worstDeg, Math.abs(card - blossomMatching(n2, eg2).size));
+    }
+    if (tested === 0) return 1;
+    return Math.max(worst, legalBad, worstDeg);
+  });
+
+  check('arithmeticEncode/arithmeticDecode：算术编码 round-trip ≡ 原消息（0 误差，300 例多分布/多长度）+ 码长 ∈ [理想−1，理想+2]（Shannon 界 + O(1) 冗余）+ Σp=1 + 高概率符号大幅压缩', 0, function () {
+    var worstRT = 0, worstOver = 0, worstUnder = 0, tested = 0;
+    for (var g = 0; g < 300; g++) {
+      var rng = mulberry32(3100 + g);
+      var m = 2 + Math.floor(rng() * 5), freq = [];
+      for (var i = 0; i < m; i++) freq.push(1 + Math.floor(rng() * 20));
+      var T = freq.reduce(function (a, b) { return a + b; }, 0);
+      var L = 1 + Math.floor(rng() * 30), syms = [];
+      for (var j = 0; j < L; j++) {
+        var r = Math.floor(rng() * T), acc = 0, s = 0;
+        for (var q = 0; q < m; q++) { acc += freq[q]; if (r < acc) { s = q; break; } }
+        syms.push(s);
+      }
+      tested++;
+      var enc = arithmeticEncode(syms, freq);
+      var dec = arithmeticDecode(enc.lo, enc.length, freq);
+      if (dec.length !== syms.length || dec.some(function (v, idx) { return v !== syms[idx]; })) worstRT = 1;
+      var ideal = 0;
+      for (var j2 = 0; j2 < syms.length; j2++) ideal += -Math.log2(freq[syms[j2]] / T);
+      var bits = _arithBits(enc);
+      worstOver = Math.max(worstOver, bits - (ideal + 2));       // ≤0：码长不超理想 +2
+      worstUnder = Math.max(worstUnder, (ideal - 1) - bits);      // ≤0：码长不低于理想 −1
+    }
+    if (tested === 0) return 1;
+    return Math.max(worstRT, worstOver, worstUnder);
+  });
+
+  check('dct/idct：正交归一 DCT-II 逆变换 ≡ 原信号（完美重构 ≤1e-12）+ 基正交归一 CᵀC=I ≤1e-12 + Parseval 能量守恒 + 直流分量 X₀=√(1/N)·Σx', 1e-12, function () {
+    var worst = 0;
+    for (var g = 0; g < 200; g++) {
+      var rng = mulberry32(5200 + g);
+      var N = 1 + Math.floor(rng() * 24), x = [];
+      for (var i = 0; i < N; i++) x.push(rng() * 2 - 1);
+      var X = dct(x), xr = idct(X);
+      for (var j = 0; j < N; j++) worst = Math.max(worst, Math.abs(xr[j] - x[j]));
+      // 基正交归一：行点积（N≤24 全量开销小）
+      for (var a = 0; a < N; a++) for (var b = 0; b < N; b++) {
+        var ca = a === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), cb = b === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), dot = 0;
+        for (var n3 = 0; n3 < N; n3++) dot += ca * cb * Math.cos(Math.PI * (2 * n3 + 1) * a / (2 * N)) * Math.cos(Math.PI * (2 * n3 + 1) * b / (2 * N));
+        worst = Math.max(worst, Math.abs(dot - (a === b ? 1 : 0)));
+      }
+    }
+    // Parseval + 直流
+    for (var g2 = 0; g2 < 80; g2++) {
+      var rng2 = mulberry32(8800 + g2);
+      var N2 = 2 + Math.floor(rng2() * 20), x2 = [], s1 = 0, sum = 0;
+      for (var i2 = 0; i2 < N2; i2++) { var vv = rng2() * 2 - 1; x2.push(vv); s1 += vv * vv; sum += vv; }
+      var X2 = dct(x2), s2 = 0;
+      for (var j2 = 0; j2 < N2; j2++) s2 += X2[j2] * X2[j2];
+      worst = Math.max(worst, Math.abs(s1 - s2), Math.abs(X2[0] - Math.sqrt(1 / N2) * sum));
+    }
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -10543,6 +10866,12 @@
     bwtInverse: bwtInverse,
     fmIndex: fmIndex,
     fmSearch: fmSearch,
+    /* v1.3.23 算法库扩展十三 */
+    maxWeightMatching: maxWeightMatching,
+    arithmeticEncode: arithmeticEncode,
+    arithmeticDecode: arithmeticDecode,
+    dct: dct,
+    idct: idct,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
@@ -11607,7 +11936,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 /* ==== AXIOM ui.js（仪表盘） ==== */
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(60) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(63) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -12069,7 +12398,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] },
     { id: 'ahoCorasick', name: 'Aho–Corasick 多模式匹配', src: 'Aho & Corasick (1975)', api: 'AXIOM.ahoCorasick', inv: '匹配集 ≡ 暴力逐起点逐模式扫描（0 精确）+ fail 深度严格递减 + 转移 ≡ 最长后缀 + out ≡ 后缀模式集', chk: ['ahoCorasick：'] },
     { id: 'cdclSat', name: 'CDCL SAT 求解（1UIP 学习）', src: 'Marques-Silva & Sakallah (1996)；GRASP/Chaff (2001)', api: 'AXIOM.cdclSat', inv: 'SAT/UNSAT ≡ 暴力 2ⁿ 枚举 ≡ 纯 DPLL + 模型合法 + 学习子句被原公式蕴涵 + 鸽巢原理必 UNSAT（0 精确）', chk: ['cdclSat：'] },
-    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] }
+    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] },
+    /* v1.3.23 算法库扩展十三 */
+    { id: 'maxWeightMatching', name: 'Edmonds 带权带花树（一般图最大权匹配）', src: 'Edmonds (1965)；Gabow (1985)；Kolmogorov (2009)', api: 'AXIOM.maxWeightMatching', inv: '最大权匹配 ≡ 暴力枚举全部匹配子集（n≤10，0 精确）+ 权全 1 退化 ≡ blossomMatching 最大基数 + 匹配合法（对称对合）', chk: ['maxWeightMatching：'] },
+    { id: 'arithmeticCoding', name: '算术编码（无损压缩）', src: 'Witten–Neal–Cleary (1987)', api: 'AXIOM.arithmeticEncode / AXIOM.arithmeticDecode', inv: 'round-trip ≡ 原消息（0 误差）+ 码长 ∈ [理想−1，理想+2]（Shannon 界）+ Σp=1 + 高概率符号大幅压缩', chk: ['arithmeticEncode/arithmeticDecode：'] },
+    { id: 'dct', name: '正交归一 DCT-II / IDCT', src: 'Ahmed–Natarajan–Rao (1974)；JPEG/MPEG', api: 'AXIOM.dct / AXIOM.idct', inv: 'IDCT(DCT(x)) ≡ x（完美重构 ≤1e-12）+ CᵀC=I 基正交归一 + Parseval 能量守恒 + 直流分量 X₀=√(1/N)·Σx', chk: ['dct/idct：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -12887,6 +13220,58 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
       '后缀嵌套："NANA" ' + mkr.count + ' 次（区间 [' + mkr.lo + ', ' + mkr.hi + ') ⊂ ANA 区间）· 不命中串 "ZZZ" ' + nkr.count + ' 次（C 表缺键即返回空）\n' +
       (B.bwt === bwtB && inv === t && got.positions.join(',') === brute.join(',') && lfOK ?
         '变换 / 逆变换 / 检索三路与暴力一致（0 精确）' : '❌ 不一致');
+  },
+  maxWeightMatching: function () {
+    var n = 6, edges = [[0, 1, 3], [0, 2, 5], [1, 2, 2], [1, 3, 4], [2, 4, 7], [3, 4, 6], [3, 5, 8], [4, 5, 1]], i;
+    var r = AXIOM.maxWeightMatching(n, edges);          // 6 顶点一般图（含奇环 0-1-2，触发带花树收缩）
+    function brute(nv, eg) {                             // 暴力：枚举全部匹配子集取最大权
+      var m = eg.length;
+      function rec(idx, occ) {
+        if (idx === m) return 0;
+        var skip = rec(idx + 1, occ), bu = eg[idx][0], bv = eg[idx][1], bw = eg[idx][2], take = 0;
+        if (!(occ & (1 << bu)) && !(occ & (1 << bv))) take = bw + rec(idx + 1, occ | (1 << bu) | (1 << bv));
+        return take > skip ? take : skip;
+      }
+      return rec(0, 0);
+    }
+    var bf = brute(n, edges), pairs = [];
+    for (i = 0; i < n; i++) if (r.match[i] !== -1 && i < r.match[i]) pairs.push(i + '–' + r.match[i]);
+    var deg = AXIOM.blossomMatching(n, edges.map(function (e) { return [e[0], e[1]]; })).size;
+    return '6 顶点一般图（8 条边，奇环 0-1-2 触发带花树收缩）\n' +
+      '最大权匹配对 = [' + pairs.join(', ') + '] · 总权 = ' + r.weight + '\n' +
+      '暴力枚举全部匹配子集 → 最大权 = ' + bf + ' ⇒ 一致 = ' + (r.weight === bf) + '\n' +
+      '权全 1 退化 ≡ blossomMatching 最大基数 = ' + deg + ' 对（1 个顶点未匹配）\n' +
+      (r.weight === bf ? '原始-对偶带权带花树 ≙ 暴力 ground truth（0 精确）' : '❌ 不一致');
+  },
+  arithmeticCoding: function () {
+    var freq = [9, 3, 1], syms = [0, 0, 0, 1, 0, 0, 2, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0], i;
+    var T = freq.reduce(function (a, b) { return a + b; }, 0);
+    var enc = AXIOM.arithmeticEncode(syms, freq), dec = AXIOM.arithmeticDecode(enc.lo, enc.length, freq);
+    var ok = dec.length === syms.length && dec.every(function (v, idx) { return v === syms[idx]; });
+    var bits = enc.denom.toString(2).length - enc.width.toString(2).length + 1, ideal = 0, naive = syms.length * Math.log2(3);
+    for (i = 0; i < syms.length; i++) ideal += -Math.log2(freq[syms[i]] / T);
+    return '信源分布 freq = [' + freq.join(', ') + ']（p = ' + freq.map(function (f) { return (f / T).toFixed(3); }).join(' / ') + '）\n' +
+      '消息（' + syms.length + ' 符号）= [' + syms.join(',') + ']\n' +
+      '编码区间下界 lo = ' + enc.lo.toString() + '（BigInt）· 区间宽度 Πp = ' + enc.width + ' / ' + enc.denom + '\n' +
+      '解码 round-trip ≡ 原消息 = ' + ok + '\n' +
+      '码长 ≈ ' + bits + ' bits · 理想（Shannon）= ' + ideal.toFixed(2) + ' bits · 朴素 3 符号定长 = ' + naive.toFixed(2) + ' bits\n' +
+      '压缩比 = ' + (naive / bits).toFixed(2) + '× · 码长 ∈ [理想−1, 理想+2] = ' + (bits >= ideal - 1 && bits <= ideal + 2);
+  },
+  dct: function () {
+    var x = [1, 2, 3, 4, 3, 2, 1, 0], N = x.length, i, a, b, k;
+    var X = AXIOM.dct(x), xr = AXIOM.idct(X), rec = 0, orth = 0, e1 = 0, e2 = 0, sum = 0;
+    for (i = 0; i < N; i++) rec = Math.max(rec, Math.abs(xr[i] - x[i]));
+    for (a = 0; a < N; a++) for (b = 0; b < N; b++) {
+      var ca = a === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), cb = b === 0 ? Math.sqrt(1 / N) : Math.sqrt(2 / N), dot = 0;
+      for (k = 0; k < N; k++) dot += ca * cb * Math.cos(Math.PI * (2 * k + 1) * a / (2 * N)) * Math.cos(Math.PI * (2 * k + 1) * b / (2 * N));
+      orth = Math.max(orth, Math.abs(dot - (a === b ? 1 : 0)));
+    }
+    for (i = 0; i < N; i++) { e1 += x[i] * x[i]; e2 += X[i] * X[i]; sum += x[i]; }
+    return '信号 x = [' + x.join(', ') + ']（N = ' + N + '）\n' +
+      'DCT-II 谱 X = [' + X.map(function (v) { return v.toFixed(4); }).join(', ') + ']\n' +
+      '直流分量 X₀ = ' + X[0].toFixed(6) + ' = √(1/' + N + ')·Σx = ' + (Math.sqrt(1 / N) * sum).toFixed(6) + '\n' +
+      '完美重构 ‖IDCT(DCT(x)) − x‖∞ = ' + rec.toExponential(2) + ' · 基正交性 ‖CᵀC − I‖∞ = ' + orth.toExponential(2) + '\n' +
+      'Parseval 能量守恒 ‖x‖² = ' + e1.toFixed(4) + ' ≡ ‖X‖² = ' + e2.toFixed(4) + '（差 ' + Math.abs(e1 - e2).toExponential(2) + '）';
   }
   };
   var algoRun = null;
