@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(54) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(57) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -455,7 +455,11 @@
     /* v1.3.20 算法库扩展十 */
     { id: 'arborescence', name: 'Chu–Liu/Edmonds 有向最小树形图', src: 'Edmonds (1967)', api: 'AXIOM.arborescence', inv: '最小树形图 ≡ 暴力父分配枚举（负权/平行边/多根/不可行判定，0 精确）+ 结构合法 + cost=Σ父边权 + 边序不变性', chk: ['arborescence：'] },
     { id: 'heldKarpTSP', name: 'Held-Karp 精确 TSP', src: 'Bellman (1962)；Held–Karp (1962)', api: 'AXIOM.heldKarpTSP', inv: '子集 DP O(2ⁿn²) ≡ 暴力 (n−1)! 排列（含非对称距离，0 精确）+ 2-opt 局部最优 + ≤ 最近邻贪心', chk: ['heldKarpTSP：'] },
-    { id: 'ac3CSP', name: 'AC-3 弧一致性 + CSP 回溯', src: 'Mackworth (1977)', api: 'AXIOM.ac3CSP', inv: '决策 ≡ 暴力枚举全部赋值 + 解合法 + AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解）', chk: ['ac3CSP：'] }
+    { id: 'ac3CSP', name: 'AC-3 弧一致性 + CSP 回溯', src: 'Mackworth (1977)', api: 'AXIOM.ac3CSP', inv: '决策 ≡ 暴力枚举全部赋值 + 解合法 + AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解）', chk: ['ac3CSP：'] },
+    /* v1.3.21 算法库扩展十一 */
+    { id: 'maxClique', name: 'Bron–Kerbosch 最大团（pivot）', src: 'Bron & Kerbosch (1973)；Tomita (2006)', api: 'AXIOM.maxClique', inv: 'ω(G) ≡ 暴力枚举 2ⁿ 子集（0 精确）+ 全部极大团极大性 + α(G)=ω(Ḡ) + ω ≤ 贪心着色数', chk: ['maxClique：'] },
+    { id: 'suffixArray', name: '后缀数组（倍增 O(n log n)）+ Kasai LCP', src: 'Manber–Myers (1990)；Kasai (2001)', api: 'AXIOM.suffixArray', inv: 'SA ≡ 朴素后缀排序 + Kasai LCP ≡ 暴力逐对 LCP + SA 二分搜索 ≡ 朴素匹配 ≙ kmpSearch（0 精确）', chk: ['suffixArray：'] },
+    { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1102,6 +1106,97 @@
       '实例② 四边形 x0≠x1≠x2≠x3≠x0（域 {0,1,2}）：MRV 回溯 + MAC 求解\n' +
       '  解 = [' + r2.solution.join(', ') + ']（合法 = ' + ok2 + '）· 传播后域 = ' + JSON.stringify(r2.domains) + '\n' +
       '暴力枚举解数 = ' + b2.length + ' ⇒ 决策与解均与暴力一致';
+  },
+  maxClique: function () {
+    // 确定性 8 顶点图：K4(0..3) + 三角形(4,5,6) + 尾 6-7 + 三条跨边（运行时暴力 2⁸ 枚举交叉）
+    var n = 8, edges = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3], [4, 5], [4, 6], [5, 6], [6, 7], [1, 4], [2, 5], [3, 6]];
+    var r = AXIOM.maxClique(n, edges), i, j;
+    var adj = [];
+    for (i = 0; i < n; i++) adj.push(new Array(n).fill(false));
+    edges.forEach(function (e) { adj[e[0]][e[1]] = true; adj[e[1]][e[0]] = true; });
+    var brute = 0;                                     // 暴力枚举 2⁸ 子集
+    for (var mask = 0; mask < (1 << n); mask++) {
+      var vs = [];
+      for (i = 0; i < n; i++) if (mask & (1 << i)) vs.push(i);
+      var ok = true;
+      for (i = 0; i < vs.length && ok; i++) for (j = i + 1; j < vs.length; j++) if (!adj[vs[i]][vs[j]]) { ok = false; break; }
+      if (ok && vs.length > brute) brute = vs.length;
+    }
+    var comp = [];                                     // 补图 ⇒ 最大独立集
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) if (!adj[i][j]) comp.push([i, j]);
+    var omegaComp = AXIOM.maxClique(n, comp).size;
+    var color = new Array(n).fill(-1), used = 0;       // 贪心着色数（χ 上界，必 ≥ ω）
+    for (i = 0; i < n; i++) {
+      var forb = {};
+      for (j = 0; j < n; j++) if (adj[i][j] && color[j] !== -1) forb[color[j]] = true;
+      var c = 0;
+      while (forb[c]) c++;
+      color[i] = c;
+      if (c + 1 > used) used = c + 1;
+    }
+    var isClique = r.clique.every(function (x) {
+      return r.clique.every(function (y) { return x === y || adj[x][y]; });
+    });
+    var okAll = (r.size === brute) && isClique && (r.indepSize === omegaComp) && (r.size <= used);
+    return '8 顶点图（K4 + 三角形 + 三条跨边，' + edges.length + ' 条边）\n' +
+      '最大团 ω = ' + r.size + ' · 团 = [' + r.clique.join(', ') + ']（是团 = ' + isClique + '）\n' +
+      '极大团总数 = ' + r.maximalCount + '（Bron–Kerbosch + pivot 全枚举）\n' +
+      '暴力枚举 2⁸ = ' + brute + ' 子集 ⇒ ω 一致 = ' + (r.size === brute) + '\n' +
+      '最大独立集 α = ' + r.indepSize + ' = [ ' + r.indepSet.join(', ') + ' ] ≡ 补图最大团 ω(Ḡ) = ' + omegaComp + '\n' +
+      '贪心着色数（χ 上界）= ' + used + ' ≥ ω = ' + r.size + ' ⇒ ' + (okAll ? '全部不变量通过（0 精确）' : '❌ 不一致');
+  },
+  suffixArray: function () {
+    var s = 'abracadabra', i;
+    var r = AXIOM.suffixArray(s);
+    var idx = [];                                      // 暴力：所有后缀直接排序
+    for (i = 0; i < s.length; i++) idx.push(i);
+    idx.sort(function (x, y) {
+      var p = s.slice(x), q = s.slice(y);
+      return p < q ? -1 : (p > q ? 1 : 0);
+    });
+    var saOK = r.sa.join(',') === idx.join(',');
+    var lcpOK = true, maxL = 0, maxAt = -1;            // Kasai LCP ≡ 暴力逐对 LCP
+    for (i = 1; i < s.length; i++) {
+      var a = r.sa[i - 1], b = r.sa[i], h = 0;
+      while (a + h < s.length && b + h < s.length && s.charAt(a + h) === s.charAt(b + h)) h++;
+      if (r.lcp[i] !== h) lcpOK = false;
+      if (h > maxL) { maxL = h; maxAt = i; }
+    }
+    var pat = 'abra', hits = AXIOM.saSearch(s, pat), bh = [], km = AXIOM.kmpSearch(s, pat);
+    for (i = 0; i + pat.length <= s.length; i++) if (s.substr(i, pat.length) === pat) bh.push(i);
+    var searchOK = hits.join(',') === bh.join(',') && hits.join(',') === km.join(',');
+    return '串 s = "' + s + '"（长度 ' + s.length + '，倍增 + 计数排序 O(n log n)）\n' +
+      'SA = [' + r.sa.join(', ') + '] ≡ 朴素后缀排序 = ' + saOK + '\n' +
+      'LCP = [' + r.lcp.join(', ') + ']（Kasai O(n)）≡ 暴力逐对 LCP = ' + lcpOK +
+      ' · 最长公共前缀 = ' + maxL + '（位置 ' + r.sa[maxAt - 1] + ' 与 ' + r.sa[maxAt] + '：\"' + s.substr(r.sa[maxAt], maxL) + '\"）\n' +
+      'SA 二分搜索 \"' + pat + '\" = [' + hits.join(', ') + '] ≡ 朴素匹配 [' + bh.join(', ') + '] ≙ kmpSearch [' + km.join(', ') + '] = ' + searchOK + '\n' +
+      (saOK && lcpOK && searchOK ? '排序 / LCP / 搜索三路与暴力一致（0 精确）' : '❌ 不一致');
+  },
+  fwhtConvolve: function () {
+    var a = [1, 2, 3, 4, 5, 6, 7, 8], b = [2, 0, 1, 3, 1, 0, 2, 2];
+    function naive(op) {                               // 暴力 O(N²)
+      var n = a.length, c = new Array(n).fill(0);
+      for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) {
+        var k = op === 'xor' ? (i ^ j) : (op === 'or' ? (i | j) : (i & j));
+        c[k] += a[i] * b[j];
+      }
+      return c;
+    }
+    var ops = ['xor', 'or', 'and'], out = [], allOK = true;
+    for (var t = 0; t < ops.length; t++) {
+      var got = AXIOM.fwhtConvolve(a, b, ops[t]), exp = naive(ops[t]);
+      var ok = got.join(',') === exp.join(',');
+      if (!ok) allOK = false;
+      out.push('  ' + ops[t] + ' 卷积 = [' + got.join(', ') + '] ≡ 朴素 [' + exp.join(', ') + '] = ' + ok);
+    }
+    var H = AXIOM.fwht(a), twice = AXIOM.fwht(H);      // H² = N·I
+    var orthOK = twice.every(function (v, i) { return v === a.length * a[i]; });
+    if (!orthOK) allOK = false;
+    return 'a = [' + a.join(', ') + '] · b = [' + b.join(', ') + ']（N = 8）\n' +
+      'H·a = [' + H.join(', ') + ']\n' +
+      out.join('\n') + '\n' +
+      '正交性 H(H·a) = N·a（H² = 8·I）= ' + orthOK + '\n' +
+      (allOK ? '三算子 + 正交性全部与暴力一致（整数 0 精确）' : '❌ 不一致');
   }
   };
   var algoRun = null;

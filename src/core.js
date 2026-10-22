@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.20';
+  var VERSION = '1.3.21';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -9465,6 +9465,380 @@
     return tested === 0 ? 1 : worst;
   });
 
+  /* ==================== v1.3.21 算法库扩展十一 ==================== */
+  /* ① Bron–Kerbosch 最大团（Bron & Kerbosch 1973；Tomita–Tanaka–Takahashi 2006 pivot）。
+     R/P/X 三集合递归枚举全部极大团；pivot 取 P∪X 中与 P 邻接最多者，只展开 P\N(pivot)，
+     把 3^(n/3) 量级的递归树压到最紧。最大独立集 = 补图上的最大团（α(G) = ω(Ḡ)）。
+     不变量：ω ≡ 暴力枚举 2ⁿ 子集；全部极大团均极大；α(G) = ω(Ḡ)；ω ≤ 贪心着色数。 */
+  function _cliqueAdj(n, edges) {
+    var adj = [], i;
+    for (i = 0; i < n; i++) adj.push(new Array(n).fill(false));
+    for (i = 0; i < edges.length; i++) {
+      var u = edges[i][0], v = edges[i][1];
+      if (u !== v) { adj[u][v] = true; adj[v][u] = true; }
+    }
+    return adj;
+  }
+  function _cliqueExpand(adj, R, P, X, best, maximal) {
+    if (P.length === 0 && X.length === 0) {
+      maximal.push(R.slice());
+      if (R.length > best.set.length) best.set = R.slice();
+      return;
+    }
+    var piv = -1, pivCnt = -1, t, q;
+    for (t = 0; t < P.length; t++) {
+      var c = 0;
+      for (q = 0; q < P.length; q++) if (adj[P[t]][P[q]]) c++;
+      if (c > pivCnt) { pivCnt = c; piv = P[t]; }
+    }
+    for (t = 0; t < X.length; t++) {
+      var c2 = 0;
+      for (q = 0; q < P.length; q++) if (adj[X[t]][P[q]]) c2++;
+      if (c2 > pivCnt) { pivCnt = c2; piv = X[t]; }
+    }
+    var iter = [];
+    for (q = 0; q < P.length; q++) if (!adj[piv][P[q]]) iter.push(P[q]);
+    for (t = 0; t < iter.length; t++) {
+      var v2 = iter[t], P2 = [], X2 = [];
+      for (q = 0; q < P.length; q++) if (adj[v2][P[q]]) P2.push(P[q]);
+      for (q = 0; q < X.length; q++) if (adj[v2][X[q]]) X2.push(X[q]);
+      R.push(v2);
+      _cliqueExpand(adj, R, P2, X2, best, maximal);
+      R.pop();
+      var pi = P.indexOf(v2);
+      if (pi >= 0) P.splice(pi, 1);
+      X.push(v2);
+    }
+  }
+  function maxClique(n, edges) {
+    var adj = _cliqueAdj(n, edges), i, j;
+    var best = { set: [] }, maximal = [], i0;
+    var P0 = [];                                     // 注意：expand 会原地 splice P，两次调用须各用独立数组
+    for (i0 = 0; i0 < n; i0++) P0.push(i0);
+    _cliqueExpand(adj, [], P0, [], best, maximal);
+    var comp = [];
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) if (!adj[i][j]) comp.push([i, j]);
+    var b2 = { set: [] }, mx2 = [], P1 = [];
+    for (i0 = 0; i0 < n; i0++) P1.push(i0);
+    _cliqueExpand(_cliqueAdj(n, comp), [], P1, [], b2, mx2);
+    function srt(a) { return a.slice().sort(function (x, y) { return x - y; }); }
+    return {
+      size: best.set.length, clique: srt(best.set), maximalCount: maximal.length, maximal: maximal,
+      indepSize: b2.set.length, indepSet: srt(b2.set)
+    };
+  }
+  function _cliqueBrute(n, edges) {                 // 暴力：枚举 2ⁿ 子集
+    var adj = _cliqueAdj(n, edges), best = 0, i, j;
+    for (var mask = 0; mask < (1 << n); mask++) {
+      var vs = [];
+      for (i = 0; i < n; i++) if (mask & (1 << i)) vs.push(i);
+      var ok = true;
+      for (i = 0; i < vs.length && ok; i++) for (j = i + 1; j < vs.length; j++) if (!adj[vs[i]][vs[j]]) { ok = false; break; }
+      if (ok && vs.length > best) best = vs.length;
+    }
+    return best;
+  }
+  function _cliqueIsMaximal(n, edges, clique) {     // 极大性：是团且无法再加入任何顶点
+    var adj = _cliqueAdj(n, edges), i, j;
+    for (i = 0; i < clique.length; i++) for (j = i + 1; j < clique.length; j++) if (!adj[clique[i]][clique[j]]) return false;
+    var inC = new Array(n).fill(false);
+    for (i = 0; i < clique.length; i++) inC[clique[i]] = true;
+    for (var v = 0; v < n; v++) {
+      if (inC[v]) continue;
+      var all = true;
+      for (i = 0; i < clique.length; i++) if (!adj[v][clique[i]]) { all = false; break; }
+      if (all) return false;
+    }
+    return true;
+  }
+  function _cliqueGreedyColor(n, edges) {           // 贪心着色数 = χ 的上界（必 ≥ ω）
+    var adj = _cliqueAdj(n, edges), color = new Array(n).fill(-1), used = 0, i, j;
+    for (i = 0; i < n; i++) {
+      var forb = {};
+      for (j = 0; j < n; j++) if (adj[i][j] && color[j] !== -1) forb[color[j]] = true;
+      var c = 0;
+      while (forb[c]) c++;
+      color[i] = c;
+      if (c + 1 > used) used = c + 1;
+    }
+    return used;
+  }
+
+  /* ② 后缀数组（倍增 + 计数排序，O(n log n)）+ Kasai LCP（O(n)）+ SA 二分搜索。
+     倍增：按 (rank[i], rank[i+k]) 双关键字计数排序（稳定，先第二后第一）迭代至秩全异；
+     Kasai：lcp[rank[i]] = LCP(sa[rank[i]−1], sa[i])，沿串右移时 h 至多减一摊还 O(n)。
+     不变量：SA ≡ 朴素后缀排序；Kasai LCP ≡ 暴力逐对 LCP；SA 二分搜索 ≡ 朴素匹配；SA 为 0..n−1 排列。 */
+  function suffixArray(s) {
+    var n = s.length, i;
+    if (n === 0) return { sa: [], rank: [], lcp: [] };
+    var sa = new Array(n), rnk = new Array(n), tmpR = new Array(n);
+    var sa2 = new Array(n), key1 = new Array(n), key2 = new Array(n);
+    for (i = 0; i < n; i++) { sa[i] = i; rnk[i] = s.charCodeAt(i); }
+    function countingSort(src, dst, key, maxKey) {   // 稳定计数排序（key 必须是数组，非函数）
+      var cnt = new Array(maxKey + 1).fill(0), t;
+      for (t = 0; t < n; t++) cnt[key[src[t]]]++;
+      var acc = 0;
+      for (t = 0; t <= maxKey; t++) { var c = cnt[t]; cnt[t] = acc; acc += c; }
+      for (t = 0; t < n; t++) dst[cnt[key[src[t]]]++] = src[t];
+    }
+    var k = 1, guard = 0;
+    for (;;) {
+      if (++guard > 200) break;
+      var maxKey = 0;
+      for (i = 0; i < n; i++) {
+        key1[i] = rnk[i] + 1;
+        key2[i] = (i + k < n) ? rnk[i + k] + 1 : 0;
+        if (key1[i] > maxKey) maxKey = key1[i];
+        if (key2[i] > maxKey) maxKey = key2[i];
+      }
+      countingSort(sa, sa2, key2, maxKey);          // 先按第二关键字
+      countingSort(sa2, sa, key1, maxKey);          // 再按第一关键字
+      tmpR[sa[0]] = 0;
+      for (i = 1; i < n; i++) {
+        var a = sa[i - 1], b = sa[i];
+        tmpR[b] = tmpR[a] + ((rnk[a] !== rnk[b] || key2[a] !== key2[b]) ? 1 : 0);
+      }
+      for (i = 0; i < n; i++) rnk[i] = tmpR[i];
+      if (rnk[sa[n - 1]] === n - 1) break;          // 秩全异 ⇒ 排序完成
+      if (k >= 2 * n) break;
+      k <<= 1;
+    }
+    var rank = new Array(n);
+    for (i = 0; i < n; i++) rank[sa[i]] = i;
+    var lcp = new Array(n).fill(0), h = 0;
+    for (i = 0; i < n; i++) {
+      var r = rank[i];
+      if (r === 0) { h = 0; continue; }
+      var j = sa[r - 1];
+      while (i + h < n && j + h < n && s.charAt(i + h) === s.charAt(j + h)) h++;
+      lcp[r] = h;
+      if (h > 0) h--;
+    }
+    return { sa: sa, rank: rank, lcp: lcp };
+  }
+  function saSearch(s, pat) {                       // SA 二分搜索：返回全部起始下标（升序）
+    var n = s.length, m = pat.length;
+    if (m === 0 || m > n) return [];
+    var sa = suffixArray(s).sa;
+    function cmpAt(pos) {                           // −1: s[pos..] < pat；0: pat 是前缀；1: 更大
+      var lim = Math.min(m, n - pos), t = 0;
+      while (t < lim && s.charAt(pos + t) === pat.charAt(t)) t++;
+      if (t === m) return 0;
+      if (t === n - pos) return -1;
+      return s.charAt(pos + t) < pat.charAt(t) ? -1 : 1;
+    }
+    var lo = 0, hi = n, mid;
+    while (lo < hi) { mid = (lo + hi) >> 1; if (cmpAt(sa[mid]) < 0) lo = mid + 1; else hi = mid; }
+    var start = lo;
+    lo = start; hi = n;
+    while (lo < hi) { mid = (lo + hi) >> 1; if (cmpAt(sa[mid]) === 0) lo = mid + 1; else hi = mid; }
+    var res = [];
+    for (var t2 = start; t2 < lo; t2++) res.push(sa[t2]);
+    return res.sort(function (a, b) { return a - b; });
+  }
+  function _saBrute(s) {                            // 暴力：所有后缀直接排序（O(n² log n)）
+    var a = [], i;
+    for (i = 0; i < s.length; i++) a.push(i);
+    a.sort(function (x, y) {
+      var p = x, q = y;
+      while (p < s.length && q < s.length && s.charAt(p) === s.charAt(q)) { p++; q++; }
+      if (p === s.length) return -1;
+      if (q === s.length) return 1;
+      return s.charAt(p) < s.charAt(q) ? -1 : 1;
+    });
+    return a;
+  }
+  function _lcpBrute(s, i, j) {
+    var h = 0;
+    while (i + h < s.length && j + h < s.length && s.charAt(i + h) === s.charAt(j + h)) h++;
+    return h;
+  }
+  function _matchBrute(text, pat) {                 // 暴力朴素匹配（KMP 的独立参照）
+    var res = [], i, t;
+    if (pat.length === 0) return res;
+    for (i = 0; i + pat.length <= text.length; i++) {
+      var ok = true;
+      for (t = 0; t < pat.length; t++) if (text.charAt(i + t) !== pat.charAt(t)) { ok = false; break; }
+      if (ok) res.push(i);
+    }
+    return res;
+  }
+
+  /* ③ 快速沃尔什–哈达玛变换 + zeta/Möbius 三算子集合卷积（xor / or / and）。
+     FWHT：H 为 ±1 Hadamard 矩阵，蝶形 O(N log N)，满足 H² = N·I（自逆到 N 倍）；
+     or/and 卷积走「子集（超集）zeta 变换 → 逐点乘 → Möbius 反演」，
+     是子集 DP / 集合幂级数 / 快速 zeta 变换的标准底座（亦为正交随机特征 Fastfood 的算子）。
+     不变量：三算子 ≡ 朴素 O(N²)（整数 0 精确）；H²=N·I；线性性；单位元（xor/or: δ₀；and: δ_{N−1}）。 */
+  function fwht(a) {                                // 未归一化 H·a
+    var n = a.length, out = a.slice(), h = 1;
+    while (h < n) {
+      for (var i = 0; i < n; i += h << 1)
+        for (var j = i; j < i + h; j++) {
+          var x = out[j], y = out[j + h];
+          out[j] = x + y; out[j + h] = x - y;
+        }
+      h <<= 1;
+    }
+    return out;
+  }
+  function _zetaSubset(a) { var n = a.length, f = a.slice(), k = 1; while (k < n) { for (var m = 0; m < n; m++) if (m & k) f[m] += f[m ^ k]; k <<= 1; } return f; }
+  function _mobiusSubset(f) { var n = f.length, g = f.slice(), k = 1; while (k < n) { for (var m = 0; m < n; m++) if (m & k) g[m] -= g[m ^ k]; k <<= 1; } return g; }
+  function _zetaSuperset(a) { var n = a.length, f = a.slice(), k = 1; while (k < n) { for (var m = 0; m < n; m++) if (!(m & k)) f[m] += f[m ^ k]; k <<= 1; } return f; }
+  function _mobiusSuperset(f) { var n = f.length, g = f.slice(), k = 1; while (k < n) { for (var m = 0; m < n; m++) if (!(m & k)) g[m] -= g[m ^ k]; k <<= 1; } return g; }
+  function fwhtConvolve(a, b, op) {                 // op: 'xor' | 'or' | 'and'（长度须为 2 的幂）
+    var n = a.length, i, out;
+    if (op === 'xor') {
+      var A = fwht(a), B = fwht(b), C = new Array(n);
+      for (i = 0; i < n; i++) C[i] = A[i] * B[i];
+      out = fwht(C);
+      for (i = 0; i < n; i++) out[i] = out[i] / n;   // H² = N·I ⇒ 逆变换需 ÷N
+      return out;
+    }
+    if (op === 'or') {
+      var A2 = _zetaSubset(a), B2 = _zetaSubset(b), C2 = new Array(n);
+      for (i = 0; i < n; i++) C2[i] = A2[i] * B2[i];
+      return _mobiusSubset(C2);
+    }
+    var A3 = _zetaSuperset(a), B3 = _zetaSuperset(b), C3 = new Array(n);
+    for (i = 0; i < n; i++) C3[i] = A3[i] * B3[i];
+    return _mobiusSuperset(C3);
+  }
+  function _convBrute(a, b, op) {
+    var n = a.length, c = new Array(n).fill(0);
+    for (var i = 0; i < n; i++) for (var j = 0; j < n; j++) {
+      var k = op === 'xor' ? (i ^ j) : (op === 'or' ? (i | j) : (i & j));
+      c[k] += a[i] * b[j];
+    }
+    return c;
+  }
+
+  check('maxClique：ω(G) ≡ 暴力 2ⁿ 子集枚举 + 全部极大团极大性 + α(G)=ω(Ḡ)', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), n = 5 + Math.floor(rng() * 8);   // 5..12
+      var p = 0.2 + rng() * 0.6, edges = [], i, j;
+      for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) if (rng() < p) edges.push([i, j]);
+      var r = maxClique(n, edges);
+      if (r.size !== _cliqueBrute(n, edges)) worst = 1;
+      if (r.clique.length !== r.size) worst = 1;
+      if (r.clique.length && !_cliqueIsMaximal(n, edges, r.clique)) worst = 1;
+      for (var t = 0; t < r.maximal.length; t++) if (!_cliqueIsMaximal(n, edges, r.maximal[t])) worst = 1;
+      var comp = [];                                               // α(G) = ω(Ḡ)
+      for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) if (!_cliqueAdj(n, edges)[i][j]) comp.push([i, j]);
+      if (r.indepSize !== _cliqueBrute(n, comp)) worst = 1;
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('maxClique：ω ≤ 贪心着色数（χ 上界）+ 大 n 稀疏/稠密应力 + 经典实例（K6/空图/P5/C5/C5补）', 0, function () {
+    var worst = 0, tested = 0, seed, i, j;
+    for (seed = 200; seed < 240; seed++) {
+      var rng = mulberry32(seed), n = 10 + Math.floor(rng() * 7);   // 10..16
+      var p = rng() < 0.5 ? 0.15 + rng() * 0.2 : 0.7 + rng() * 0.28; // 稀疏 / 稠密两档
+      var edges = [];
+      for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) if (rng() < p) edges.push([i, j]);
+      var r = maxClique(n, edges);
+      if (r.size !== _cliqueBrute(n, edges)) worst = 1;
+      if (r.size > _cliqueGreedyColor(n, edges)) worst = 1;          // ω ≤ χ ≤ 贪心着色数
+      for (var t = 0; t < r.maximal.length; t++) if (!_cliqueIsMaximal(n, edges, r.maximal[t])) worst = 1;
+      tested++;
+    }
+    var classic = [
+      { name: 'K6', n: 6, e: (function () { var a = []; for (var x = 0; x < 6; x++) for (var y = x + 1; y < 6; y++) a.push([x, y]); return a; })(), w: 6 },
+      { name: '空图', n: 5, e: [], w: 1 },
+      { name: '路径P5', n: 5, e: [[0, 1], [1, 2], [2, 3], [3, 4]], w: 2 },
+      { name: '环C5', n: 5, e: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0]], w: 2 },
+      { name: 'C5补图', n: 5, e: [[0, 2], [0, 3], [1, 3], [1, 4], [2, 4]], w: 2 }
+    ];
+    for (i = 0; i < classic.length; i++) {
+      var c = classic[i];
+      if (maxClique(c.n, c.e).size !== c.w || _cliqueBrute(c.n, c.e) !== c.w) worst = 1;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('suffixArray：SA ≡ 朴素后缀排序 + Kasai LCP ≡ 暴力逐对 LCP（含全同字符/高度重复）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed);
+      var mode = Math.floor(rng() * 3), s = '', i, n2;
+      if (mode === 0) {
+        var alpha = 2 + Math.floor(rng() * 3);
+        n2 = 8 + Math.floor(rng() * 45);
+        for (i = 0; i < n2; i++) s += String.fromCharCode(97 + Math.floor(rng() * alpha));
+      } else if (mode === 1) {
+        n2 = 20 + Math.floor(rng() * 60);
+        s = new Array(n2 + 1).join('a');                    // 全同字符（倍增最坏情形）
+      } else {
+        var unit = rng() < 0.5 ? 'a' : 'ab';
+        n2 = 10 + Math.floor(rng() * 20);
+        s = new Array(n2 + 1).join(unit + 'c');             // 高度重复
+      }
+      var r = suffixArray(s);
+      if (r.sa.join(',') !== _saBrute(s).join(',')) worst = 1;
+      var seen = new Array(s.length).fill(false);            // SA 为 0..n−1 的排列
+      for (i = 0; i < s.length; i++) seen[r.sa[i]] = true;
+      for (i = 0; i < s.length; i++) if (!seen[i]) worst = 1;
+      if (r.lcp[0] !== 0) worst = 1;
+      for (i = 1; i < s.length; i++) if (r.lcp[i] !== _lcpBrute(s, r.sa[i - 1], r.sa[i])) worst = 1;
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('suffixArray：SA 二分搜索 ≡ 朴素匹配（多模式，含不命中）+ ≙ kmpSearch 交叉', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), alpha = 2 + Math.floor(rng() * 3), n = 8 + Math.floor(rng() * 45), s = '', i;
+      for (i = 0; i < n; i++) s += String.fromCharCode(97 + Math.floor(rng() * alpha));
+      var pats = [s.charAt(0), s.charAt(n - 1), s.substring(0, 3), s.substring(Math.floor(n / 2), Math.floor(n / 2) + 2), 'zzz'];
+      for (var t = 0; t < pats.length; t++) {
+        var got = saSearch(s, pats[t]).join(',');
+        if (got !== _matchBrute(s, pats[t]).join(',')) worst = 1;
+        if (pats[t].length && got !== kmpSearch(s, pats[t]).join(',')) worst = 1;   // ≙ 既有 KMP
+      }
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('fwhtConvolve：xor / or / and 三算子 ≡ 朴素 O(N²)（整数 0 精确）', 0, function () {
+    var worst = 0, tested = 0, ops = ['xor', 'or', 'and'];
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), N = 1 << (3 + Math.floor(rng() * 3)), a = [], b = [], i;
+      for (i = 0; i < N; i++) { a.push(Math.floor(rng() * 10)); b.push(Math.floor(rng() * 10)); }
+      for (var t = 0; t < ops.length; t++) {
+        var got = fwhtConvolve(a, b, ops[t]), exp = _convBrute(a, b, ops[t]);
+        for (i = 0; i < N; i++) if (got[i] !== exp[i]) worst = 1;
+      }
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('fwht：H² = N·I 正交性 + 线性性 + 单位元（xor/or: δ₀；and: δ_{N−1}）', 0, function () {
+    var worst = 0, tested = 0, ops = ['xor', 'or', 'and'];
+    for (var seed = 400; seed < 430; seed++) {
+      var rng = mulberry32(seed), N = 64, a = [], b = [], i;
+      for (i = 0; i < N; i++) { a.push(Math.floor(rng() * 200) - 100); b.push(Math.floor(rng() * 21) - 10); }
+      var twice = fwht(fwht(a));
+      for (i = 0; i < N; i++) if (twice[i] !== N * a[i]) worst = 1;        // H² = N·I
+      var ab = [], A = fwht(a), B = fwht(b);
+      for (i = 0; i < N; i++) ab.push(a[i] + b[i]);
+      var L = fwht(ab);
+      for (i = 0; i < N; i++) if (L[i] !== A[i] + B[i]) worst = 1;         // 线性性
+      var e0 = new Array(N).fill(0); e0[0] = 1;
+      var eAll = new Array(N).fill(0); eAll[N - 1] = 1;
+      for (var t = 0; t < ops.length; t++) {
+        var g = fwhtConvolve(a, ops[t] === 'and' ? eAll : e0, ops[t]);
+        for (i = 0; i < N; i++) if (g[i] !== a[i]) worst = 1;              // 单位元
+      }
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -9632,6 +10006,12 @@
     arborescence: arborescence,
     heldKarpTSP: heldKarpTSP,
     ac3CSP: ac3CSP,
+    /* v1.3.21 算法库扩展十一 */
+    maxClique: maxClique,
+    suffixArray: suffixArray,
+    saSearch: saSearch,
+    fwht: fwht,
+    fwhtConvolve: fwhtConvolve,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
