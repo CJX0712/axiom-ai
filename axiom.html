@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.19';
+  var VERSION = '1.3.20';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -8921,6 +8921,563 @@
     return tested === 0 ? 1 : worst;
   });
 
+  /* ==================== v1.3.20 算法库扩展十 ==================== */
+  /* ① Chu–Liu/Edmonds 有向最小树形图（Edmonds 1967, *J. Res. Nat. Bur. Standards*）。
+     每轮取每非根组最小入边 → 函数图找环 → 收缩环为超节点（入环边权减去被替换的暂定入边权）
+     → 递归 → 展开：入口边（= 超节点的最终父边）取代入口组的暂定挑选，环上其余成员保留
+     本轮挑选，非环节点沿用递归解。
+     关键实现教训（v1.3.20 沙盒实证）：迭代式「暂定后写覆盖」会丢失层级展开结构——簇的挑选
+     被高层取代时，被覆盖成员必须回放到其收缩层的挑选；故必须用递归 + 每层 chosen 父边表
+     自底向上组装，展开时入口组由入口边取代、其余成员保留本层挑选。
+     不变量：最小树形图 ≡ 暴力父分配枚举（整数 0 精确，覆盖负权/平行边/不可行判定）。 */
+  function arborescence(n, edges, root) {
+    // edges: [[u,v,w], ...] 有向边（允许负权、平行边）；返回 { cost, parent }（parent[v]=u, parent[root]=-1）
+    // 不可行 { cost: Infinity, parent: null }
+    var parent = new Array(n).fill(-1), cost = 0;
+    if (n === 1) return { cost: 0, parent: [-1] };
+    // solve：在组图（groups = [[origIds],...]；es = [{u,v,w,rw,ou,ov}]，u/v 为组索引）上递归。
+    // 返回 chosen：组 -> 该组的最终父边（原始边对象）；同时把父边写入 parent / 累加 cost（首写即终值）。
+    function solve(groups, es) {
+      var K = groups.length;
+      var rootIdx = -1;
+      for (var q = 0; q < K; q++) if (groups[q].length === 1 && groups[q][0] === root) { rootIdx = q; break; }
+      if (rootIdx === -1) return null;                      // 防御：根组恒为 {root}（根无入边、永不入环）
+      // 每组最小入边（调整权 w 用于决策，rw 为真实权）
+      var inW = new Array(K).fill(Infinity), inE = new Array(K).fill(null);
+      for (var t = 0; t < es.length; t++) {
+        var e = es[t];
+        if (e.u === e.v) continue;                          // 自环 / 超节点内部边
+        if (e.w < inW[e.v]) { inW[e.v] = e.w; inE[e.v] = e; }
+      }
+      for (q = 0; q < K; q++) if (q !== rootIdx && inE[q] === null) return null;   // 有组无入边 → 不可行
+      // 函数图找环：par[q] = 入选边起点组
+      var par = new Array(K).fill(-1);
+      for (q = 0; q < K; q++) if (q !== rootIdx) par[q] = inE[q].u;
+      var color = new Array(K).fill(0), cycle = null;
+      for (var s = 0; s < K && !cycle; s++) {
+        if (color[s]) continue;
+        var path = [], cur = s;
+        while (cur !== -1 && color[cur] === 0) { color[cur] = 1; path.push(cur); cur = par[cur]; }
+        if (cur !== -1 && color[cur] === 1) cycle = path.slice(path.indexOf(cur));
+        for (var w2 = 0; w2 < path.length; w2++) color[path[w2]] = 2;
+      }
+      var chosen = new Array(K).fill(null);
+      if (!cycle) {                                         // 无环：本层挑选即终解
+        for (q = 0; q < K; q++) {
+          if (q === rootIdx) continue;
+          chosen[q] = inE[q];
+          if (parent[inE[q].ov] === -1) { parent[inE[q].ov] = inE[q].ou; cost += inE[q].rw; }
+        }
+        return chosen;
+      }
+      // 收缩环 C 为单一超节点（保留环上各组的原始节点并集）
+      var inCycle = {};
+      for (var ci = 0; ci < cycle.length; ci++) inCycle[cycle[ci]] = 1;
+      var newGroups = [], mapOld = new Array(K).fill(-1), starIdx = -1;
+      for (q = 0; q < K; q++) {
+        if (inCycle[q]) {
+          if (starIdx === -1) { starIdx = newGroups.length; newGroups.push([]); }
+          mapOld[q] = starIdx;
+          for (var z = 0; z < groups[q].length; z++) newGroups[starIdx].push(groups[q][z]);
+        } else { mapOld[q] = newGroups.length; newGroups.push(groups[q].slice()); }
+      }
+      // 重映射边 + 权调整：入环边减去被替换的暂定入边权
+      var nes = [];
+      for (t = 0; t < es.length; t++) {
+        var ed = es[t];
+        if (inCycle[ed.u] && inCycle[ed.v]) continue;       // 环内部边丢弃
+        var nu = mapOld[ed.u], nv = mapOld[ed.v];
+        if (nu === nv) continue;                            // 同超节点内部边丢弃
+        var nw = ed.w;
+        if (inCycle[ed.v] && !inCycle[ed.u]) nw = ed.w - inW[ed.v];
+        nes.push({ u: nu, v: nv, w: nw, rw: ed.rw, ou: ed.ou, ov: ed.ov });
+      }
+      var sub = solve(newGroups, nes);                      // 递归
+      if (sub === null) return null;
+      var entry = sub[starIdx];                             // 入口边 = 超节点的最终父边（头落在环内）
+      if (!entry) return null;                              // 防御：超节点为非根组，必有父边
+      // 层级展开：入口组由入口边取代；其余环上成员保留本层暂定挑选；非环节点沿用递归解
+      for (q = 0; q < K; q++) {
+        if (q === rootIdx) continue;
+        if (inCycle[q]) {
+          if (groups[q].indexOf(entry.ov) !== -1) chosen[q] = entry;               // 入口组
+          else {
+            chosen[q] = inE[q];                                                   // 非入口成员：本层挑选
+            if (parent[inE[q].ov] === -1) { parent[inE[q].ov] = inE[q].ou; cost += inE[q].rw; }
+          }
+        } else chosen[q] = sub[mapOld[q]];                                        // 非环节点：递归解
+      }
+      return chosen;
+    }
+    var groups0 = [], es0 = edges.map(function (e) { return { u: e[0], v: e[1], w: e[2], rw: e[2], ou: e[0], ov: e[1] }; });
+    for (var i = 0; i < n; i++) groups0.push([i]);
+    if (solve(groups0, es0) === null) return { cost: Infinity, parent: null };
+    return { cost: cost, parent: parent };
+  }
+  function _arboBrute(n, edges, root) {          // 暴力：每个非根节点枚举父边，校验无环 + 全达根
+    var cand = [];
+    for (var v = 0; v < n; v++) {
+      if (v === root) { cand.push(null); continue; }
+      var best = {};
+      for (var t = 0; t < edges.length; t++) if (edges[t][1] === v) {
+        var u = edges[t][0];
+        if (u === v) continue;
+        if (!(u in best) || edges[t][2] < best[u]) best[u] = edges[t][2];
+      }
+      var arr = [];
+      for (var k in best) arr.push([+k, best[k]]);
+      if (arr.length === 0) return { cost: Infinity, parent: null };
+      cand.push(arr);
+    }
+    var best = { cost: Infinity, parent: null };
+    // 后缀最小剩余权之和（负权下安全剪枝：cost + minRem[v] >= best 才可剪）
+    var minRem = new Array(n + 1).fill(0);
+    for (var vv = n - 1; vv >= 0; vv--) {
+      var mn = vv === root ? 0 : Math.min.apply(null, cand[vv].map(function (c) { return c[1]; }));
+      minRem[vv] = minRem[vv + 1] + mn;
+    }
+    (function rec(v, parent, cost) {
+      if (cost + minRem[v] >= best.cost) return;
+      if (v === n) {
+        for (var x = 0; x < n; x++) {
+          if (x === root) continue;
+          var seen = {}, cur = x, steps = 0;
+          while (cur !== root) {
+            if (seen[cur] || steps > n) return;            // 成环
+            seen[cur] = 1; cur = parent[cur];
+            if (cur === -1) return;
+            steps++;
+          }
+        }
+        best = { cost: cost, parent: parent.slice() };
+        return;
+      }
+      if (v === root) { rec(v + 1, parent, cost); return; }
+      for (var ci = 0; ci < cand[v].length; ci++) {
+        parent[v] = cand[v][ci][0];
+        rec(v + 1, parent, cost + cand[v][ci][1]);
+        parent[v] = -1;
+      }
+    })(0, new Array(n).fill(-1), 0);
+    return best;
+  }
+  function _arboStructural(n, edges, root, r) {  // 结构合法：父边真实、父链无环必达根、cost = Σ父边权（平行边取最小）
+    if (!isFinite(r.cost) || r.parent === null) return false;
+    if (r.parent[root] !== -1) return false;
+    var wOf = {}, sum = 0;
+    for (var t = 0; t < edges.length; t++) {
+      var kk = edges[t][0] + '>' + edges[t][1];
+      if (!(kk in wOf) || edges[t][2] < wOf[kk]) wOf[kk] = edges[t][2];
+    }
+    for (var v = 0; v < n; v++) {
+      if (v === root) continue;
+      var p = r.parent[v];
+      if (p < 0 || p >= n) return false;
+      if (!(p + '>' + v in wOf)) return false;
+      sum += wOf[p + '>' + v];
+      var seen = {}, cur = v, steps = 0;
+      while (cur !== root) {
+        if (seen[cur] || steps > n) return false;
+        seen[cur] = 1; cur = r.parent[cur]; steps++;
+        if (cur === -1) return false;
+      }
+    }
+    return sum === r.cost;
+  }
+
+  check('arborescence：最小树形图 ≡ 暴力父分配枚举（负权/平行边/多根/不可行判定，整数 0 精确）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), n = 4 + Math.floor(rng() * 4);   // 4..7
+      var root = Math.floor(rng() * n);
+      var neg = rng() < 0.3;                                        // 三成种子含负权
+      var W = function () { var w = 1 + Math.floor(rng() * 20); return neg ? w - 10 : w; };
+      var edges = [];
+      var planted = rng() < 0.5;                                    // 半数种子植入可行树形图保可行
+      if (planted) {
+        for (var v = 0; v < n; v++) {
+          if (v === root) continue;
+          var u = Math.floor(rng() * n);
+          while (u === v) u = Math.floor(rng() * n);
+          edges.push([u, v, W()]);
+        }
+      }
+      var dens = 0.25 + rng() * 0.5;
+      for (var u2 = 0; u2 < n; u2++) for (var v2 = 0; v2 < n; v2++) {
+        if (u2 === v2) continue;
+        if (rng() < dens) edges.push([u2, v2, W()]);
+        if (rng() < 0.12) edges.push([u2, v2, W()]);                // 平行边
+      }
+      var r = arborescence(n, edges, root), b = _arboBrute(n, edges, root);
+      if (!isFinite(b.cost)) {
+        if (isFinite(r.cost)) worst = 1;                            // 暴力判不可行而算法有解
+        continue;
+      }
+      if (!isFinite(r.cost) || !_arboStructural(n, edges, root, r)) { worst = 1; continue; }
+      worst = Math.max(worst, Math.abs(r.cost - b.cost));
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('arborescence：结构合法 + cost=Σ父边权 + 边序不变性（n≤12，随机置换输入边序）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 20; seed++) {
+      var rng = mulberry32(100 + seed), n = 10 + Math.floor(rng() * 3);   // 10..12
+      var root = Math.floor(rng() * n);
+      var neg = rng() < 0.3;
+      var W = function () { var w = 1 + Math.floor(rng() * 40); return neg ? w - 20 : w; };
+      var edges = [];
+      var planted = rng() < 0.6;
+      if (planted) for (var v = 0; v < n; v++) {
+        if (v === root) continue;
+        var u = Math.floor(rng() * n);
+        while (u === v) u = Math.floor(rng() * n);
+        edges.push([u, v, W()]);
+      }
+      var dens = 0.3 + rng() * 0.4;
+      for (var u2 = 0; u2 < n; u2++) for (var v2 = 0; v2 < n; v2++) {
+        if (u2 === v2) continue;
+        if (rng() < dens) edges.push([u2, v2, W()]);
+      }
+      var r1 = arborescence(n, edges, root);
+      // 随机置换边序（Fisher–Yates）
+      var perm = edges.slice();
+      for (var k = perm.length - 1; k > 0; k--) { var j2 = Math.floor(rng() * (k + 1)); var tt = perm[k]; perm[k] = perm[j2]; perm[j2] = tt; }
+      var r2 = arborescence(n, perm, root);
+      if (!isFinite(r1.cost) || !isFinite(r2.cost)) {
+        if (isFinite(r1.cost) !== isFinite(r2.cost)) worst = 1;     // 可行性判定须与边序无关
+        continue;
+      }
+      if (!_arboStructural(n, edges, root, r1) || !_arboStructural(n, perm, root, r2)) { worst = 1; continue; }
+      worst = Math.max(worst, Math.abs(r1.cost - r2.cost));         // 最优值与边序无关
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ② Held-Karp 精确 TSP（Bellman 1962；Held–Karp 1962）。
+     子集 DP：dp[mask][j] = 从 0 出发、恰访 mask 中顶点、止于 j 的最短路径；回溯重构环游。
+     不变量：≡ 暴力枚举 (n−1)! 排列（支持非对称距离，整数 0 精确）+ 环游合法性。 */
+  function heldKarpTSP(dist) {
+    var n = dist.length;
+    if (n === 1) return { cost: 0, tour: [0] };
+    var FULL = (1 << n) - 1;
+    var dp = [], par = [];
+    for (var mask = 0; mask <= FULL; mask++) { dp.push(new Array(n).fill(Infinity)); par.push(new Array(n).fill(-1)); }
+    for (var j = 1; j < n; j++) { dp[(1 << j) | 1][j] = dist[0][j]; par[(1 << j) | 1][j] = 0; }
+    for (var m = 1; m <= FULL; m++) {
+      if (!(m & 1)) continue;                              // 子集必含起点 0
+      for (j = 1; j < n; j++) {
+        if (!(m & (1 << j))) continue;
+        var prev = m ^ (1 << j);
+        if (prev === 0) continue;
+        var best = Infinity, bi = -1;
+        for (var i = 0; i < n; i++) {
+          if (!(prev & (1 << i))) continue;
+          if (!isFinite(dp[prev][i])) continue;
+          var c = dp[prev][i] + dist[i][j];
+          if (c < best) { best = c; bi = i; }
+        }
+        if (bi !== -1 && best < dp[m][j]) { dp[m][j] = best; par[m][j] = bi; }
+      }
+    }
+    var endJ = -1, bestC = Infinity;
+    for (j = 1; j < n; j++) {
+      if (!isFinite(dp[FULL][j])) continue;
+      var c2 = dp[FULL][j] + dist[j][0];
+      if (c2 < bestC) { bestC = c2; endJ = j; }
+    }
+    if (endJ === -1) return { cost: Infinity, tour: null };
+    var tour = [], mask = FULL, cur = endJ;
+    while (cur !== -1) { tour.push(cur); var p = par[mask][cur]; mask ^= (1 << cur); cur = p; }
+    tour.reverse();
+    return { cost: bestC, tour: tour };
+  }
+  function _tspBrute(dist) {                    // 暴力：枚举 (n−1)! 排列
+    var n = dist.length;
+    if (n === 1) return { cost: 0, tour: [0] };
+    var best = { cost: Infinity, tour: null }, rest = [];
+    for (var i = 1; i < n; i++) rest.push(i);
+    var used = new Array(n).fill(false);
+    (function rec(cur, acc, tour) {
+      if (acc >= best.cost) return;
+      if (cur.length === rest.length) {
+        var c = acc + dist[tour[tour.length - 1]][0];
+        if (c < best.cost) best = { cost: c, tour: tour.slice() };
+        return;
+      }
+      for (var k = 0; k < rest.length; k++) {
+        if (used[k]) continue;
+        used[k] = true; tour.push(rest[k]);
+        rec(cur.concat([rest[k]]), acc + dist[tour[tour.length - 2]][rest[k]], tour);
+        tour.pop(); used[k] = false;
+      }
+    })([], 0, [0]);
+    return best;
+  }
+  function _tspTourCost(dist, tour) {           // 环游长度（闭合回路，独立复算）
+    var n = tour.length, c = 0;
+    for (var i = 0; i < n - 1; i++) c += dist[tour[i]][tour[i + 1]];
+    return c + dist[tour[n - 1]][0];
+  }
+
+  check('heldKarpTSP：精确 TSP ≡ 暴力 (n−1)! 排列（含非对称距离，0 精确）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), n = 5 + Math.floor(rng() * 4);   // 5..8
+      var dist = [];
+      for (var i = 0; i < n; i++) {
+        var row = [];
+        for (var j = 0; j < n; j++) row.push(i === j ? 0 : 1 + Math.floor(rng() * 30));
+        dist.push(row);
+      }
+      var r = heldKarpTSP(dist), b = _tspBrute(dist);
+      if (!isFinite(r.cost) || !isFinite(b.cost)) { worst = 1; continue; }
+      // 环游合法性：0..n−1 的排列且以 0 起讫
+      if (r.tour.length !== n || r.tour[0] !== 0) { worst = 1; continue; }
+      var srt = r.tour.slice().sort(function (a, b2) { return a - b2; });
+      for (var k = 0; k < n; k++) if (srt[k] !== k) { worst = 1; break; }
+      worst = Math.max(worst, Math.abs(r.cost - b.cost), Math.abs(_tspTourCost(dist, r.tour) - r.cost));
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  check('heldKarpTSP：环游合法 + cost 自一致 + 2-opt 局部最优 + ≤ 最近邻贪心（对称距离）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 20; seed++) {
+      var rng = mulberry32(200 + seed), n = 8 + Math.floor(rng() * 7);   // 8..14
+      var dist = [];
+      for (var i = 0; i < n; i++) {
+        var row = [];
+        for (var j = 0; j < n; j++) row.push(i === j ? 0 : 0);
+        dist.push(row);
+      }
+      for (var i2 = 0; i2 < n; i2++) for (var j2 = i2 + 1; j2 < n; j2++) {   // 对称距离
+        var w = 1 + Math.floor(rng() * 100);
+        dist[i2][j2] = w; dist[j2][i2] = w;
+      }
+      var r = heldKarpTSP(dist);
+      if (!isFinite(r.cost) || r.tour.length !== n || r.tour[0] !== 0) { worst = 1; continue; }
+      var srt = r.tour.slice().sort(function (a, b2) { return a - b2; });
+      for (var k = 0; k < n; k++) if (srt[k] !== k) { worst = 1; break; }
+      // cost 自一致
+      worst = Math.max(worst, Math.abs(_tspTourCost(dist, r.tour) - r.cost));
+      // 2-opt 局部最优（必要最优性条件）：无任何反转片段能严格改进
+      for (var a = 1; a < n - 1; a++) for (var b2 = a + 1; b2 < n; b2++) {
+        var A = r.tour[a - 1], B = r.tour[a], C = r.tour[b2], D = r.tour[(b2 + 1) % n];
+        var delta = dist[A][C] + dist[B][D] - dist[A][B] - dist[C][D];
+        if (delta < -1e-9) worst = Math.max(worst, -delta);
+      }
+      // ≤ 最近邻贪心（任意合法环游的成本上界）
+      var t = [0], vis = new Array(n).fill(false); vis[0] = true;
+      for (var s = 1; s < n; s++) {
+        var last = t[t.length - 1], nxt = -1, nd = Infinity;
+        for (var v2 = 0; v2 < n; v2++) if (!vis[v2] && dist[last][v2] < nd) { nd = dist[last][v2]; nxt = v2; }
+        t.push(nxt); vis[nxt] = true;
+      }
+      worst = Math.max(worst, r.cost - _tspTourCost(dist, t));
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ③ AC-3 弧一致性 + CSP 回溯求解（Mackworth 1977）。
+     弧队列消解至不动点（每值在邻居域中有支持）；MRV 回溯 + 赋值后全传播（MAC）。
+     不变量：可满足性决策 ≡ 暴力枚举全部赋值；解合法；AC-3 不动点（双向弧逐值有支持）；
+     AC-3 不删解值（SAT 实例必有某暴力解的全部值存活于传播后域）。 */
+  function ac3CSP(n, domains, constraints) {
+    // constraints: [{ i, j, ok(a,b) }] 二元谓词（a 为 i 的值、b 为 j 的值）
+    var D = domains.map(function (d) { return d.slice(); });
+    var cOf = {};                                       // "i,j" -> 约束（含两向）
+    for (var t = 0; t < constraints.length; t++) {
+      var c = constraints[t];
+      cOf[c.i + ',' + c.j] = c;
+      if (!cOf[c.j + ',' + c.i]) cOf[c.j + ',' + c.i] = { i: c.j, j: c.i, ok: c.ok, flip: c };
+    }
+    function okOn(i, j, a, b) {                          // 按弧向取谓词方向
+      var c = cOf[i + ',' + j];
+      if (!c) return true;                               // 两变量间无约束 → 恒兼容
+      if (c.flip) return c.ok(b, a);
+      return c.ok(a, b);
+    }
+    function arcsInto(i) {                               // 所有指向 i 的弧 (k,i) 的 k
+      var res = [];
+      for (var k = 0; k < n; k++) if (k !== i && cOf[k + ',' + i]) res.push(k);
+      return res;
+    }
+    function propagate(Dm) {
+      var queue = [];
+      for (var t = 0; t < constraints.length; t++) { queue.push([constraints[t].i, constraints[t].j]); queue.push([constraints[t].j, constraints[t].i]); }
+      while (queue.length) {
+        var arc = queue.shift(), i = arc[0], j = arc[1];
+        var changed = false;
+        for (var a = Dm[i].length - 1; a >= 0; a--) {
+          var av = Dm[i][a], hasSup = false;
+          for (var b = 0; b < Dm[j].length; b++) if (okOn(i, j, av, Dm[j][b])) { hasSup = true; break; }
+          if (!hasSup) { Dm[i].splice(a, 1); changed = true; }
+        }
+        if (changed) {
+          if (Dm[i].length === 0) return false;          // 域擦空 → 不一致
+          var ks = arcsInto(i);
+          for (var q = 0; q < ks.length; q++) queue.push([ks[q], i]);
+        }
+      }
+      return true;
+    }
+    var consistent = propagate(D);
+    var solution = null, steps = 0;
+    function search(assign, idx, Dm) {
+      if (steps > 500000) return false;                  // 护栏：失败即检查报红（不静默谎报 UNSAT）
+      if (idx === n) { solution = assign.slice(); return true; }
+      // 选未赋值中域最小者（MRV）
+      var bi = -1, bLen = Infinity;
+      for (var v = 0; v < n; v++) if (assign[v] === undefined && Dm[v].length < bLen) { bLen = Dm[v].length; bi = v; }
+      if (bi === -1 || bLen === 0) return false;
+      var vals = Dm[bi].slice();
+      for (var k = 0; k < vals.length; k++) {
+        steps++;
+        var a2 = assign.slice(); a2[bi] = vals[k];
+        // 与已赋值邻居逐约束校验
+        var okAsg = true;
+        for (var t = 0; t < constraints.length; t++) {
+          var c = constraints[t];
+          if (c.i === bi && a2[c.j] !== undefined && !c.ok(a2[bi], a2[c.j])) okAsg = false;
+          if (c.j === bi && a2[c.i] !== undefined && !c.ok(a2[c.i], a2[bi])) okAsg = false;
+        }
+        if (!okAsg) continue;
+        var D2 = Dm.map(function (d) { return d.slice(); });
+        D2[bi] = [vals[k]];
+        if (!propagate(D2)) continue;
+        if (search(a2, idx + 1, D2)) return true;
+      }
+      return false;
+    }
+    if (consistent) {
+      var a0 = new Array(n).fill(undefined);
+      search(a0, 0, D);                                   // 未找到解也正常（UNSAT）
+    }
+    return { consistent: consistent, domains: D, solution: solution };
+  }
+  function _cspBrute(n, domains, constraints) {  // 暴力：枚举全部赋值，收集全部解
+    var sols = [];
+    (function rec(v, a) {
+      if (v === n) {
+        for (var t = 0; t < constraints.length; t++) {
+          var c = constraints[t];
+          if (!c.ok(a[c.i], a[c.j])) return;
+        }
+        sols.push(a.slice());
+        return;
+      }
+      for (var k = 0; k < domains[v].length; k++) { a[v] = domains[v][k]; rec(v + 1, a); }
+      a[v] = undefined;
+    })(0, new Array(n).fill(undefined));
+    return sols;
+  }
+
+  check('ac3CSP：可满足性决策 ≡ 暴力枚举 + 解合法（SAT/UNSAT，0 精确）', 0, function () {
+    var worst = 0, tested = 0, sat = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(seed), n = 4 + Math.floor(rng() * 3);   // 4..6
+      var domains = [];
+      for (var v = 0; v < n; v++) {
+        var dsz = 2 + Math.floor(rng() * 2), d = [];
+        for (var k = 0; k < dsz; k++) d.push(k);
+        domains.push(d);
+      }
+      var forceSat = rng() < 0.5;
+      var hidden = domains.map(function (d) { return d[Math.floor(rng() * d.length)]; });
+      var constraints = [];
+      for (var i = 0; i < n; i++) for (var j = i + 1; j < n; j++) {
+        if (rng() < 0.6) {
+          var tab = {};
+          (function (ii, jj) {
+            for (var a = 0; a < domains[ii].length; a++) for (var b = 0; b < domains[jj].length; b++) {
+              var keep = rng() < 0.55;
+              if (forceSat && domains[ii][a] === hidden[ii] && domains[jj][b] === hidden[jj]) keep = true;
+              if (keep) tab[domains[ii][a] + '|' + domains[jj][b]] = 1;
+            }
+            constraints.push({ i: ii, j: jj, ok: function (x, y) { return !!tab[x + '|' + y]; } });
+          })(i, j);
+        }
+      }
+      var sols = _cspBrute(n, domains, constraints);
+      var r = ac3CSP(n, domains, constraints);
+      if (sols.length > 0) sat++;
+      // (a) 决策一致
+      if ((r.solution !== null) !== (sols.length > 0)) { worst = 1; continue; }
+      // (b) 解合法
+      if (r.solution !== null) {
+        for (var t = 0; t < constraints.length; t++) {
+          var c = constraints[t];
+          if (!c.ok(r.solution[c.i], r.solution[c.j])) { worst = 1; break; }
+        }
+      }
+      tested++;
+    }
+    return tested === 0 || sat === 0 ? 1 : worst;
+  });
+
+  check('ac3CSP：AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解）', 0, function () {
+    var worst = 0, tested = 0;
+    for (var seed = 1; seed <= 25; seed++) {
+      var rng = mulberry32(500 + seed), n = 4 + Math.floor(rng() * 3);
+      var domains = [];
+      for (var v = 0; v < n; v++) {
+        var dsz = 2 + Math.floor(rng() * 2), d = [];
+        for (var k = 0; k < dsz; k++) d.push(k);
+        domains.push(d);
+      }
+      var forceSat = rng() < 0.6;
+      var hidden = domains.map(function (d) { return d[Math.floor(rng() * d.length)]; });
+      var constraints = [];
+      for (var i = 0; i < n; i++) for (var j = i + 1; j < n; j++) {
+        if (rng() < 0.65) {
+          var tab = {};
+          (function (ii, jj) {
+            for (var a = 0; a < domains[ii].length; a++) for (var b = 0; b < domains[jj].length; b++) {
+              var keep = rng() < 0.5;
+              if (forceSat && domains[ii][a] === hidden[ii] && domains[jj][b] === hidden[jj]) keep = true;
+              if (keep) tab[domains[ii][a] + '|' + domains[jj][b]] = 1;
+            }
+            constraints.push({ i: ii, j: jj, ok: function (x, y) { return !!tab[x + '|' + y]; } });
+          })(i, j);
+        }
+      }
+      var sols = _cspBrute(n, domains, constraints);
+      var r = ac3CSP(n, domains, constraints);
+      if (r.consistent) {
+        // 不动点：每弧每值（双向）都有支持
+        for (var t = 0; t < constraints.length; t++) {
+          var cc = constraints[t];
+          var dirs = [[cc.i, cc.j], [cc.j, cc.i]];
+          for (var di = 0; di < 2; di++) {
+            var vi = dirs[di][0], vj = dirs[di][1];
+            for (var ai = 0; ai < r.domains[vi].length; ai++) {
+              var av = r.domains[vi][ai], sup = false;
+              for (var bj = 0; bj < r.domains[vj].length; bj++) {
+                var okv = di === 0 ? cc.ok(av, r.domains[vj][bj]) : cc.ok(r.domains[vj][bj], av);
+                if (okv) { sup = true; break; }
+              }
+              if (!sup) { worst = 1; break; }
+            }
+          }
+        }
+      } else if (sols.length > 0) worst = 1;              // 擦空 ⇒ 暴力必须同样判 UNSAT
+      // 不删解值：SAT 实例必有某暴力解全部值存活
+      if (sols.length > 0) {
+        var anySurvive = sols.some(function (s) {
+          return s.every(function (val, vv) { return r.domains[vv].indexOf(val) !== -1; });
+        });
+        if (!anySurvive) worst = 1;
+      }
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -9084,6 +9641,10 @@
     auctionAssignment: auctionAssignment,
     topTradingCycles: topTradingCycles,
     simplexLP: simplexLP,
+    /* v1.3.20 算法库扩展十 */
+    arborescence: arborescence,
+    heldKarpTSP: heldKarpTSP,
+    ac3CSP: ac3CSP,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
@@ -10148,7 +10709,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 /* ==== AXIOM ui.js（仪表盘） ==== */
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(51) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(54) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -10599,7 +11160,11 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     /* v1.3.19 算法库扩展九 */
     { id: 'auctionAssignment', name: '拍卖算法（指派问题）', src: 'Bertsekas (1981)', api: 'AXIOM.auctionAssignment', inv: 'ε-标度价格拍卖（每相重启匹配、保留价格）≡ hungarianMaxWeight(−cost) ≙ 暴力排列（整数 0 精确）', chk: ['auctionAssignment：'] },
     { id: 'topTradingCycles', name: 'Top Trading Cycles', src: 'Shapley & Scarf (1974)', api: 'AXIOM.topTradingCycles', inv: '顶交易循环 = 唯一弱核分配（严格偏好，Roth–Postlewaite 1977）且在强核中 ≙ 暴力枚举 n! 配置（0 精确）', chk: ['topTradingCycles：'] },
-    { id: 'simplexLP', name: '两阶段单纯形 LP', src: 'Dantzig (1947)；Bland (1977)', api: 'AXIOM.simplexLP', inv: '≤/≥/= 混合约束 + Bland 防循环；最优目标 ≡ 暴力顶点枚举（约束等式组合，1e-9 容差）', chk: ['simplexLP：'] }
+    { id: 'simplexLP', name: '两阶段单纯形 LP', src: 'Dantzig (1947)；Bland (1977)', api: 'AXIOM.simplexLP', inv: '≤/≥/= 混合约束 + Bland 防循环；最优目标 ≡ 暴力顶点枚举（约束等式组合，1e-9 容差）', chk: ['simplexLP：'] },
+    /* v1.3.20 算法库扩展十 */
+    { id: 'arborescence', name: 'Chu–Liu/Edmonds 有向最小树形图', src: 'Edmonds (1967)', api: 'AXIOM.arborescence', inv: '最小树形图 ≡ 暴力父分配枚举（负权/平行边/多根/不可行判定，0 精确）+ 结构合法 + cost=Σ父边权 + 边序不变性', chk: ['arborescence：'] },
+    { id: 'heldKarpTSP', name: 'Held-Karp 精确 TSP', src: 'Bellman (1962)；Held–Karp (1962)', api: 'AXIOM.heldKarpTSP', inv: '子集 DP O(2ⁿn²) ≡ 暴力 (n−1)! 排列（含非对称距离，0 精确）+ 2-opt 局部最优 + ≤ 最近邻贪心', chk: ['heldKarpTSP：'] },
+    { id: 'ac3CSP', name: 'AC-3 弧一致性 + CSP 回溯', src: 'Mackworth (1977)', api: 'AXIOM.ac3CSP', inv: '决策 ≡ 暴力枚举全部赋值 + 解合法 + AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解）', chk: ['ac3CSP：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -11171,6 +11736,81 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
       '两阶段单纯形（Bland 防循环）解 x = [' + r.x.map(function (v) { return v.toFixed(4); }).join(', ') + '] · 最优值 = ' + r.obj.toFixed(6) + '\n' +
       '暴力顶点枚举（15 个等式组合）最优值 = ' + best.toFixed(6) + '\n' +
       (agree ? '算法与暴力枚举一致 ⇒ 两阶段单纯形正确（混合 ≤/≥/= 方向）' : '❌ 不一致');
+  },
+  arborescence: function () {
+    // 经典收缩实例：2↔3 互指成环（最小入边 1→2 / 3→2），入口在 0→2 与 1→3 间竞争
+    var edges = [[1, 2, 1], [2, 1, 1], [0, 1, 10], [0, 2, 10], [1, 3, 1], [3, 2, 1], [2, 3, 5]];
+    var r = AXIOM.arborescence(4, edges, 0);
+    // 运行时自校验：结构合法（父链必达根无环）+ cost = Σ父边权 + 边序不变
+    var ok = true, sum = 0, wOf = {};
+    edges.forEach(function (e) { var k = e[0] + '>' + e[1]; if (!(k in wOf) || e[2] < wOf[k]) wOf[k] = e[2]; });
+    for (var v = 1; v < 4; v++) {
+      var p = r.parent[v];
+      if (!(p + '>' + v in wOf)) { ok = false; break; }
+      sum += wOf[p + '>' + v];
+      var seen = {}, cur = v, steps = 0;
+      while (cur !== 0) { if (seen[cur] || steps > 4) { ok = false; break; } seen[cur] = 1; cur = r.parent[cur]; steps++; }
+    }
+    if (sum !== r.cost) ok = false;
+    var shuffled = edges.slice().reverse();
+    var r2 = AXIOM.arborescence(4, shuffled, 0);
+    if (r2.cost !== r.cost) ok = false;
+    return '4 节点有向图，根 = 0（边 [u,v,w]）：' + JSON.stringify(edges) + '\n' +
+      '最小树形图 parent = [' + r.parent.join(', ') + '] · cost = ' + r.cost + '\n' +
+      '环 {2,3} 被收缩为超节点：入口边取 1→3（调整权 1−1=0 < 0→2 的 10−1=9），环上 2 保留暂定挑选 3→2\n' +
+      '结构合法（父链必达根无环）= ' + ok + ' · cost=Σ父边权 = ' + (sum === r.cost) + ' · 边序反转后 cost 不变 = ' + (r2.cost === r.cost);
+  },
+  heldKarpTSP: function () {
+    // 6 城非对称距离（确定性构造）
+    var dist = [[0, 20, 30, 10, 15, 25], [15, 0, 35, 25, 30, 20], [30, 40, 0, 20, 25, 35],
+      [12, 28, 22, 0, 18, 30], [18, 33, 27, 14, 0, 22], [26, 22, 38, 32, 20, 0]];
+    var r = AXIOM.heldKarpTSP(dist);
+    // 运行时暴力：(n−1)! = 120 排列
+    var rest = [1, 2, 3, 4, 5], used = [false, false, false, false, false, false], best = Infinity;
+    (function rec(tour, acc) {
+      if (tour.length === 5) { var c = acc + dist[tour[4]][0]; if (c < best) best = c; return; }
+      for (var k = 0; k < 5; k++) {
+        if (used[k]) continue;
+        used[k] = true; tour.push(rest[k]);
+        rec(tour, acc + dist[tour[tour.length - 2]][rest[k]]);
+        tour.pop(); used[k] = false;
+      }
+    })([0], 0);
+    var agree = r.cost === best;
+    return '6 城非对称 TSP（dist[i][j] ≠ dist[j][i]，起点 0）\n' +
+      'Held-Karp 环游 = [' + r.tour.join(' → ') + ' → 0] · cost = ' + r.cost + '\n' +
+      '运行时暴力枚举 (6−1)! = 120 排列最优值 = ' + best + '\n' +
+      (agree ? '子集 DP ≡ 暴力排列 ⇒ 精确最优（0 精确）' : '❌ 不一致');
+  },
+  ac3CSP: function () {
+    // 两个确定性实例：奇环 2-染色（AC-3 擦空即判 UNSAT）+ C4 环 3-染色（SAT）
+    function run(vars, dom, cons) {
+      var sols = [];
+      (function rec(v, a) {
+        if (v === vars) {
+          for (var t = 0; t < cons.length; t++) if (!cons[t].ok(a[cons[t].i], a[cons[t].j])) return;
+          sols.push(a.slice()); return;
+        }
+        for (var k = 0; k < dom[v].length; k++) { a[v] = dom[v][k]; rec(v + 1, a); }
+        a[v] = undefined;
+      })(0, new Array(vars).fill(undefined));
+      return sols;
+    }
+    var neq = function (a, b) { return a !== b; };
+    // ① 三角形 x0≠x1, x1≠x2, x0≠x2，域 {0,1}：奇环不可 2-染色
+    var c1 = [{ i: 0, j: 1, ok: neq }, { i: 1, j: 2, ok: neq }, { i: 0, j: 2, ok: neq }];
+    var r1 = AXIOM.ac3CSP(3, [[0, 1], [0, 1], [0, 1]], c1);
+    // ② 四边形 x0≠x1≠x2≠x3≠x0，域 {0,1,2}：可 3-染色
+    var c2 = [{ i: 0, j: 1, ok: neq }, { i: 1, j: 2, ok: neq }, { i: 2, j: 3, ok: neq }, { i: 3, j: 0, ok: neq }];
+    var r2 = AXIOM.ac3CSP(4, [[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, 1, 2]], c2);
+    var b1 = run(3, [[0, 1], [0, 1], [0, 1]], c1), b2 = run(4, [[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, 1, 2]], c2);
+    var ok1 = (r1.solution === null) === (b1.length === 0) && !r1.consistent;
+    var ok2 = (r2.solution !== null) === (b2.length > 0) && r2.solution !== null &&
+      c2.every(function (c) { return c.ok(r2.solution[c.i], r2.solution[c.j]); });
+    return '实例① 三角形 x0≠x1≠x2（域 {0,1}）：AC-3 传播即擦空 ⇒ UNSAT（暴力解数 = ' + b1.length + '，一致 = ' + ok1 + '）\n' +
+      '实例② 四边形 x0≠x1≠x2≠x3≠x0（域 {0,1,2}）：MRV 回溯 + MAC 求解\n' +
+      '  解 = [' + r2.solution.join(', ') + ']（合法 = ' + ok2 + '）· 传播后域 = ' + JSON.stringify(r2.domains) + '\n' +
+      '暴力枚举解数 = ' + b2.length + ' ⇒ 决策与解均与暴力一致';
   }
   };
   var algoRun = null;

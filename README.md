@@ -6,11 +6,11 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-359%2F359-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-365%2F365-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
 
 </div>
 
-> **十层架构 × 1024 微指令 × 359 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
+> **十层架构 × 1024 微指令 × 365 项数学不变量 · 零依赖单文件 · 浏览器/Node 双端同源 · 可运行 / 可复现 / 可验证**
 >
 > 作者：**晨星** · License: MIT · [github.com/CJX0712/axiom-ai](https://github.com/CJX0712/axiom-ai)
 
@@ -27,8 +27,8 @@ AXIOM 是一套**指令集架构（ISA）级别的 AI 系统**：把"世界顶�
 **核心主张：AI 的每一层都必须可被独立复算验证。** 不是"训练出来了就看效果"，而是每个算法携带一条可被第三方用完全不同的方法（解析解、暴力枚举、参照实现）交叉验证的硬不变量。
 
 ```
-npm test          # → 369/369：359 核心不变量 + 10 注册表完整性，UI 冒烟 32/32，全绿
-open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / 算法库（51 组，可运行演示）/ L9 管线编排 / 三个训练演示 / 导出
+npm test          # → 375/375：365 核心不变量 + 10 注册表完整性，UI 冒烟 32/32，全绿
+open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实时自检 / 算法库（54 组，可运行演示）/ L9 管线编排 / 三个训练演示 / 导出
 ```
 
 ## 2. 零重写 · 集大成
@@ -76,11 +76,11 @@ open axiom.html   # → 单文件仪表盘：架构图 / 指令浏览器 / 实�
 axiom-ai/
 ├── axiom.html              # ★ 单文件应用（构建产物，零依赖，双击即用）
 ├── src/
-│   ├── core.js             # 数学与算法核心（UMD，浏览器/Node 双端同源，359 项不变量 + 集大成算法库 51 组）
+│   ├── core.js             # 数学与算法核心（UMD，浏览器/Node 双端同源，365 项不变量 + 集大成算法库 54 组）
 │   ├── registry.js         # 1024 微指令注册表（自动生成，勿手改）
 │   └── ui.js               # 仪表盘 UI（7 视图，含算法库与 L9 管线编排）
 ├── test/
-│   ├── run.js              # 无头自检：359 不变量 + 10 注册表完整性
+│   ├── run.js              # 无头自检：365 不变量 + 10 注册表完整性
 │   └── ui-smoke.js         # UI 冒烟测试（Node DOM 垫片执行全部渲染路径）
 ├── tools/
 │   ├── gen-registry.js     # 从分类学生成 1024 指令（含完整性断言）
@@ -89,7 +89,7 @@ axiom-ai/
 │   └── build.js            # 打包单文件 HTML（构建期语法预检）
 ├── docs/
 │   ├── ARCHITECTURE.md     # 十层架构 + 指令集规范
-│   ├── VERIFICATION.md     # 359 项不变量残差全表（自动生成）
+│   ├── VERIFICATION.md     # 365 项不变量残差全表（自动生成）
 │   └── ISA-1024.md         # 1024 条微指令完整规格表（自动生成）
 ├── package.json            # test / build / gen:* 脚本
 ├── LICENSE                 # MIT
@@ -102,7 +102,7 @@ axiom-ai/
 
 ```bash
 # 无头自检（Node ≥ 14，零依赖）
-node test/run.js        # 369 项：359 不变量 + 10 注册表完整性
+node test/run.js        # 375 项：365 不变量 + 10 注册表完整性
 node test/ui-smoke.js   # 26 项：UI 渲染/交互/管线/演示计算路径
 # 或 npm test（两者串联）
 
@@ -115,7 +115,7 @@ node tools/gen-isa-doc.js
 node tools/build.js
 ```
 
-浏览器用法：直接打开 `axiom.html`，七个视图——**架构总览 / 指令集（1024，可搜索过滤）/ 实时自检 / 算法库（51 组，每组可一键运行演示）/ 管线编排（L9）/ 演示实验室 / 导出**。
+浏览器用法：直接打开 `axiom.html`，七个视图——**架构总览 / 指令集（1024，可搜索过滤）/ 实时自检 / 算法库（54 组，每组可一键运行演示）/ 管线编排（L9）/ 演示实验室 / 导出**。
 
 作为库使用（Node 或浏览器 `<script>`）：
 
@@ -123,7 +123,7 @@ node tools/build.js
 const AXIOM = require('./src/core.js');   // 浏览器：window.AXIOM
 const { jacobiEigen, gmmEM, flashAttention, gae, channelCapacity } = AXIOM;
 const eig = jacobiEigen([[4, 1], [1, 3]]);   // { values, vectors }
-AXIOM.runChecks();                            // { total: 359, passed, results }
+AXIOM.runChecks();                            // { total: 365, passed, results }
 ```
 
 ## 6. 验证哲学
@@ -137,7 +137,7 @@ AXIOM.runChecks();                            // { total: 359, passed, results }
 - **恒等式**：(AB)ᵀ=BᵀAᵀ 逐位一致；KL≥0 且 p=q 取等；I(X;Y)=I(Y;X)；D-分离 = 道德图判据 = 暴力条件独立
 - **梯度检验**：MLP 与 BPTT 解析梯度 vs 中心差分 ≤ 1e-6；vjp/jvp 对偶恒等式
 
-全部 359 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 32 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/算法库 51 组演示/管线/三个演示）。
+全部 365 项残差实测值见 [docs/VERIFICATION.md](docs/VERIFICATION.md)——矩阵分解类全部 ≤ 1e-14，最差残差为蒙特卡洛统计类（固有）。UI 层另有 32 项冒烟测试（Node DOM 垫片执行全部渲染路径，含分页/自检/算法库 54 组演示/管线/三个演示）。
 
 ## 7. 设计决策
 
@@ -164,13 +164,13 @@ AXIOM.runChecks();                            // { total: 359, passed, results }
 
 > 已转化项：v1.3.7 将唯一具备干净批语义的 `RL.monte_carlo.batched`（回报估计沿 batch 独立执行、标量输出、确定性可复算）由 spec 转为 verified，verified 810 → 811。其余 213 条保持 spec，遵守「零重写 + 诚实」铁律——不为凑数虚构语义。
 
-## 7.5 集大成验证算法库（v1.3.8–v1.3.19）
+## 7.5 集大成验证算法库（v1.3.8–v1.3.20）
 
-L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一层**旗舰级算法参考实现**，每条同样携带可独立复算的硬不变量（不占 ISA 网格，计入核心不变量总数 359）。浏览器端在 **「算法库」视图** 中可见可跑：51 组算法的世界顶级来源、硬不变量、实测残差（直接取自 `runChecks()`）一览，每组一个「▶ 运行」按钮执行固定输入的真实计算，另有「运行全部 51 组演示」一键执行：
+L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一层**旗舰级算法参考实现**，每条同样携带可独立复算的硬不变量（不占 ISA 网格，计入核心不变量总数 365）。浏览器端在 **「算法库」视图** 中可见可跑：54 组算法的世界顶级来源、硬不变量、实测残差（直接取自 `runChecks()`）一览，每组一个「▶ 运行」按钮执行固定输入的真实计算，另有「运行全部 54 组演示」一键执行：
 
 | 算法 | 世界顶级来源 | AXIOM 实现 | 硬不变量（独立复算路径） | 实测残差 |
 |---|---|---|---|---|
-| SVD | Golub–Reinsch / Hestenes (1958)；Golub–Van Loan | 单侧 Jacobi（Hestenes 法） | A = U·Σ·Vᵀ 重构 + σᵢ = √λᵢ(AᵀA)（**独立谱交叉**，jacobiEigen 另路计算）+ UᵀU = VᵀV = I；v1.3.11 新增 **ζ=0 等范数列边界**回归检查（修复 `Math.sign(0)=0` 退化） | 2.4e-15 |
+| SVD | Golub–Reinsch / Hestenes (1958)；Golub–Van Loan | 单侧 Jacobi（Hestenes 法） | A = U·Σ·Vᵀ 重构 + σᵢ = √λᵢ(AᵀA)（**独立谱交叉**，jacobiEigen 另路计算）+ UᵀU = VᵀV = I；v1.3.11 新增 **ζ=0 /  /  /  等范数列边界**回归检查（修复 `Math.sign(0)=0` 退化） | 2.4e-15 |
 | LU 分解 | Doolittle (1878)；Golub–Van Loan | Doolittle 无主元 | A = L·U 重构 + L 单位下三角 / U 上三角（结构精确） | 3.4e-16 |
 | FFT | Cooley–Tukey (1965) | 迭代 radix-2 + 位反转 | **参照实现 vs 主实现**：≡ 朴素 O(n²) DFT | 4.3e-14 |
 | PageRank | Page–Brin (1998)；Langville–Meyer | 幂迭代 + 悬挂节点 teleport | **两条独立路径**：幂迭代 ≡ 直接线性求解 (I − αP)π = (1−α)·1/n | 3.9e-16 |
@@ -220,9 +220,12 @@ L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一�
 | 桥与割点 | Tarjan (1974) | DFS + disc/low：桥 low[v] > disc[u]；割点 low[v] ≥ disc[u]（根 ≥2 子树） | ≙ 暴力删边/删点连通分量计数（集合精确一致，**0 精确**，25 图） | 0（精确） |
 | 拍卖算法解指派问题 | Bertsekas (1981) | ε-标度价格拍卖：未匹配者对「效益−价格」最高与次高对象竞价（加价 = 差 + ε），ε 逐相 ÷n 至 < 1/n；**每相重启匹配、保留价格** | ≙ hungarianMaxWeight（−费用对偶一致）≙ 暴力枚举 n! 排列（最小费用，n≤7，25 seed，**0 精确**） | 0（精确） |
 | Top Trading Cycles | Shapley–Scarf (1974) | 函数图找环交易（初始禀赋 + 严格偏好，逐轮消除有向环） | 输出 = **唯一弱核**配置（Roth–Postlewaite 1977）≙ 暴力枚举 n! 配置的弱核/强核（TTC ∈ 强核，n≤5，25 seed，**0 精确**） | 0（精确） |
-| 两阶段单纯形 LP | Dantzig (1947)；Bland (1977) | 阶段一人工变量判可行（b≥0 归整，ge/eq 加人工列）+ 阶段二原始单纯形，Bland 规则（进入最小约化成本下标 / 离开最小比值并列最小基下标）防退化循环 | ≙ 暴力顶点枚举（m 约束取 n 等式组 + solveLinear，混合 ≤/≥/= 约束绕可行点构造，25 seed） | 1.4e-14 |
+| 两阶段单纯形 LP | Dantzig (1947)；Bland (1977) | 阶段一人工变量判可行（b≥0 归整，ge/eq 加人工列）+ 阶段二原始单纯形，Bland 规则（进入最小约化成本下标 / 离开最小比值并列最小基下标）防退化循环 | ≙ 暴力顶点枚举（m 约束取 n /  /  /  等式组 + solveLinear，混合 ≤/≥/= 约束绕可行点构造，25 seed） | 1.4e-14 |
+| Chu–Liu/Edmonds 有向最小树形图 | Edmonds (1967)；Chu–Liu (1965) | 递归收缩：每轮取每非根最小入边 → 函数图找环 → 环缩为超节点（入环边权减环内被替换入边权）→ 递归 → 逐层展开 | ≙ 暴力枚举父边组合（含负权 / 平行边 / 多根 / 不可行判定，25 seed）+ 40 实例稠密应力（n≤9）+ 结构自校验（每非根恰一入边、根可达、cost=Σ父边权、输入边序不变性），**整数 0 精确** | 0（精确） |
+| Held-Karp 精确 TSP | Bellman (1962)；Held & Karp (1962) | 子集 DP dp[mask][j]（O(2ⁿn²)）+ 回溯重构环游 | ≙ 暴力枚举 (n−1)! 排列（对称 + 非对称距离，n≤7，25 seed）+ 环游为哈密顿回路且权自一致 + 2-opt 局部最优 + ≤ 最近邻贪心，**0 精确** | 0（精确） |
+| AC-3 弧一致性 + CSP 求解 | Mackworth (1977) | 弧队列消解至不动点 + MRV 回溯（赋值后全传播 MAC） | 决策 ≡ 暴力枚举全部域组合（SAT/UNSAT 双侧，25 实例）+ 解满足全部约束 + AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解），**0 精确** | 0（精确） |
 
-用法：`AXIOM.svd(A)` / `AXIOM.pageRank(n, edges, alpha)` / `AXIOM.fft(complexArray)` / `AXIOM.dijkstra(n, edges, src)` / `AXIOM.sliceSample(logf, x0, N, rng, w, m, burn)` / `AXIOM.heapSort(a)` / `AXIOM.dijkstraHeap(n, edges, src)` / `AXIOM.aStar(n, edges, src, goal, h)` / `AXIOM.fftConvolve(a, b)` / `AXIOM.denseToCSR(M)` / `AXIOM.primMST(n, edges)` / `AXIOM.bisect(f, lo, hi, tol, maxIter)` / `AXIOM.kadane(a)` / `AXIOM.qrEigenvalues(A)` / `AXIOM.maxFlowEK(n, cap, s, t)` / `AXIOM.maxFlowDinic(n, cap, s, t)` / `AXIOM.tarjanSCC(n, edges)` / `AXIOM.kahnTopo(n, edges)` / `AXIOM.bluesteinFFT(x)` / `AXIOM.adaptiveMetropolis(logf, x0, N, rng, burn)` / `AXIOM.hmcSample(logf, gradLogf, x0, N, rng, eps, L)` / `AXIOM.floydWarshall(n, edges)` / `AXIOM.dsuCreate(n)` / `AXIOM.kmpSearch(text, pat)` / `AXIOM.gaussQuad(f, a, b, n)` / `AXIOM.strassenMul(A, B, leaf)` / `AXIOM.kuhnMatching(l, r, edges)` / `AXIOM.mixedRadixFFT(complexArray)` / `AXIOM.nutsSample(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.mcmfSSP(n, s, t, edges)` / `AXIOM.nutsGenUTurn(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.nttConvolveExact(a, b)` / `AXIOM.hopcroftKarp(l, r, edges)` / `AXIOM.blossomMatching(n, edges)` / `AXIOM.splitRadixFFT(complexArray)` / `AXIOM.stoerWagner(n, edges)` / `AXIOM.gomoryHu(n, edges)` / `AXIOM.radix4FFT(complexArray)` / `AXIOM.nutsDiagMass(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.pushRelabel(n, edges, s, t)` / `AXIOM.hungarianMaxWeight(w)` / `AXIOM.stableMarriage(proposerPref, proposeePref)` / `AXIOM.globalMinCutPR(n, edges)` / `AXIOM.twoSat(n, clauses)` / `AXIOM.bridgesArticulation(n, edges)` / `AXIOM.auctionAssignment(cost)` / `AXIOM.topTradingCycles(endow, prefs)` / `AXIOM.simplexLP(c, A, b, senses, opts)` 等，详见 [docs/ALGORITHMS.md](docs/ALGORITHMS.md)。
+用法：`AXIOM.svd(A)` / `AXIOM.pageRank(n, edges, alpha)` / `AXIOM.fft(complexArray)` / `AXIOM.dijkstra(n, edges, src)` / `AXIOM.sliceSample(logf, x0, N, rng, w, m, burn)` / `AXIOM.heapSort(a)` / `AXIOM.dijkstraHeap(n, edges, src)` / `AXIOM.aStar(n, edges, src, goal, h)` / `AXIOM.fftConvolve(a, b)` / `AXIOM.denseToCSR(M)` / `AXIOM.primMST(n, edges)` / `AXIOM.bisect(f, lo, hi, tol, maxIter)` / `AXIOM.kadane(a)` / `AXIOM.qrEigenvalues(A)` / `AXIOM.maxFlowEK(n, cap, s, t)` / `AXIOM.maxFlowDinic(n, cap, s, t)` / `AXIOM.tarjanSCC(n, edges)` / `AXIOM.kahnTopo(n, edges)` / `AXIOM.bluesteinFFT(x)` / `AXIOM.adaptiveMetropolis(logf, x0, N, rng, burn)` / `AXIOM.hmcSample(logf, gradLogf, x0, N, rng, eps, L)` / `AXIOM.floydWarshall(n, edges)` / `AXIOM.dsuCreate(n)` / `AXIOM.kmpSearch(text, pat)` / `AXIOM.gaussQuad(f, a, b, n)` / `AXIOM.strassenMul(A, B, leaf)` / `AXIOM.kuhnMatching(l, r, edges)` / `AXIOM.mixedRadixFFT(complexArray)` / `AXIOM.nutsSample(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.mcmfSSP(n, s, t, edges)` / `AXIOM.nutsGenUTurn(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.nttConvolveExact(a, b)` / `AXIOM.hopcroftKarp(l, r, edges)` / `AXIOM.blossomMatching(n, edges)` / `AXIOM.splitRadixFFT(complexArray)` / `AXIOM.stoerWagner(n, edges)` / `AXIOM.gomoryHu(n, edges)` / `AXIOM.radix4FFT(complexArray)` / `AXIOM.nutsDiagMass(logf, gradLogf, x0, N, rng, opts)` / `AXIOM.pushRelabel(n, edges, s, t)` / `AXIOM.hungarianMaxWeight(w)` / `AXIOM.stableMarriage(proposerPref, proposeePref)` / `AXIOM.globalMinCutPR(n, edges)` / `AXIOM.twoSat(n, clauses)` / `AXIOM.bridgesArticulation(n, edges)` / `AXIOM.auctionAssignment(cost)` / `AXIOM.topTradingCycles(endow, prefs)` / `AXIOM.simplexLP(c, A, b, senses, opts)` / `AXIOM.arborescence(n, edges, root)` / `AXIOM.heldKarpTSP(dist)` / `AXIOM.ac3CSP(n, domains, constraints)` 等，详见 [docs/ALGORITHMS.md](docs/ALGORITHMS.md)。
 
 ## 8. 路线图
 
@@ -248,11 +251,12 @@ L10 的 1024 微指令是**原子算子 ISA**；在此之外，AXIOM 另附一�
 - [x] 算法库扩展七（v1.3.17）：Push-Relabel 最大流（Goldberg–Tarjan 1988，预流推进 + 高度标号，≙ maxFlowEK ≙ maxFlowDinic，**整数容量 0 精确**）/ Hungarian 最大权二分匹配（Kuhn–Munkres O(n³) 位势法，≙ mcmfSSPRef ≙ 暴力枚举排列，**0 精确**）/ Gale–Shapley 稳定婚姻（Gale & Shapley 1962，求婚者主动算法，结构不变量：完美匹配 + 无 blocking pair，男主动与女主动均稳定），三条硬不变量全部 **0 精确**（核心不变量 350 → 353，算法库 42 → 45）
 - [x] 算法库扩展八（v1.3.18）：Push-Relabel 全局最小割（Goldberg 1985/1998，固定 s 后 n−1 次 s-t 最小割（pushRelabel 最大流值）收缩，≙ stoerWagner 不同算法，**全局最小割 0 精确**）/ 2-SAT 可满足性（Aspvall–Plass–Tarjan 1979，蕴含图 SCC：SAT ⇔ 变量与其否定不同 SCC，≙ 暴力枚举 2ⁿ 指派，**决策 0 精确**）/ 桥与割点（Tarjan 1974，DFS disc/low：桥 low[v]>disc[u]、割点 low[v]≥disc[u]，≙ 暴力删边/删点连通分量计数，集合 **0 精确**），三条硬不变量全部 **0 精确**（核心不变量 353 → 356，算法库 45 → 48）
 - [x] 算法库扩展九（v1.3.19）：拍卖算法解指派问题（Bertsekas 1981，ε-标度价格拍卖 —— 每相重启匹配保留价格，否则首相后 ε₀-最优性丧失；≙ hungarianMaxWeight ≙ 暴力排列，**0 精确**）/ Top Trading Cycles（Shapley–Scarf 1974，函数图找环交易 —— 输出为唯一弱核配置（Roth–Postlewaite 1977）且必在强核中，≙ 暴力 n! 配置核扫描，**0 精确**）/ 两阶段单纯形 LP（Dantzig 1947 + Bland 1977，人工变量阶段一 + Bland 规则防退化循环，≙ 暴力顶点枚举，1.4e-14），三条硬不变量全部通过（核心不变量 356 → 359，算法库 48 → 51）
-- [ ] 集大成算法库后续扩展（MCMF 网络单纯形对偶 / 任意图最大权匹配 Blossom V / NUTS 全质量矩阵（dense M）自适应 / HMC 自适应步长 dual-averaging / Radix-4 任意长度 split-radix 推广 / Hungarian 与稳定婚姻延迟接受变种交叉）
+- [x] 算法库扩展十（v1.3.20）：Chu–Liu/Edmonds 有向最小树形图（Edmonds 1967，递归收缩 + 逐层展开，≙ 暴力父边组合枚举 + 稠密应力 + 结构自校验，**0 精确**）/ Held-Karp 精确 TSP（Bellman 1962 + Held–Karp 1962，子集 DP O(2ⁿn²)，≙ 暴力 (n−1)! 排列含非对称距离，**0 精确**）/ AC-3 弧一致性 + CSP 求解（Mackworth 1977，不动点消解 + MRV/MAC 回溯，决策 ≙ 暴力枚举，**0 精确**），六条硬不变量全部通过（核心不变量 359 → 365，算法库 51 → 54）
+- [ ] 集大成算法库后续扩展（MCMF 网络单纯形对偶 / 任意图最大权匹配 Blossom V（带权带花树）/ NUTS 全质量矩阵（dense M）自适应 / HMC 自适应步长 dual-averaging / Radix-4 任意长度 split-radix 推广 / CSP 高阶一致性（PC-2 / i-consistency））
 
 ## 9. 致谢
 
-站在巨人肩上：Householder · Jacobi · Cholesky · Dekker · Knuth · Dempster · Rabiner · Pearl · Lauritzen · Bellman · Kahan · Box–Muller · Lloyd · Breiman · Rumelhart · Hestenes–Stiefel · Watkins–Dayan · Kingma–Ba · Loshchilov–Hutter · Vaswani · Dao · Press · Su · Ainslie · Schulman · Arimoto–Blahut · Hestenes · Doolittle · Cooley–Tukey · Page–Brin · Dijkstra · Neal · Newton · Runge–Kutta · Williams · Hart–Nilsson–Raphael · Prim · Kruskal · Kadane · Wilkinson · Edmonds–Karp · Dinic · Tarjan · Kosaraju · Kahn · Kuhn–Munkres · König · Bluestein · Haario · Roberts–Rosenthal · Duane · Floyd · Warshall · Tarjan–van Leeuwen · Knuth–Morris–Pratt · Gauss · Golub–Welsch · Strassen · Hoffman–Gelman · Ford–Fulkerson · Busacker–Gowen · Betancourt · Hopcroft–Karp · Edmonds · Berge · Yavne · Duhamel–Hollmann · Stoer–Wagner · Bertsekas · Shapley–Scarf · Roth–Postlewaite · Dantzig · Bland，以及 scipy / ml.js / @tangent.to/lina 开源生态。
+站在巨人肩上：Householder · Jacobi · Cholesky · Dekker · Knuth · Dempster · Rabiner · Pearl · Lauritzen · Bellman · Kahan · Box–Muller · Lloyd · Breiman · Rumelhart · Hestenes–Stiefel · Watkins–Dayan · Kingma–Ba · Loshchilov–Hutter · Vaswani · Dao · Press · Su · Ainslie · Schulman · Arimoto–Blahut · Hestenes · Doolittle · Cooley–Tukey · Page–Brin · Dijkstra · Neal · Newton · Runge–Kutta · Williams · Hart–Nilsson–Raphael · Prim · Kruskal · Kadane · Wilkinson · Edmonds–Karp · Dinic · Tarjan · Kosaraju · Kahn · Kuhn–Munkres · König · Bluestein · Haario · Roberts–Rosenthal · Duane · Floyd · Warshall · Tarjan–van Leeuwen · Knuth–Morris–Pratt · Gauss · Golub–Welsch · Strassen · Hoffman–Gelman · Ford–Fulkerson · Busacker–Gowen · Betancourt · Hopcroft–Karp · Edmonds · Berge · Yavne · Duhamel–Hollmann · Stoer–Wagner · Bertsekas · Shapley–Scarf · Roth–Postlewaite · Dantzig · Bland · Chu–Liu · Bellman · Held–Karp · Mackworth，以及 scipy / ml.js / @tangent.to/lina 开源生态。
 
 ---
 

@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(51) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(54) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -451,7 +451,11 @@
     /* v1.3.19 算法库扩展九 */
     { id: 'auctionAssignment', name: '拍卖算法（指派问题）', src: 'Bertsekas (1981)', api: 'AXIOM.auctionAssignment', inv: 'ε-标度价格拍卖（每相重启匹配、保留价格）≡ hungarianMaxWeight(−cost) ≙ 暴力排列（整数 0 精确）', chk: ['auctionAssignment：'] },
     { id: 'topTradingCycles', name: 'Top Trading Cycles', src: 'Shapley & Scarf (1974)', api: 'AXIOM.topTradingCycles', inv: '顶交易循环 = 唯一弱核分配（严格偏好，Roth–Postlewaite 1977）且在强核中 ≙ 暴力枚举 n! 配置（0 精确）', chk: ['topTradingCycles：'] },
-    { id: 'simplexLP', name: '两阶段单纯形 LP', src: 'Dantzig (1947)；Bland (1977)', api: 'AXIOM.simplexLP', inv: '≤/≥/= 混合约束 + Bland 防循环；最优目标 ≡ 暴力顶点枚举（约束等式组合，1e-9 容差）', chk: ['simplexLP：'] }
+    { id: 'simplexLP', name: '两阶段单纯形 LP', src: 'Dantzig (1947)；Bland (1977)', api: 'AXIOM.simplexLP', inv: '≤/≥/= 混合约束 + Bland 防循环；最优目标 ≡ 暴力顶点枚举（约束等式组合，1e-9 容差）', chk: ['simplexLP：'] },
+    /* v1.3.20 算法库扩展十 */
+    { id: 'arborescence', name: 'Chu–Liu/Edmonds 有向最小树形图', src: 'Edmonds (1967)', api: 'AXIOM.arborescence', inv: '最小树形图 ≡ 暴力父分配枚举（负权/平行边/多根/不可行判定，0 精确）+ 结构合法 + cost=Σ父边权 + 边序不变性', chk: ['arborescence：'] },
+    { id: 'heldKarpTSP', name: 'Held-Karp 精确 TSP', src: 'Bellman (1962)；Held–Karp (1962)', api: 'AXIOM.heldKarpTSP', inv: '子集 DP O(2ⁿn²) ≡ 暴力 (n−1)! 排列（含非对称距离，0 精确）+ 2-opt 局部最优 + ≤ 最近邻贪心', chk: ['heldKarpTSP：'] },
+    { id: 'ac3CSP', name: 'AC-3 弧一致性 + CSP 回溯', src: 'Mackworth (1977)', api: 'AXIOM.ac3CSP', inv: '决策 ≡ 暴力枚举全部赋值 + 解合法 + AC-3 不动点（双向弧逐值有支持）+ 不删解值（SAT 保留完整暴力解）', chk: ['ac3CSP：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1023,6 +1027,81 @@
       '两阶段单纯形（Bland 防循环）解 x = [' + r.x.map(function (v) { return v.toFixed(4); }).join(', ') + '] · 最优值 = ' + r.obj.toFixed(6) + '\n' +
       '暴力顶点枚举（15 个等式组合）最优值 = ' + best.toFixed(6) + '\n' +
       (agree ? '算法与暴力枚举一致 ⇒ 两阶段单纯形正确（混合 ≤/≥/= 方向）' : '❌ 不一致');
+  },
+  arborescence: function () {
+    // 经典收缩实例：2↔3 互指成环（最小入边 1→2 / 3→2），入口在 0→2 与 1→3 间竞争
+    var edges = [[1, 2, 1], [2, 1, 1], [0, 1, 10], [0, 2, 10], [1, 3, 1], [3, 2, 1], [2, 3, 5]];
+    var r = AXIOM.arborescence(4, edges, 0);
+    // 运行时自校验：结构合法（父链必达根无环）+ cost = Σ父边权 + 边序不变
+    var ok = true, sum = 0, wOf = {};
+    edges.forEach(function (e) { var k = e[0] + '>' + e[1]; if (!(k in wOf) || e[2] < wOf[k]) wOf[k] = e[2]; });
+    for (var v = 1; v < 4; v++) {
+      var p = r.parent[v];
+      if (!(p + '>' + v in wOf)) { ok = false; break; }
+      sum += wOf[p + '>' + v];
+      var seen = {}, cur = v, steps = 0;
+      while (cur !== 0) { if (seen[cur] || steps > 4) { ok = false; break; } seen[cur] = 1; cur = r.parent[cur]; steps++; }
+    }
+    if (sum !== r.cost) ok = false;
+    var shuffled = edges.slice().reverse();
+    var r2 = AXIOM.arborescence(4, shuffled, 0);
+    if (r2.cost !== r.cost) ok = false;
+    return '4 节点有向图，根 = 0（边 [u,v,w]）：' + JSON.stringify(edges) + '\n' +
+      '最小树形图 parent = [' + r.parent.join(', ') + '] · cost = ' + r.cost + '\n' +
+      '环 {2,3} 被收缩为超节点：入口边取 1→3（调整权 1−1=0 < 0→2 的 10−1=9），环上 2 保留暂定挑选 3→2\n' +
+      '结构合法（父链必达根无环）= ' + ok + ' · cost=Σ父边权 = ' + (sum === r.cost) + ' · 边序反转后 cost 不变 = ' + (r2.cost === r.cost);
+  },
+  heldKarpTSP: function () {
+    // 6 城非对称距离（确定性构造）
+    var dist = [[0, 20, 30, 10, 15, 25], [15, 0, 35, 25, 30, 20], [30, 40, 0, 20, 25, 35],
+      [12, 28, 22, 0, 18, 30], [18, 33, 27, 14, 0, 22], [26, 22, 38, 32, 20, 0]];
+    var r = AXIOM.heldKarpTSP(dist);
+    // 运行时暴力：(n−1)! = 120 排列
+    var rest = [1, 2, 3, 4, 5], used = [false, false, false, false, false, false], best = Infinity;
+    (function rec(tour, acc) {
+      if (tour.length === 5) { var c = acc + dist[tour[4]][0]; if (c < best) best = c; return; }
+      for (var k = 0; k < 5; k++) {
+        if (used[k]) continue;
+        used[k] = true; tour.push(rest[k]);
+        rec(tour, acc + dist[tour[tour.length - 2]][rest[k]]);
+        tour.pop(); used[k] = false;
+      }
+    })([0], 0);
+    var agree = r.cost === best;
+    return '6 城非对称 TSP（dist[i][j] ≠ dist[j][i]，起点 0）\n' +
+      'Held-Karp 环游 = [' + r.tour.join(' → ') + ' → 0] · cost = ' + r.cost + '\n' +
+      '运行时暴力枚举 (6−1)! = 120 排列最优值 = ' + best + '\n' +
+      (agree ? '子集 DP ≡ 暴力排列 ⇒ 精确最优（0 精确）' : '❌ 不一致');
+  },
+  ac3CSP: function () {
+    // 两个确定性实例：奇环 2-染色（AC-3 擦空即判 UNSAT）+ C4 环 3-染色（SAT）
+    function run(vars, dom, cons) {
+      var sols = [];
+      (function rec(v, a) {
+        if (v === vars) {
+          for (var t = 0; t < cons.length; t++) if (!cons[t].ok(a[cons[t].i], a[cons[t].j])) return;
+          sols.push(a.slice()); return;
+        }
+        for (var k = 0; k < dom[v].length; k++) { a[v] = dom[v][k]; rec(v + 1, a); }
+        a[v] = undefined;
+      })(0, new Array(vars).fill(undefined));
+      return sols;
+    }
+    var neq = function (a, b) { return a !== b; };
+    // ① 三角形 x0≠x1, x1≠x2, x0≠x2，域 {0,1}：奇环不可 2-染色
+    var c1 = [{ i: 0, j: 1, ok: neq }, { i: 1, j: 2, ok: neq }, { i: 0, j: 2, ok: neq }];
+    var r1 = AXIOM.ac3CSP(3, [[0, 1], [0, 1], [0, 1]], c1);
+    // ② 四边形 x0≠x1≠x2≠x3≠x0，域 {0,1,2}：可 3-染色
+    var c2 = [{ i: 0, j: 1, ok: neq }, { i: 1, j: 2, ok: neq }, { i: 2, j: 3, ok: neq }, { i: 3, j: 0, ok: neq }];
+    var r2 = AXIOM.ac3CSP(4, [[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, 1, 2]], c2);
+    var b1 = run(3, [[0, 1], [0, 1], [0, 1]], c1), b2 = run(4, [[0, 1, 2], [0, 1, 2], [0, 1, 2], [0, 1, 2]], c2);
+    var ok1 = (r1.solution === null) === (b1.length === 0) && !r1.consistent;
+    var ok2 = (r2.solution !== null) === (b2.length > 0) && r2.solution !== null &&
+      c2.every(function (c) { return c.ok(r2.solution[c.i], r2.solution[c.j]); });
+    return '实例① 三角形 x0≠x1≠x2（域 {0,1}）：AC-3 传播即擦空 ⇒ UNSAT（暴力解数 = ' + b1.length + '，一致 = ' + ok1 + '）\n' +
+      '实例② 四边形 x0≠x1≠x2≠x3≠x0（域 {0,1,2}）：MRV 回溯 + MAC 求解\n' +
+      '  解 = [' + r2.solution.join(', ') + ']（合法 = ' + ok2 + '）· 传播后域 = ' + JSON.stringify(r2.domains) + '\n' +
+      '暴力枚举解数 = ' + b2.length + ' ⇒ 决策与解均与暴力一致';
   }
   };
   var algoRun = null;
