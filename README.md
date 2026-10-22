@@ -1,5 +1,9 @@
 # ✦ AXIOM · 自验证 AI 微指令操作系统
 
+> **从零造 AI，并造尺子证明它没骗你** · 一套开源的"AI 验伪"方法与实物
+> 舰队总览：[apex-flagship](https://github.com/CJX0712/apex-flagship) · 作者：晨星
+
+
 <div align="center">
 
 [![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/CJX0712/axiom-ai/blob/main/LICENSE) [![Language](https://img.shields.io/badge/HTML-E34F26?logo=html)](https://github.com/CJX0712/axiom-ai) [![Deps](https://img.shields.io/badge/dependencies-0-brightgreen)](https://github.com/CJX0712) [![Verified](https://img.shields.io/badge/invariants-359%2F359-brightgreen)](https://github.com/CJX0712) [![ISA](https://img.shields.io/badge/ISA-1024%20micro--instructions-blue)](https://github.com/CJX0712/axiom-ai) [![Kernels](https://img.shields.io/badge/verified%20kernels-811%2F1024-blueviolet)](https://github.com/CJX0712/axiom-ai) [![Author](https://img.shields.io/badge/author-晨星-blueviolet)](https://github.com/CJX0712)
