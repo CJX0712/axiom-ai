@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(57) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(60) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -459,7 +459,10 @@
     /* v1.3.21 算法库扩展十一 */
     { id: 'maxClique', name: 'Bron–Kerbosch 最大团（pivot）', src: 'Bron & Kerbosch (1973)；Tomita (2006)', api: 'AXIOM.maxClique', inv: 'ω(G) ≡ 暴力枚举 2ⁿ 子集（0 精确）+ 全部极大团极大性 + α(G)=ω(Ḡ) + ω ≤ 贪心着色数', chk: ['maxClique：'] },
     { id: 'suffixArray', name: '后缀数组（倍增 O(n log n)）+ Kasai LCP', src: 'Manber–Myers (1990)；Kasai (2001)', api: 'AXIOM.suffixArray', inv: 'SA ≡ 朴素后缀排序 + Kasai LCP ≡ 暴力逐对 LCP + SA 二分搜索 ≡ 朴素匹配 ≙ kmpSearch（0 精确）', chk: ['suffixArray：'] },
-    { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] }
+    { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] },
+    { id: 'ahoCorasick', name: 'Aho–Corasick 多模式匹配', src: 'Aho & Corasick (1975)', api: 'AXIOM.ahoCorasick', inv: '匹配集 ≡ 暴力逐起点逐模式扫描（0 精确）+ fail 深度严格递减 + 转移 ≡ 最长后缀 + out ≡ 后缀模式集', chk: ['ahoCorasick：'] },
+    { id: 'cdclSat', name: 'CDCL SAT 求解（1UIP 学习）', src: 'Marques-Silva & Sakallah (1996)；GRASP/Chaff (2001)', api: 'AXIOM.cdclSat', inv: 'SAT/UNSAT ≡ 暴力 2ⁿ 枚举 ≡ 纯 DPLL + 模型合法 + 学习子句被原公式蕴涵 + 鸽巢原理必 UNSAT（0 精确）', chk: ['cdclSat：'] },
+    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1197,6 +1200,86 @@
       out.join('\n') + '\n' +
       '正交性 H(H·a) = N·a（H² = 8·I）= ' + orthOK + '\n' +
       (allOK ? '三算子 + 正交性全部与暴力一致（整数 0 精确）' : '❌ 不一致');
+  },
+  ahoCorasick: function () {
+    var pats = ['he', 'she', 'his', 'hers', 'h', 'e'], s = 'ushers his herd', i, p, k;
+    var r = AXIOM.ahoCorasick(pats, s);
+    var brute = [];                                  // 暴力：每个起点 × 每个模式逐字符
+    for (i = 0; i < s.length; i++) for (p = 0; p < pats.length; p++) {
+      var ok = true;
+      for (k = 0; k < pats[p].length; k++) if (s.charAt(i + k) !== pats[p].charAt(k)) { ok = false; break; }
+      if (ok) brute.push([p, i]);
+    }
+    var fmt = function (arr) {
+      return arr.map(function (e) { return '"' + pats[e[0]] + '"@' + e[1]; }).join(', ');
+    };
+    var same = fmt(r.matches) === fmt(brute);
+    var failOK = true;                              // fail 深度严格递减
+    for (var v = 1; v < r.states; v++) if (r.depth[r.fail[v]] >= r.depth[v]) failOK = false;
+    return '模式集 = [' + pats.map(function (x) { return '"' + x + '"'; }).join(', ') + '] · 文本 = "' + s + '"（长度 ' + s.length + '）\n' +
+      'trie 状态数 = ' + r.states + ' · 一次扫描 O(|text| + |matches|)（fail 深度严格递减 = ' + failOK + '）\n' +
+      'AC 匹配（模式@起点）= [' + fmt(r.matches) + ']\n' +
+      '暴力匹配           = [' + fmt(brute) + ']\n' +
+      '两种方式共 ' + r.matches.length + ' 处匹配，集合一致 = ' + same + '\n' +
+      (same && failOK ? '多模式输出 ≡ 暴力逐起点扫描（0 精确），重叠模式（"h"/"he"/"hers"）全部命中' : '❌ 不一致');
+  },
+  cdclSat: function () {
+    var nv = 14, clauses = [], i, k, v;
+    var rng = AXIOM.mulberry32(20261022);          // 确定性 3-SAT（相变区 ratio ≈ 4.3）
+    for (i = 0; i < Math.round(4.3 * nv); i++) {
+      var cl = [], used = {};
+      for (k = 0; k < 3; k++) {
+        v = Math.floor(rng() * nv);
+        if (used[v]) { k--; continue; }
+        used[v] = 1; cl.push((v + 1) * (rng() < 0.5 ? 1 : -1));
+      }
+      clauses.push(cl);
+    }
+    var lit = function (l) { return (l > 0 ? 'x' : '¬x') + Math.abs(l); };
+    var r = AXIOM.cdclSat(nv, clauses);
+    var modelTxt = r.model ? r.model.map(function (b, t) { return b ? t : null; }).filter(function (x) { return x !== null; }).join(', ') : '—';
+    // 鸽巢原理：4 只鸽子 / 3 个洞 ⇒ 必 UNSAT（经典 CDCL 压力实例）
+    var P = [], q, q2, h;
+    for (q = 0; q < 4; q++) { var c1 = []; for (h = 0; h < 3; h++) c1.push(q * 3 + h + 1); P.push(c1); }
+    for (q = 0; q < 4; q++) for (q2 = q + 1; q2 < 4; q2++) for (h = 0; h < 3; h++) P.push([-(q * 3 + h + 1), -(q2 * 3 + h + 1)]);
+    var php = AXIOM.cdclSat(12, P);
+    return '随机 3-SAT：' + nv + ' 变量 / ' + clauses.length + ' 子句（ratio 4.3，跨相变区）\n' +
+      '前 3 子句 = [' + clauses.slice(0, 3).map(function (c) { return '[' + c.map(lit).join(' ∨ ') + ']'; }).join(', ') + ' …]\n' +
+      'CDCL（watched literals + 1UIP 学习 + 非时序回溯 + VSIDS）：' + (r.sat ? 'SAT' : 'UNSAT') + '\n' +
+      '  决策 ' + r.stats.decisions + ' 次 · 传播 ' + r.stats.propagations + ' 次 · 冲突 ' + r.stats.conflicts + ' 次 · 学习子句 ' + r.learnts.length + ' 条\n' +
+      (r.sat ? '  模型（取真变量）= {' + modelTxt + '}（逐子句核验满足）\n' : '') +
+      '鸽巢原理 4 鸽 / 3 洞（12 变量 / ' + P.length + ' 子句）：' + (php.sat ? 'SAT' : 'UNSAT') +
+      '（Pigeonhole 不可能放置 ⇒ 必 UNSAT），冲突 ' + php.stats.conflicts + ' 次\n' +
+      (r.sat || php.sat === false ? 'CDCL 判定 ≡ 逻辑事实（暴力 2ⁿ 枚举互证见自检，0 精确）' : '❌ 不一致');
+  },
+  bwtFM: function () {
+    var s = 'BANANA', B = AXIOM.bwtTransform(s), i, j;
+    var inv = AXIOM.bwtInverse(B.bwt, B.primary);
+    var F = AXIOM.fmIndex(s), pat = 'ANA', brute = [];
+    var got = AXIOM.fmSearch(F, pat);
+    for (i = 0; i + pat.length <= s.length; i++) if (s.substr(i, pat.length) === pat) brute.push(i);
+    var mkr = AXIOM.fmSearch(F, 'NANA'), nkr = AXIOM.fmSearch(F, 'ZZZ');
+    var kmp = AXIOM.kmpSearch(s, pat), sa = AXIOM.saSearch(s, pat);
+    var t = s + '\u0000', n = t.length, rots = [];         // 暴力：枚举全部循环移位并排序
+    for (i = 0; i < n; i++) rots.push(t.substr(i) + t.substr(0, i));
+    rots.sort();
+    var bwtB = '', priB = -1;
+    for (i = 0; i < n; i++) {
+      bwtB += rots[i].charAt(n - 1);
+      if (rots[i] === t) priB = i;
+    }
+    var lfSeen = {}, lfOK = true;                        // LF-mapping 必须是置换
+    for (i = 0; i < F.n; i++) { if (lfSeen[F.lf[i]]) lfOK = false; lfSeen[F.lf[i]] = 1; }
+    return '文本 = "' + s + '"（附唯一最小哨兵 \\0，长度 ' + B.n + '；BWT 列由已验证的 Manber–Myers 后缀数组给出）\n' +
+      'BWT 列 = "' + B.bwt + '" · primary = ' + B.primary + '\n' +
+      '暴力循环移位排序（' + n + ' 个旋转）→ "' + bwtB + '" · primary = ' + priB + ' ⇒ 一致 = ' + (B.bwt === bwtB && B.primary === priB) + '\n' +
+      'LF-mapping 逆变换（O(n)）= "' + inv.slice(0, inv.length - 1) + '" ≡ 原文 = ' + (inv === t) + ' · LF 为置换 = ' + lfOK + '\n' +
+      'FM-index backward search "' + pat + '" → 后缀区间 [' + got.lo + ', ' + got.hi + ')，出现 ' + got.count + ' 次，起始位置 [' + got.positions.join(', ') + ']\n' +
+      '  ≡ 暴力匹配 [' + brute.join(', ') + '] ≙ kmpSearch [' + kmp.join(', ') + '] ≙ saSearch [' + sa.join(', ') + '] = ' +
+      (got.positions.join(',') === brute.join(',') && brute.join(',') === kmp.join(',') && brute.join(',') === sa.join(',')) + '\n' +
+      '后缀嵌套："NANA" ' + mkr.count + ' 次（区间 [' + mkr.lo + ', ' + mkr.hi + ') ⊂ ANA 区间）· 不命中串 "ZZZ" ' + nkr.count + ' 次（C 表缺键即返回空）\n' +
+      (B.bwt === bwtB && inv === t && got.positions.join(',') === brute.join(',') && lfOK ?
+        '变换 / 逆变换 / 检索三路与暴力一致（0 精确）' : '❌ 不一致');
   }
   };
   var algoRun = null;

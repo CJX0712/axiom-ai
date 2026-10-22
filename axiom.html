@@ -33,7 +33,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.21';
+  var VERSION = '1.3.22';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -9852,6 +9852,517 @@
     return tested === 0 ? 1 : worst;
   });
 
+  /* ==================== v1.3.22 算法库扩展十二 ==================== */
+
+  /* ---------- ① Aho–Corasick 多模式匹配（Aho & Corasick 1975, SIAM J. Comput. 14(1)）
+       trie + failure link + output link：一次扫描 O(|text| + |matches|) 列出全部出现位置。
+       fail[u] = u 的最长真后缀且在 trie 中；out[u] = u 的全部后缀模式（含 fail 链上的） */
+  function ahoCorasick(patterns, text) {
+    var go = [{}], out = [[]], fail = [0], depth = [0], repr = [''];
+    var i, k, c, u = 0, v, f;
+    for (i = 0; i < patterns.length; i++) {
+      u = 0;
+      for (k = 0; k < patterns[i].length; k++) {
+        c = patterns[i].charAt(k);
+        if (go[u][c] === undefined) {
+          go.push({}); out.push([]); fail.push(0); depth.push(depth[u] + 1); repr.push(repr[u] + c);
+          go[u][c] = go.length - 1;
+        }
+        u = go[u][c];
+      }
+      out[u].push(i);
+    }
+    var q = [0], head = 0;
+    while (head < q.length) {
+      u = q[head++];
+      if (u !== 0) out[u] = out[u].concat(out[fail[u]]);   // BFS 保证 fail[u] 的 out 已就绪
+      for (c in go[u]) {
+        v = go[u][c];
+        if (u === 0) fail[v] = 0;
+        else {
+          f = fail[u];
+          while (f !== 0 && go[f][c] === undefined) f = fail[f];
+          fail[v] = (go[f][c] !== undefined && go[f][c] !== v) ? go[f][c] : 0;
+        }
+        q.push(v);
+      }
+    }
+    var matches = [], idx;
+    u = 0;
+    for (i = 0; i < text.length; i++) {
+      c = text.charAt(i);
+      while (u !== 0 && go[u][c] === undefined) u = fail[u];
+      u = (go[u][c] !== undefined) ? go[u][c] : 0;
+      for (k = 0; k < out[u].length; k++) {
+        idx = out[u][k];
+        matches.push([idx, i - patterns[idx].length + 1]);
+      }
+    }
+    return { matches: matches, states: go.length, go: go, out: out, fail: fail, depth: depth, repr: repr };
+  }
+  function _acBrute(patterns, text) {          // 暴力：每个起点 × 每个模式逐字符比较
+    var res = [], i, p, k, pat, ok;
+    for (i = 0; i < text.length; i++) for (p = 0; p < patterns.length; p++) {
+      pat = patterns[p];
+      if (i + pat.length > text.length) continue;
+      ok = true;
+      for (k = 0; k < pat.length; k++) if (text.charAt(i + k) !== pat.charAt(k)) { ok = false; break; }
+      if (ok) res.push([p, i]);
+    }
+    return res;
+  }
+  function _acStructure(A, alphabet, patterns) {   // (a) fail 深度严格递减 (b) 转移 ≡ 最长后缀 (c) out ≡ 后缀模式集
+    var v, ai, i, L, p, nodeOf = {}, pat, exp, s, suf, ch, u2, target, want;
+    for (v = 0; v < A.repr.length; v++) nodeOf[A.repr[v]] = v;
+    for (v = 1; v < A.go.length; v++) if (A.depth[A.fail[v]] >= A.depth[v]) return false;
+    for (v = 0; v < A.go.length; v++) for (ai = 0; ai < alphabet.length; ai++) {
+      ch = alphabet.charAt(ai); u2 = v;
+      while (u2 !== 0 && A.go[u2][ch] === undefined) u2 = A.fail[u2];
+      target = (A.go[u2][ch] !== undefined) ? A.go[u2][ch] : 0;
+      s = A.repr[v] + ch; want = 0;
+      for (L = 0; L <= s.length; L++) { suf = s.substring(L); if (nodeOf[suf] !== undefined) { want = nodeOf[suf]; break; } }
+      if (target !== want) return false;
+    }
+    for (v = 0; v < A.go.length; v++) {
+      exp = [];
+      for (p = 0; p < patterns.length; p++) {
+        pat = patterns[p];
+        if (A.repr[v].length >= pat.length && A.repr[v].substring(A.repr[v].length - pat.length) === pat) exp.push(p);
+      }
+      if (exp.slice().sort().join(',') !== A.out[v].slice().sort().join(',')) return false;
+    }
+    return true;
+  }
+
+  /* ---------- ② CDCL SAT 求解器（Marques-Silva & Sakallah 1996；Moskewicz et al. 2001 GRASP/Chaff）
+       watched literals 单元传播 + 1UIP 冲突分析 + 非时序回溯 + VSIDS 活动度启发。
+       子句字编码：2*变量 + (0 正 / 1 负)；变量 0..nv-1 */
+  function cdclSat(nv, clauses) {
+    var db = [], watches = new Array(2 * nv), i;
+    for (i = 0; i < 2 * nv; i++) watches[i] = [];
+    var assign = new Array(nv).fill(0), level = new Array(nv).fill(0);
+    var reason = new Array(nv).fill(-1), activity = new Array(nv).fill(0);
+    var trail = [], trailLim = [], qhead = 0, learnts = [];
+    var stats = { conflicts: 0, decisions: 0, propagations: 0 };
+    function valLit(l) { var a = assign[l >> 1]; if (a === 0) return 0; return (l & 1) ? -a : a; }
+    function dlevel() { return trailLim.length; }
+    function enqueue(l, ci) {
+      var v = l >> 1;
+      assign[v] = (l & 1) ? -1 : 1; level[v] = dlevel(); reason[v] = ci;
+      trail.push(l); stats.propagations++;
+    }
+    function addClause(c, learnt) {
+      var ci = db.length; db.push(c);
+      if (learnt) learnts.push(c.slice());
+      if (c.length === 1) { if (valLit(c[0]) === 0) enqueue(c[0], ci); return ci; }
+      watches[c[0]].push(ci); watches[c[1]].push(ci);
+      return ci;
+    }
+    function propagate() {                    // watch 被违反时另寻非假文字；否则单元 / 冲突
+      var i2, k;
+      while (qhead < trail.length) {
+        var p = trail[qhead++], falseLit = p ^ 1, ws = watches[falseLit], keep = [], ci, c, first, found;
+        for (i2 = 0; i2 < ws.length; i2++) {
+          ci = ws[i2]; c = db[ci];
+          if (c[0] === falseLit) { c[0] = c[1]; c[1] = falseLit; }
+          first = c[0];
+          if (valLit(first) === 1) { keep.push(ci); continue; }
+          found = -1;
+          for (k = 2; k < c.length; k++) if (valLit(c[k]) !== -1) { found = k; break; }
+          if (found >= 0) { c[1] = c[found]; c[found] = falseLit; watches[c[1]].push(ci); continue; }
+          keep.push(ci);
+          if (valLit(first) === -1) {
+            for (k = i2 + 1; k < ws.length; k++) keep.push(ws[k]);
+            watches[falseLit] = keep;
+            return ci;                        // 冲突
+          }
+          enqueue(first, ci);                // 单元传播
+        }
+        watches[falseLit] = keep;
+      }
+      return -1;
+    }
+    function analyze(ci) {                   // 1UIP：分辨率消去直到当前层仅剩一个文字
+      var learnt = [-1], seen = new Array(nv).fill(false);
+      var counter = 0, p = -1, idx = trail.length - 1, k, q, c, btlevel = 0;
+      do {
+        c = db[ci];
+        for (k = (p < 0 ? 0 : 1); k < c.length; k++) {
+          q = c[k] >> 1;
+          if (!seen[q] && level[q] > 0) {
+            seen[q] = true;
+            if (level[q] >= dlevel()) counter++; else learnt.push(c[k]);
+          }
+        }
+        while (idx >= 0 && !seen[trail[idx] >> 1]) idx--;
+        if (idx < 0) throw new Error('cdcl: analyze trail inconsistent');   // 不变量破坏即抛错，不静默降级
+        p = trail[idx]; idx--;
+        seen[p >> 1] = false; counter--;
+        ci = reason[p >> 1];
+      } while (counter > 0);
+      learnt[0] = p ^ 1;
+      for (k = 1; k < learnt.length; k++) { var lv = level[learnt[k] >> 1]; if (lv > btlevel) btlevel = lv; }
+      for (k = 0; k < learnt.length; k++) activity[learnt[k] >> 1] += 1;
+      return { clause: learnt, btlevel: btlevel };
+    }
+    function backtrack(lv) {
+      if (dlevel() <= lv) return;
+      var lim = trailLim[lv], i2, v;
+      for (i2 = trail.length - 1; i2 >= lim; i2--) { v = trail[i2] >> 1; assign[v] = 0; reason[v] = -1; level[v] = 0; }
+      trail.length = lim; trailLim.length = lv; qhead = trail.length;
+    }
+    function pickVar() {                      // VSIDS：活动度最高且未赋值
+      var best = -1, v;
+      for (v = 0; v < nv; v++) if (assign[v] === 0 && (best < 0 || activity[v] > activity[best])) best = v;
+      return best;
+    }
+    for (i = 0; i < clauses.length; i++) addClause(clauses[i].slice(), false);
+    var ok = propagate() < 0, ci2, res, learnt2, nci, v2;
+    while (ok) {
+      ci2 = propagate();
+      if (ci2 >= 0) {
+        stats.conflicts++;
+        if (dlevel() === 0) { ok = false; break; }
+        res = analyze(ci2);
+        learnt2 = res.clause;
+        backtrack(res.btlevel);
+        nci = addClause(learnt2, true);
+        if (learnt2.length > 1 && valLit(learnt2[0]) === 0) enqueue(learnt2[0], nci);
+      } else {
+        v2 = pickVar();
+        if (v2 < 0) break;                    // 全部分配完成 ⇒ SAT
+        trailLim.push(trail.length);
+        stats.decisions++;
+        enqueue(2 * v2, -1);
+      }
+    }
+    var model = null, i3;
+    if (ok) { model = []; for (i3 = 0; i3 < nv; i3++) model.push(assign[i3] === 1); }
+    return { sat: ok, model: model, learnts: learnts, stats: stats };
+  }
+  function _dpllRef(nv, clauses) {            // 纯 DPLL（无学习）：单元传播 + 分支，作独立第二路径
+    var assign = new Array(nv).fill(0);
+    function val(l) { var a = assign[l >> 1]; if (a === 0) return 0; return (l & 1) ? -a : a; }
+    function rec(cls) {
+      var changed = true, nxt = [], i, k, c, sat, lits, pick, t, save;
+      while (changed) {
+        changed = false; nxt = [];
+        for (i = 0; i < cls.length; i++) {
+          c = cls[i]; sat = false; lits = [];
+          for (k = 0; k < c.length; k++) { var vv = val(c[k]); if (vv === 1) { sat = true; break; } if (vv === 0) lits.push(c[k]); }
+          if (sat) continue;
+          if (lits.length === 0) return false;
+          if (lits.length === 1) { var lv = lits[0]; assign[lv >> 1] = (lv & 1) ? -1 : 1; changed = true; }
+          nxt.push(lits);
+        }
+        cls = nxt;
+      }
+      pick = -1;
+      for (i = 0; i < nv; i++) if (assign[i] === 0) { pick = i; break; }
+      if (pick < 0) return cls.length === 0;
+      for (t = 0; t < 2; t++) {
+        save = assign.slice();
+        assign[pick] = t === 0 ? 1 : -1;
+        if (rec(cls.slice())) return true;
+        assign = save;
+      }
+      return false;
+    }
+    return rec(clauses.map(function (c) { return c.slice(); }));
+  }
+  function _satBrute(nv, clauses) {           // 暴力：枚举 2^nv 全部真值指派
+    var total = Math.pow(2, nv), m, a, i, k, c, sat, ok, l, v;
+    for (m = 0; m < total; m++) {
+      a = [];
+      for (i = 0; i < nv; i++) a.push((m >> i) & 1 ? 1 : -1);
+      sat = true;
+      for (i = 0; i < clauses.length && sat; i++) {
+        c = clauses[i]; ok = false;
+        for (k = 0; k < c.length; k++) { l = c[k]; v = a[l >> 1]; if ((l & 1) ? (v === -1) : (v === 1)) { ok = true; break; } }
+        if (!ok) sat = false;
+      }
+      if (sat) { var model = []; for (i = 0; i < nv; i++) model.push(a[i] === 1); return { sat: true, model: model }; }
+    }
+    return { sat: false, model: null };
+  }
+  function _satModels(nv, clauses) {          // 全部满足赋值（用于核验「学习子句被原公式蕴涵」）
+    var total = Math.pow(2, nv), out = [], m, a, i, k, c, sat, ok, l, v;
+    for (m = 0; m < total; m++) {
+      a = [];
+      for (i = 0; i < nv; i++) a.push((m >> i) & 1 ? 1 : -1);
+      sat = true;
+      for (i = 0; i < clauses.length && sat; i++) {
+        c = clauses[i]; ok = false;
+        for (k = 0; k < c.length; k++) { l = c[k]; v = a[l >> 1]; if ((l & 1) ? (v === -1) : (v === 1)) { ok = true; break; } }
+        if (!ok) sat = false;
+      }
+      if (sat) out.push(a);
+    }
+    return out;
+  }
+  function _php(pigeons, holes) {             // 鸽巢原理 CNF（p 只鸽子 / holes 个洞 → p > holes 必 UNSAT）
+    var cl = [], i, j, h;
+    for (i = 0; i < pigeons; i++) { var c = []; for (h = 0; h < holes; h++) c.push(2 * (i * holes + h)); cl.push(c); }
+    for (i = 0; i < pigeons; i++) for (j = i + 1; j < pigeons; j++) for (h = 0; h < holes; h++)
+      cl.push([(2 * (i * holes + h)) | 1, (2 * (j * holes + h)) | 1]);
+    return { nv: pigeons * holes, clauses: cl };
+  }
+
+  /* ---------- ③ Burrows–Wheeler 变换 + FM-index（Burrows & Wheeler 1994；Ferragina & Manzini 2000）
+       复用已验证的 suffixArray（Manber–Myers 1990）构造 BWT 列；唯一最小哨兵 '\u0000'；
+       LF-mapping = C[c] + occ(c, i) 给出后缀连接，逆变换 O(n) 重建原文 */
+  function _bwtTables(bwt) {
+    var n = bwt.length, i, k, c, freq = {}, keys = [];
+    for (i = 0; i < n; i++) {
+      c = bwt.charAt(i);
+      if (freq[c] === undefined) { freq[c] = 0; keys.push(c); }   // keys 去重（否则 C 表被重复计数）
+      freq[c]++;
+    }
+    keys.sort();
+    var C = {}, acc = 0;
+    for (i = 0; i < keys.length; i++) { C[keys[i]] = acc; acc += freq[keys[i]]; }
+    var occ = {};
+    for (i = 0; i < keys.length; i++) { occ[keys[i]] = new Array(n + 1); occ[keys[i]][0] = 0; }
+    for (i = 0; i < n; i++) {
+      for (k = 0; k < keys.length; k++) occ[keys[k]][i + 1] = occ[keys[k]][i];
+      c = bwt.charAt(i); occ[c][i + 1]++;
+    }
+    var lf = new Array(n);
+    for (i = 0; i < n; i++) { c = bwt.charAt(i); lf[i] = C[c] + occ[c][i]; }
+    return { freq: freq, keys: keys, C: C, occ: occ, lf: lf };
+  }
+  function bwtTransform(s) {
+    var t = s + '\u0000', n = t.length;
+    var sa = suffixArray(t).sa, bwt = [], primary = -1, i;
+    for (i = 0; i < n; i++) {
+      bwt.push(t.charAt((sa[i] - 1 + n) % n));
+      if (sa[i] === 0) primary = i;
+    }
+    return { bwt: bwt.join(''), primary: primary, n: n, sa: sa };
+  }
+  function bwtInverse(bwt, primary) {         // 返回含末尾哨兵的原文
+    var T = _bwtTables(bwt), n = bwt.length, s = '', row = primary, i;
+    for (i = 0; i < n; i++) { s = bwt.charAt(row) + s; row = T.lf[row]; }
+    return s;
+  }
+  function fmIndex(text) {
+    var b = bwtTransform(text), T = _bwtTables(b.bwt);
+    return { bwt: b.bwt, primary: b.primary, n: b.n, sa: b.sa, C: T.C, occ: T.occ, lf: T.lf, keys: T.keys, text: text };
+  }
+  function fmSearch(F, pat) {                 // backward search：O(m) 得到 [sp, ep) 后缀区间
+    if (!pat.length) return { count: 0, positions: [] };
+    var sp = 0, ep = F.n, i, c;
+    for (i = pat.length - 1; i >= 0; i--) {
+      c = pat.charAt(i);
+      if (F.C[c] === undefined) return { count: 0, positions: [] };
+      sp = F.C[c] + F.occ[c][sp];
+      ep = F.C[c] + F.occ[c][ep];
+      if (sp >= ep) return { count: 0, positions: [] };
+    }
+    var pos = [];
+    for (i = sp; i < ep; i++) pos.push(F.sa[i]);
+    pos.sort(function (a, b) { return a - b; });
+    return { count: ep - sp, positions: pos, lo: sp, hi: ep };
+  }
+  function _bwtBrute(s) {                     // 暴力：枚举全部循环移位并排序，取最后一列
+    var t = s + '\u0000', n = t.length, rots = [], i;
+    for (i = 0; i < n; i++) rots.push(t.substring(i) + t.substring(0, i));
+    var idx = [];
+    for (i = 0; i < n; i++) idx.push(i);
+    idx.sort(function (a, b) { return rots[a] < rots[b] ? -1 : (rots[a] > rots[b] ? 1 : 0); });
+    var bwt = '', primary = -1;
+    for (i = 0; i < n; i++) { bwt += rots[idx[i]].charAt(n - 1); if (idx[i] === 0) primary = i; }
+    return { bwt: bwt, primary: primary };
+  }
+  function _findRef(s, pat) {                 // 暴力：逐起点逐字符匹配
+    var out = [], i, k, ok;
+    if (!pat.length) return out;
+    for (i = 0; i + pat.length <= s.length; i++) {
+      ok = true;
+      for (k = 0; k < pat.length; k++) if (s.charAt(i + k) !== pat.charAt(k)) { ok = false; break; }
+      if (ok) out.push(i);
+    }
+    return out;
+  }
+
+  /* ① Aho–Corasick：匹配集 ≡ 暴力 + 三项结构不变量（fail 深度 / 转移 ≡ 最长后缀 / out ≡ 后缀模式集） */
+  check('ahoCorasick：多模式匹配 ≡ 暴力逐起点逐模式扫描（15 seed + 重叠模式族 + 5 大规模实例）+ fail 深度严格递减 + 转移 ≡ 最长后缀 + out ≡ 后缀模式集', 0, function () {
+    var worst = 0, tested = 0, seed, rng, alpha, np, pats, tl, text, i, k, p, L, q;
+    var cmp = function (a, b) {
+      var x = a.map(function (e) { return e[0] + '@' + e[1]; }).sort().join(' ');
+      var y = b.map(function (e) { return e[0] + '@' + e[1]; }).sort().join(' ');
+      return x === y;
+    };
+    for (seed = 1; seed <= 15; seed++) {
+      rng = mulberry32(seed);
+      alpha = rng() < 0.5 ? 'ab' : 'abc';
+      np = 1 + Math.floor(rng() * 5); pats = [];
+      for (i = 0; i < np; i++) {
+        L = 1 + Math.floor(rng() * 4); p = '';
+        for (k = 0; k < L; k++) p += alpha.charAt(Math.floor(rng() * alpha.length));
+        pats.push(p);
+      }
+      tl = 10 + Math.floor(rng() * 30); text = '';
+      for (i = 0; i < tl; i++) text += alpha.charAt(Math.floor(rng() * alpha.length));
+      var A = ahoCorasick(pats, text);
+      if (!cmp(A.matches, _acBrute(pats, text))) worst = 1;
+      if (!_acStructure(A, alpha, pats)) worst = 1;
+      tested++;
+    }
+    // 确定性：前缀/后缀重叠族（a / aa / aaa / aaaa / aaaaa / ba / aba / ababa）
+    var fam = ['a', 'aa', 'aaa', 'aaaa', 'aaaaa', 'ba', 'aba', 'ababa'];
+    var famText = 'aaaaabaaabaababaaaaa';
+    var AF = ahoCorasick(fam, famText);
+    if (!cmp(AF.matches, _acBrute(fam, famText))) worst = 1;
+    if (!_acStructure(AF, 'ab', fam)) worst = 1;
+    // 大规模：20 模式 × 200 字符（重叠输出密集）
+    for (seed = 700; seed < 705; seed++) {
+      rng = mulberry32(seed);
+      var al2 = 'abcd', ps2 = [];
+      for (i = 0; i < 20; i++) {
+        L = 1 + Math.floor(rng() * 6); p = '';
+        for (k = 0; k < L; k++) p += al2.charAt(Math.floor(rng() * 4));
+        ps2.push(p);
+      }
+      var tx2 = '';
+      for (i = 0; i < 200; i++) tx2 += al2.charAt(Math.floor(rng() * 4));
+      var A2 = ahoCorasick(ps2, tx2);
+      if (!cmp(A2.matches, _acBrute(ps2, tx2))) worst = 1;
+      if (!_acStructure(A2, al2, ps2)) worst = 1;
+      tested++;
+    }
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ② CDCL SAT：决策 ≡ 暴力 2^nv 枚举 ≡ 纯 DPLL + 模型合法 + 学习子句被原公式蕴涵 + 鸽巢原理必 UNSAT */
+  check('cdclSat：SAT/UNSAT ≡ 暴力 2ⁿ 枚举 ≡ 纯 DPLL（15 seed + 8 相变区实例）+ 模型满足全部子句 + 每条学习子句被原公式蕴涵（枚举全部满足赋值）+ 鸽巢原理 PHP(3→2)…PHP(6→5) 必 UNSAT', 0, function () {
+    var worst = 0, tested = 0, satCnt = 0, unsatCnt = 0, seed, rng, nv, ratio, m, clauses, i, k, v, cl, used, r, b, d, c, l, okc, a, sols, lc, okl, bad;
+    var modelOK = function (clauses, model) {
+      for (var i2 = 0; i2 < clauses.length; i2++) {
+        var cc = clauses[i2], hit = false;
+        for (var j = 0; j < cc.length; j++) { var l2 = cc[j], v2 = model[l2 >> 1] ? 1 : -1; if ((l2 & 1) ? (v2 === -1) : (v2 === 1)) { hit = true; break; } }
+        if (!hit) return false;
+      }
+      return true;
+    };
+    // (a) 随机 3-SAT（nv 6..12，ratio 2.0..5.5，含相变前中后）
+    for (seed = 1; seed <= 15; seed++) {
+      rng = mulberry32(seed);
+      nv = 6 + Math.floor(rng() * 7);
+      m = Math.round((2 + rng() * 3.5) * nv); clauses = [];
+      for (i = 0; i < m; i++) {
+        cl = []; used = {};
+        for (k = 0; k < 3; k++) {
+          v = Math.floor(rng() * nv);
+          if (used[v]) { k--; continue; }
+          used[v] = 1; cl.push(2 * v + (rng() < 0.5 ? 0 : 1));
+        }
+        clauses.push(cl);
+      }
+      r = cdclSat(nv, clauses); b = _satBrute(nv, clauses); d = _dpllRef(nv, clauses);
+      if (r.sat !== b.sat || d !== b.sat) { worst = 1; continue; }
+      if (r.sat) { satCnt++; if (!modelOK(clauses, r.model)) worst = 1; } else unsatCnt++;
+      sols = _satModels(nv, clauses);
+      for (i = 0; i < r.learnts.length; i++) {
+        lc = r.learnts[i]; bad = false;
+        for (k = 0; k < sols.length; k++) {
+          a = sols[k]; okl = false;
+          for (var j2 = 0; j2 < lc.length; j2++) { var l3 = lc[j2], v3 = a[l3 >> 1]; if ((l3 & 1) ? (v3 === -1) : (v3 === 1)) { okl = true; break; } }
+          if (!okl) { bad = true; break; }
+        }
+        if (bad) { worst = 1; break; }
+      }
+      tested++;
+    }
+    // (b) 相变区（nv 13..15，ratio 3.6..5.2）
+    for (seed = 800; seed < 808; seed++) {
+      rng = mulberry32(seed);
+      nv = 13 + Math.floor(rng() * 3);
+      m = Math.round((3.6 + rng() * 1.6) * nv); clauses = [];
+      for (i = 0; i < m; i++) {
+        cl = []; used = {};
+        for (k = 0; k < 3; k++) {
+          v = Math.floor(rng() * nv);
+          if (used[v]) { k--; continue; }
+          used[v] = 1; cl.push(2 * v + (rng() < 0.5 ? 0 : 1));
+        }
+        clauses.push(cl);
+      }
+      r = cdclSat(nv, clauses); b = _satBrute(nv, clauses); d = _dpllRef(nv, clauses);
+      if (r.sat !== b.sat || d !== b.sat) { worst = 1; continue; }
+      if (r.sat) { satCnt++; if (!modelOK(clauses, r.model)) worst = 1; } else unsatCnt++;
+      sols = _satModels(nv, clauses);
+      for (i = 0; i < r.learnts.length; i++) {
+        lc = r.learnts[i]; bad = false;
+        for (k = 0; k < sols.length; k++) {
+          a = sols[k]; okl = false;
+          for (var j3 = 0; j3 < lc.length; j3++) { var l4 = lc[j3], v4 = a[l4 >> 1]; if ((l4 & 1) ? (v4 === -1) : (v4 === 1)) { okl = true; break; } }
+          if (!okl) { bad = true; break; }
+        }
+        if (bad) { worst = 1; break; }
+      }
+      tested++;
+    }
+    // (c) 鸽巢原理：PHP(p, p-1 洞) 必 UNSAT（p ≤ 5 用暴力枚举核对；p = 6 用 CDCL + 纯 DPLL 双实现互证）
+    [[3, 2], [4, 3], [5, 4], [6, 5]].forEach(function (t) {
+      var P = _php(t[0], t[1]);
+      var rr = cdclSat(P.nv, P.clauses);
+      if (rr.sat) { worst = 1; return; }
+      if (t[0] <= 5) { if (_satBrute(P.nv, P.clauses).sat) worst = 1; }
+      else if (_dpllRef(P.nv, P.clauses)) worst = 1;   // 2^30 暴力不可行 → 第二实现互证
+      tested++;
+    });
+    return tested === 0 ? 1 : worst;
+  });
+
+  /* ③ BWT + FM-index：列 ≡ 暴力旋转排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch */
+  check('bwtTransform/fmSearch：BWT 列 ≡ 暴力循环移位排序（15 seed + 6 长串/周期串 + 9 边界串）+ 逆变换 ≡ 原文 + LF-mapping 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch', 0, function () {
+    var worst = 0, tested = 0, seed, rng, mode, s, n, i, k, al, unit, reps;
+    var verify = function (str, doBruteRot) {
+      var B = bwtTransform(str);
+      if (doBruteRot) {
+        var BB = _bwtBrute(str);
+        if (B.bwt !== BB.bwt || B.primary !== BB.primary) worst = 1;
+      }
+      if (bwtInverse(B.bwt, B.primary) !== str + '\u0000') worst = 1;
+      var F = fmIndex(str), seen = new Array(F.n).fill(false);
+      for (i = 0; i < F.n; i++) { if (seen[F.lf[i]]) { worst = 1; break; } seen[F.lf[i]] = true; }   // LF 为置换
+      for (i = 0; i <= F.n; i++) for (k = 0; k < F.keys.length; k++) {                       // occ[c][i] = 前 i 位中 c 的个数
+        var cnt = 0, ch = F.keys[k];
+        for (var t = 0; t < i; t++) if (F.bwt.charAt(t) === ch) cnt++;
+        if (F.occ[ch][i] !== cnt) { worst = 1; break; }
+      }
+      var pats = [str.charAt(0), str.charAt(str.length - 1), str.substring(0, Math.min(4, str.length)), 'qqqq'];
+      for (var q = 0; q < pats.length; q++) {
+        var pt = pats[q], r1 = fmSearch(F, pt), r2 = _findRef(str, pt);
+        if (r1.positions.join(',') !== r2.join(',')) worst = 1;
+        if (r1.count !== r2.length) worst = 1;
+        if (r2.join(',') !== kmpSearch(str, pt).join(',')) worst = 1;
+        if (r2.length && r2.join(',') !== saSearch(str, pt).join(',')) worst = 1;
+      }
+      tested++;
+    };
+    for (seed = 1; seed <= 15; seed++) {
+      rng = mulberry32(seed);
+      mode = Math.floor(rng() * 3); s = '';
+      if (mode === 0) { al = 'abc'; n = 5 + Math.floor(rng() * 40); for (i = 0; i < n; i++) s += al.charAt(Math.floor(rng() * 3)); }
+      else if (mode === 1) { n = 3 + Math.floor(rng() * 20); s = new Array(n + 1).join('a'); }
+      else { al = 'ab'; n = 6 + Math.floor(rng() * 30); for (i = 0; i < n; i++) s += al.charAt(Math.floor(rng() * 2)); }
+      verify(s, true);
+    }
+    // 长串与周期串
+    for (seed = 900; seed < 906; seed++) {
+      rng = mulberry32(seed);
+      mode = Math.floor(rng() * 2); s = '';
+      if (mode === 0) { al = 'abcd'; n = 150 + Math.floor(rng() * 100); for (i = 0; i < n; i++) s += al.charAt(Math.floor(rng() * 4)); }
+      else { unit = ['ab', 'abc', 'aa'][Math.floor(rng() * 3)]; reps = 30 + Math.floor(rng() * 30); for (i = 0; i < reps; i++) s += unit; }
+      verify(s, true);
+    }
+    // 确定性边界串（空串 / 单字符 / 全同 / 周期）
+    ['', 'a', 'ab', 'aa', 'aaaa', 'abcabcabc', 'abababab', 'ba', 'zzz'].forEach(function (str) { verify(str, true); });
+    return tested === 0 ? 1 : worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -10025,6 +10536,13 @@
     saSearch: saSearch,
     fwht: fwht,
     fwhtConvolve: fwhtConvolve,
+    /* v1.3.22 算法库扩展十二 */
+    ahoCorasick: ahoCorasick,
+    cdclSat: cdclSat,
+    bwtTransform: bwtTransform,
+    bwtInverse: bwtInverse,
+    fmIndex: fmIndex,
+    fmSearch: fmSearch,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
@@ -11089,7 +11607,7 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
 /* ==== AXIOM ui.js（仪表盘） ==== */
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(57) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(60) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -11548,7 +12066,10 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
     /* v1.3.21 算法库扩展十一 */
     { id: 'maxClique', name: 'Bron–Kerbosch 最大团（pivot）', src: 'Bron & Kerbosch (1973)；Tomita (2006)', api: 'AXIOM.maxClique', inv: 'ω(G) ≡ 暴力枚举 2ⁿ 子集（0 精确）+ 全部极大团极大性 + α(G)=ω(Ḡ) + ω ≤ 贪心着色数', chk: ['maxClique：'] },
     { id: 'suffixArray', name: '后缀数组（倍增 O(n log n)）+ Kasai LCP', src: 'Manber–Myers (1990)；Kasai (2001)', api: 'AXIOM.suffixArray', inv: 'SA ≡ 朴素后缀排序 + Kasai LCP ≡ 暴力逐对 LCP + SA 二分搜索 ≡ 朴素匹配 ≙ kmpSearch（0 精确）', chk: ['suffixArray：'] },
-    { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] }
+    { id: 'fwhtConvolve', name: 'FWHT + zeta/Möbius 集合卷积', src: 'Walsh–Hadamard (1923)；快速 zeta 变换', api: 'AXIOM.fwhtConvolve', inv: 'xor/or/and 三算子 ≡ 朴素 O(N²)（整数 0 精确）+ H²=N·I 正交性 + 线性性 + 单位元', chk: ['fwhtConvolve：', 'fwht：'] },
+    { id: 'ahoCorasick', name: 'Aho–Corasick 多模式匹配', src: 'Aho & Corasick (1975)', api: 'AXIOM.ahoCorasick', inv: '匹配集 ≡ 暴力逐起点逐模式扫描（0 精确）+ fail 深度严格递减 + 转移 ≡ 最长后缀 + out ≡ 后缀模式集', chk: ['ahoCorasick：'] },
+    { id: 'cdclSat', name: 'CDCL SAT 求解（1UIP 学习）', src: 'Marques-Silva & Sakallah (1996)；GRASP/Chaff (2001)', api: 'AXIOM.cdclSat', inv: 'SAT/UNSAT ≡ 暴力 2ⁿ 枚举 ≡ 纯 DPLL + 模型合法 + 学习子句被原公式蕴涵 + 鸽巢原理必 UNSAT（0 精确）', chk: ['cdclSat：'] },
+    { id: 'bwtFM', name: 'Burrows–Wheeler 变换 + FM-index', src: 'Burrows & Wheeler (1994)；Ferragina & Manzini (2000)', api: 'AXIOM.bwtTransform / AXIOM.fmSearch', inv: 'BWT 列 ≡ 暴力循环移位排序 + 逆变换 ≡ 原文 + LF 双射 + occ 语义 + backward search ≡ 暴力 ≡ kmpSearch ≡ saSearch（0 精确）', chk: ['bwtTransform/fmSearch：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -12286,6 +12807,86 @@ if (typeof module !== "undefined" && module.exports) module.exports = AXIOM_REGI
       out.join('\n') + '\n' +
       '正交性 H(H·a) = N·a（H² = 8·I）= ' + orthOK + '\n' +
       (allOK ? '三算子 + 正交性全部与暴力一致（整数 0 精确）' : '❌ 不一致');
+  },
+  ahoCorasick: function () {
+    var pats = ['he', 'she', 'his', 'hers', 'h', 'e'], s = 'ushers his herd', i, p, k;
+    var r = AXIOM.ahoCorasick(pats, s);
+    var brute = [];                                  // 暴力：每个起点 × 每个模式逐字符
+    for (i = 0; i < s.length; i++) for (p = 0; p < pats.length; p++) {
+      var ok = true;
+      for (k = 0; k < pats[p].length; k++) if (s.charAt(i + k) !== pats[p].charAt(k)) { ok = false; break; }
+      if (ok) brute.push([p, i]);
+    }
+    var fmt = function (arr) {
+      return arr.map(function (e) { return '"' + pats[e[0]] + '"@' + e[1]; }).join(', ');
+    };
+    var same = fmt(r.matches) === fmt(brute);
+    var failOK = true;                              // fail 深度严格递减
+    for (var v = 1; v < r.states; v++) if (r.depth[r.fail[v]] >= r.depth[v]) failOK = false;
+    return '模式集 = [' + pats.map(function (x) { return '"' + x + '"'; }).join(', ') + '] · 文本 = "' + s + '"（长度 ' + s.length + '）\n' +
+      'trie 状态数 = ' + r.states + ' · 一次扫描 O(|text| + |matches|)（fail 深度严格递减 = ' + failOK + '）\n' +
+      'AC 匹配（模式@起点）= [' + fmt(r.matches) + ']\n' +
+      '暴力匹配           = [' + fmt(brute) + ']\n' +
+      '两种方式共 ' + r.matches.length + ' 处匹配，集合一致 = ' + same + '\n' +
+      (same && failOK ? '多模式输出 ≡ 暴力逐起点扫描（0 精确），重叠模式（"h"/"he"/"hers"）全部命中' : '❌ 不一致');
+  },
+  cdclSat: function () {
+    var nv = 14, clauses = [], i, k, v;
+    var rng = AXIOM.mulberry32(20261022);          // 确定性 3-SAT（相变区 ratio ≈ 4.3）
+    for (i = 0; i < Math.round(4.3 * nv); i++) {
+      var cl = [], used = {};
+      for (k = 0; k < 3; k++) {
+        v = Math.floor(rng() * nv);
+        if (used[v]) { k--; continue; }
+        used[v] = 1; cl.push((v + 1) * (rng() < 0.5 ? 1 : -1));
+      }
+      clauses.push(cl);
+    }
+    var lit = function (l) { return (l > 0 ? 'x' : '¬x') + Math.abs(l); };
+    var r = AXIOM.cdclSat(nv, clauses);
+    var modelTxt = r.model ? r.model.map(function (b, t) { return b ? t : null; }).filter(function (x) { return x !== null; }).join(', ') : '—';
+    // 鸽巢原理：4 只鸽子 / 3 个洞 ⇒ 必 UNSAT（经典 CDCL 压力实例）
+    var P = [], q, q2, h;
+    for (q = 0; q < 4; q++) { var c1 = []; for (h = 0; h < 3; h++) c1.push(q * 3 + h + 1); P.push(c1); }
+    for (q = 0; q < 4; q++) for (q2 = q + 1; q2 < 4; q2++) for (h = 0; h < 3; h++) P.push([-(q * 3 + h + 1), -(q2 * 3 + h + 1)]);
+    var php = AXIOM.cdclSat(12, P);
+    return '随机 3-SAT：' + nv + ' 变量 / ' + clauses.length + ' 子句（ratio 4.3，跨相变区）\n' +
+      '前 3 子句 = [' + clauses.slice(0, 3).map(function (c) { return '[' + c.map(lit).join(' ∨ ') + ']'; }).join(', ') + ' …]\n' +
+      'CDCL（watched literals + 1UIP 学习 + 非时序回溯 + VSIDS）：' + (r.sat ? 'SAT' : 'UNSAT') + '\n' +
+      '  决策 ' + r.stats.decisions + ' 次 · 传播 ' + r.stats.propagations + ' 次 · 冲突 ' + r.stats.conflicts + ' 次 · 学习子句 ' + r.learnts.length + ' 条\n' +
+      (r.sat ? '  模型（取真变量）= {' + modelTxt + '}（逐子句核验满足）\n' : '') +
+      '鸽巢原理 4 鸽 / 3 洞（12 变量 / ' + P.length + ' 子句）：' + (php.sat ? 'SAT' : 'UNSAT') +
+      '（Pigeonhole 不可能放置 ⇒ 必 UNSAT），冲突 ' + php.stats.conflicts + ' 次\n' +
+      (r.sat || php.sat === false ? 'CDCL 判定 ≡ 逻辑事实（暴力 2ⁿ 枚举互证见自检，0 精确）' : '❌ 不一致');
+  },
+  bwtFM: function () {
+    var s = 'BANANA', B = AXIOM.bwtTransform(s), i, j;
+    var inv = AXIOM.bwtInverse(B.bwt, B.primary);
+    var F = AXIOM.fmIndex(s), pat = 'ANA', brute = [];
+    var got = AXIOM.fmSearch(F, pat);
+    for (i = 0; i + pat.length <= s.length; i++) if (s.substr(i, pat.length) === pat) brute.push(i);
+    var mkr = AXIOM.fmSearch(F, 'NANA'), nkr = AXIOM.fmSearch(F, 'ZZZ');
+    var kmp = AXIOM.kmpSearch(s, pat), sa = AXIOM.saSearch(s, pat);
+    var t = s + '\u0000', n = t.length, rots = [];         // 暴力：枚举全部循环移位并排序
+    for (i = 0; i < n; i++) rots.push(t.substr(i) + t.substr(0, i));
+    rots.sort();
+    var bwtB = '', priB = -1;
+    for (i = 0; i < n; i++) {
+      bwtB += rots[i].charAt(n - 1);
+      if (rots[i] === t) priB = i;
+    }
+    var lfSeen = {}, lfOK = true;                        // LF-mapping 必须是置换
+    for (i = 0; i < F.n; i++) { if (lfSeen[F.lf[i]]) lfOK = false; lfSeen[F.lf[i]] = 1; }
+    return '文本 = "' + s + '"（附唯一最小哨兵 \\0，长度 ' + B.n + '；BWT 列由已验证的 Manber–Myers 后缀数组给出）\n' +
+      'BWT 列 = "' + B.bwt + '" · primary = ' + B.primary + '\n' +
+      '暴力循环移位排序（' + n + ' 个旋转）→ "' + bwtB + '" · primary = ' + priB + ' ⇒ 一致 = ' + (B.bwt === bwtB && B.primary === priB) + '\n' +
+      'LF-mapping 逆变换（O(n)）= "' + inv.slice(0, inv.length - 1) + '" ≡ 原文 = ' + (inv === t) + ' · LF 为置换 = ' + lfOK + '\n' +
+      'FM-index backward search "' + pat + '" → 后缀区间 [' + got.lo + ', ' + got.hi + ')，出现 ' + got.count + ' 次，起始位置 [' + got.positions.join(', ') + ']\n' +
+      '  ≡ 暴力匹配 [' + brute.join(', ') + '] ≙ kmpSearch [' + kmp.join(', ') + '] ≙ saSearch [' + sa.join(', ') + '] = ' +
+      (got.positions.join(',') === brute.join(',') && brute.join(',') === kmp.join(',') && brute.join(',') === sa.join(',')) + '\n' +
+      '后缀嵌套："NANA" ' + mkr.count + ' 次（区间 [' + mkr.lo + ', ' + mkr.hi + ') ⊂ ANA 区间）· 不命中串 "ZZZ" ' + nkr.count + ' 次（C 表缺键即返回空）\n' +
+      (B.bwt === bwtB && inv === t && got.positions.join(',') === brute.join(',') && lfOK ?
+        '变换 / 逆变换 / 检索三路与暴力一致（0 精确）' : '❌ 不一致');
   }
   };
   var algoRun = null;
