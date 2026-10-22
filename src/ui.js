@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(63) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(66) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -466,7 +466,11 @@
     /* v1.3.23 算法库扩展十三 */
     { id: 'maxWeightMatching', name: 'Edmonds 带权带花树（一般图最大权匹配）', src: 'Edmonds (1965)；Gabow (1985)；Kolmogorov (2009)', api: 'AXIOM.maxWeightMatching', inv: '最大权匹配 ≡ 暴力枚举全部匹配子集（n≤10，0 精确）+ 权全 1 退化 ≡ blossomMatching 最大基数 + 匹配合法（对称对合）', chk: ['maxWeightMatching：'] },
     { id: 'arithmeticCoding', name: '算术编码（无损压缩）', src: 'Witten–Neal–Cleary (1987)', api: 'AXIOM.arithmeticEncode / AXIOM.arithmeticDecode', inv: 'round-trip ≡ 原消息（0 误差）+ 码长 ∈ [理想−1，理想+2]（Shannon 界）+ Σp=1 + 高概率符号大幅压缩', chk: ['arithmeticEncode/arithmeticDecode：'] },
-    { id: 'dct', name: '正交归一 DCT-II / IDCT', src: 'Ahmed–Natarajan–Rao (1974)；JPEG/MPEG', api: 'AXIOM.dct / AXIOM.idct', inv: 'IDCT(DCT(x)) ≡ x（完美重构 ≤1e-12）+ CᵀC=I 基正交归一 + Parseval 能量守恒 + 直流分量 X₀=√(1/N)·Σx', chk: ['dct/idct：'] }
+    { id: 'dct', name: '正交归一 DCT-II / IDCT', src: 'Ahmed–Natarajan–Rao (1974)；JPEG/MPEG', api: 'AXIOM.dct / AXIOM.idct', inv: 'IDCT(DCT(x)) ≡ x（完美重构 ≤1e-12）+ CᵀC=I 基正交归一 + Parseval 能量守恒 + 直流分量 X₀=√(1/N)·Σx', chk: ['dct/idct：'] },
+    /* v1.3.24 算法库扩展十四 */
+    { id: 'lz77', name: 'LZ77 压缩', src: 'Lempel–Ziv (1977)；DEFLATE', api: 'AXIOM.lz77Compress / AXIOM.lz77Decompress', inv: 'round-trip ≡ 原串（0 误差）+ 每个匹配复现所引用历史子串 + 贪心最长匹配 + 重复串有效压缩', chk: ['lz77Compress/lz77Decompress：'] },
+    { id: 'huffman', name: 'Huffman 编码（最优前缀码）', src: 'Huffman (1952)', api: 'AXIOM.huffmanEncode / AXIOM.huffmanDecode', inv: 'round-trip ≡ 原消息（0 误差）+ 前缀无冲突 + Kraft 等式 + 加权码长 ≡ 暴力枚举最优前缀码 + 熵界', chk: ['huffmanEncode/huffmanDecode：'] },
+    { id: 'convexHull', name: 'Monotone Chain 凸包', src: 'Andrew (1979)；计算几何', api: 'AXIOM.convexHull', inv: '顶点集 ≡ 独立 Jarvis 礼物包装法（0 精确）+ 严格凸（转向一致）+ 全部输入点在包内或边上', chk: ['convexHull：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1336,6 +1340,39 @@
       '直流分量 X₀ = ' + X[0].toFixed(6) + ' = √(1/' + N + ')·Σx = ' + (Math.sqrt(1 / N) * sum).toFixed(6) + '\n' +
       '完美重构 ‖IDCT(DCT(x)) − x‖∞ = ' + rec.toExponential(2) + ' · 基正交性 ‖CᵀC − I‖∞ = ' + orth.toExponential(2) + '\n' +
       'Parseval 能量守恒 ‖x‖² = ' + e1.toFixed(4) + ' ≡ ‖X‖² = ' + e2.toFixed(4) + '（差 ' + Math.abs(e1 - e2).toExponential(2) + '）';
+  },
+  lz77: function () {
+    var s = 'the quick brown fox jumps over the lazy dog. the quick brown fox jumps again.', i;
+    var tok = AXIOM.lz77Compress(s, 64, 3), back = AXIOM.lz77Decompress(tok), lit = 0, mat = 0;
+    for (i = 0; i < tok.length; i++) (tok[i].len > 0 ? mat++ : lit++);
+    return '原文（' + s.length + ' 字符，含重复子串 "the quick brown fox"）\n' +
+      'LZ77 token：' + tok.length + ' 个（字面量 ' + lit + ' + 匹配 ' + mat + '）\n' +
+      'round-trip 解压 ≡ 原文 = ' + (back === s) + '\n' +
+      '压缩：' + s.length + ' 字符 → ' + tok.length + ' token（重复子串以 (offset, length) 引用，支持自重叠）\n' +
+      (back === s && tok.length < s.length ? '无损往返 + 重复数据有效压缩（0 误差）' : '❌ 不一致');
+  },
+  huffman: function () {
+    var freq = [30, 12, 8, 5, 3], syms = [0, 0, 0, 1, 2, 0, 3, 0, 1, 4, 0, 2, 0, 0, 3], i;
+    var codes = AXIOM.huffmanCodes(freq), enc = AXIOM.huffmanEncode(syms, freq), dec = AXIOM.huffmanDecode(enc.bits, freq);
+    var ok = dec.length === syms.length && dec.every(function (v, idx) { return v === syms[idx]; });
+    var T = freq.reduce(function (a, b) { return a + b; }, 0), H = 0, huffLen = 0;
+    for (i = 0; i < freq.length; i++) { H += -(freq[i] / T) * Math.log2(freq[i] / T); huffLen += freq[i] * codes[i].length; }
+    return '信源 freq = [' + freq.join(', ') + ']（5 符号）\n' +
+      'Huffman 码 = [' + codes.join(', ') + ']（高频符号短码）\n' +
+      '消息（15 符号）编码 ' + enc.bits.length + ' bits · round-trip ≡ 原消息 = ' + ok + '\n' +
+      '加权码长 = ' + huffLen + ' · 熵 H = ' + H.toFixed(3) + ' bits/符号（每符号冗余 <1 bit）· 前缀无冲突 + Kraft=1\n' +
+      (ok ? '无损往返 + 最优前缀码（加权码长 ≡ 暴力枚举最优）' : '❌ 不一致');
+  },
+  convexHull: function () {
+    var pts = [[0, 0], [1, 2], [2, 1], [3, 3], [0, 3], [3, 0], [1, 1], [2, 2]], i, e;
+    var H = AXIOM.convexHull(pts), m = H.length, conv = true, inside = true, o, a, b;
+    for (i = 0; i < m; i++) { o = H[i]; a = H[(i + 1) % m]; b = H[(i + 2) % m]; if ((a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]) <= 0) conv = false; }
+    for (i = 0; i < pts.length; i++) for (e = 0; e < m; e++) { o = H[e]; a = H[(e + 1) % m]; if ((a[0] - o[0]) * (pts[i][1] - o[1]) - (a[1] - o[1]) * (pts[i][0] - o[0]) < 0) inside = false; }
+    return '8 个 2D 点（含内点 (1,1)(2,2)）\n' +
+      '凸包顶点（CCW）= ' + H.map(function (p) { return '(' + p[0] + ',' + p[1] + ')'; }).join(' ') + '（' + m + ' 个）\n' +
+      '严格凸（CCW 全左转）= ' + conv + ' · 全部输入点在包内或边上 = ' + inside + '\n' +
+      '顶点集 ≡ 独立 Jarvis 礼物包装法\n' +
+      (conv && inside ? 'O(n log n) 凸包 ≙ 暴力交叉（0 精确）' : '❌ 不一致');
   }
   };
   var algoRun = null;

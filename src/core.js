@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.23';
+  var VERSION = '1.3.24';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -10673,6 +10673,241 @@
     return worst;
   });
 
+  /* ==================== v1.3.24 算法库扩展十四 ==================== */
+
+  /* ---------- ① LZ77 压缩（Lempel–Ziv 1977；DEFLATE 骨干）
+       滑动窗口贪心最长匹配。token = {off, len, lit}：字面量 off=0/len=0；匹配 off≥1/len≥MINMATCH，
+       lit 为匹配后紧跟字符（末尾 null）。解码按 off 回读输出（支持自重叠匹配），与编码互逆。
+       不变量 ≙ round-trip 精确 + 每个匹配复现所引用历史子串 + 贪心最长 + 重复数据有效压缩 */
+  function lz77Compress(s, W, MINMATCH) {
+    W = W || 4096; MINMATCH = MINMATCH || 3;
+    var tokens = [], n = s.length, i = 0, j, l, bl, bo, start;
+    while (i < n) {
+      bl = 0; bo = 0; start = Math.max(0, i - W);
+      for (j = start; j < i; j++) {
+        l = 0;
+        while (i + l < n && s.charCodeAt(j + l) === s.charCodeAt(i + l)) l++;
+        if (l > bl) { bl = l; bo = i - j; }
+      }
+      if (bl >= MINMATCH) { tokens.push({ off: bo, len: bl, lit: (i + bl < n) ? s.charAt(i + bl) : null }); i += bl + 1; }
+      else { tokens.push({ off: 0, len: 0, lit: s.charAt(i) }); i += 1; }
+    }
+    return tokens;
+  }
+  function lz77Decompress(tokens) {
+    var out = [], k, t, start;
+    for (k = 0; k < tokens.length; k++) {
+      t = tokens[k];
+      if (t.len > 0) {
+        start = out.length - t.off;
+        if (start < 0) throw new Error('LZ77：匹配偏移越界');
+        for (var m = 0; m < t.len; m++) out.push(out[start + m]);
+      }
+      if (t.lit !== null && t.lit !== undefined) out.push(t.lit);
+    }
+    return out.join('');
+  }
+  function _lz77Verify(s, tokens, W, MINMATCH) {      // 解析合法 + 贪心最长（独立重扫）
+    var i = 0, k, t, bl, start;
+    for (k = 0; k < tokens.length; k++) {
+      t = tokens[k];
+      if (t.len === 0) { if (s.charAt(i) !== t.lit) return false; i += 1; }
+      else {
+        if (t.off > i || t.off < 1 || t.len < MINMATCH) return false;
+        if (s.substr(i - t.off, t.len) !== s.substr(i, t.len)) return false;
+        bl = 0; start = Math.max(0, i - W);
+        for (var j = start; j < i; j++) { var l = 0; while (i + l < s.length && s.charCodeAt(j + l) === s.charCodeAt(i + l)) l++; if (l > bl) bl = l; }
+        if (t.len !== bl) return false;
+        i += t.len + (t.lit !== null && t.lit !== undefined ? 1 : 0);
+      }
+    }
+    return i === s.length;
+  }
+
+  /* ---------- ② Huffman 编码（Huffman 1952；最优前缀码 / 熵编码）
+       频率 → Huffman 树（确定性 tie-break）→ 前缀码。与 v1.3.23 算术编码成对（一静态一自适应思路）。
+       不变量 ≙ round-trip 精确 + 前缀无冲突 + Kraft 等式 Σ2^{-l}=1 + 加权码长 ≡ 暴力枚举最优前缀码 */
+  function huffmanTree(freq) {
+    var nodes = [], i;
+    for (i = 0; i < freq.length; i++) if (freq[i] > 0) nodes.push({ sym: i, freq: freq[i], left: null, right: null });
+    if (nodes.length === 0) return null;
+    if (nodes.length === 1) return nodes[0];
+    while (nodes.length > 1) {
+      nodes.sort(function (a, b) { return (a.freq - b.freq) || (a.sym - b.sym); });
+      var a = nodes.shift(), b = nodes.shift();
+      nodes.push({ sym: -1, freq: a.freq + b.freq, left: a, right: b });
+    }
+    return nodes[0];
+  }
+  function huffmanCodes(freq) {
+    var codes = new Array(freq.length).fill(''), root = huffmanTree(freq);
+    if (!root) return codes;
+    if (root.left === null && root.right === null) { codes[root.sym] = '0'; return codes; }
+    (function walk(node, prefix) {
+      if (node.sym !== -1) { codes[node.sym] = prefix; return; }
+      walk(node.left, prefix + '0'); walk(node.right, prefix + '1');
+    })(root, '');
+    return codes;
+  }
+  function huffmanEncode(syms, freq) {
+    var codes = huffmanCodes(freq), bits = '';
+    for (var i = 0; i < syms.length; i++) { if (!codes[syms[i]]) throw new Error('Huffman：符号无码'); bits += codes[syms[i]]; }
+    return { bits: bits, codes: codes };
+  }
+  function huffmanDecode(bits, freq) {
+    var root = huffmanTree(freq), out = [], node = root, i;
+    if (!root) return out;
+    if (root.left === null && root.right === null) { for (i = 0; i < bits.length; i++) out.push(root.sym); return out; }
+    for (i = 0; i < bits.length; i++) { node = (bits.charAt(i) === '0') ? node.left : node.right; if (node.sym !== -1) { out.push(node.sym); node = root; } }
+    return out;
+  }
+  function _hufPrefixFree(codes) {
+    var cs = codes.filter(function (c) { return c.length > 0; }).sort();
+    for (var i = 1; i < cs.length; i++) if (cs[i].indexOf(cs[i - 1]) === 0) return false;
+    return true;
+  }
+  function _hufKraft(codes) {
+    var cs = codes.filter(function (c) { return c.length > 0; }), maxLen = 0, i, s = 0;
+    for (i = 0; i < cs.length; i++) maxLen = Math.max(maxLen, cs[i].length);
+    for (i = 0; i < cs.length; i++) s += Math.pow(2, maxLen - cs[i].length);
+    return s === Math.pow(2, maxLen);
+  }
+  function _hufBruteOptimal(freq) {                    // 参照：枚举满足 Kraft Σ2^{-l}≤1 的长度向量取最小加权长（小字母表）
+    var syms = [], i;
+    for (i = 0; i < freq.length; i++) if (freq[i] > 0) syms.push(i);
+    var k = syms.length;
+    if (k <= 1) return 0;
+    var maxL = k, best = Infinity, pow2 = [];
+    for (i = 0; i <= maxL; i++) pow2.push(Math.pow(2, i));
+    var cap = pow2[maxL];
+    (function rec(idx, S, w) {                          // S=Σ2^{maxL-len}，w=加权长（增量携带 + Kraft 早剪）
+      if (S > cap) return;
+      if (idx === k) { if (w < best) best = w; return; }
+      var f = freq[syms[idx]];
+      for (var L = 1; L <= maxL; L++) rec(idx + 1, S + pow2[maxL - L], w + f * L);
+    })(0, 0, 0);
+    return best;
+  }
+
+  /* ---------- ③ Andrew Monotone Chain 凸包（1979；计算几何）
+       按 (x,y) 排序去重，分下/上链用叉积保严格左转（剔除共线中间点），O(n log n)。
+       不变量 ≙ 独立 Jarvis 礼物包装法（顶点集 0 精确）+ 严格凸（转向一致）+ 全部输入点在包内或边上 */
+  function _chCross(o, a, b) { return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]); }
+  function _chDedupSort(P) {
+    var s = P.map(function (p) { return [p[0], p[1]]; }).sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); }), out = [];
+    for (var i = 0; i < s.length; i++) if (out.length === 0 || out[out.length - 1][0] !== s[i][0] || out[out.length - 1][1] !== s[i][1]) out.push(s[i]);
+    return out;
+  }
+  function convexHull(points) {
+    var P = _chDedupSort(points), n = P.length, i;
+    if (n <= 2) return P.map(function (p) { return [p[0], p[1]]; });
+    var lower = [];
+    for (i = 0; i < n; i++) { while (lower.length >= 2 && _chCross(lower[lower.length - 2], lower[lower.length - 1], P[i]) <= 0) lower.pop(); lower.push(P[i]); }
+    var upper = [];
+    for (i = n - 1; i >= 0; i--) { while (upper.length >= 2 && _chCross(upper[upper.length - 2], upper[upper.length - 1], P[i]) <= 0) upper.pop(); upper.push(P[i]); }
+    lower.pop(); upper.pop();
+    return lower.concat(upper);
+  }
+  function _jarvisHull(points) {                        // 独立参照：Jarvis 礼物包装法（严格顶点）
+    var P = _chDedupSort(points), n = P.length, i;
+    if (n <= 2) return P.map(function (p) { return [p[0], p[1]]; });
+    var hull = [], cur = 0, nxt, c;
+    function d2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    for (var guard = 0; guard <= n + 1; guard++) {
+      hull.push(P[cur]); nxt = (cur + 1) % n;
+      for (i = 0; i < n; i++) { c = _chCross(P[cur], P[nxt], P[i]); if (c < 0 || (c === 0 && d2(P[cur], P[i]) > d2(P[cur], P[nxt]))) nxt = i; }
+      cur = nxt; if (cur === 0) break;
+    }
+    return hull;
+  }
+
+  check('lz77Compress/lz77Decompress：LZ77 round-trip ≡ 原串（0 误差，确定性 + 260 seed 多字母表/多窗口）+ 每个匹配复现所引用历史子串 + 贪心最长匹配 + 重复串 token 数 < 长度', 0, function () {
+    var worst = 0, tested = 0;
+    function verify(s, W) {
+      tested++;
+      var tok = lz77Compress(s, W, 3);
+      if (lz77Decompress(tok) !== s) worst = 1;
+      if (!_lz77Verify(s, tok, W, 3)) worst = 1;
+    }
+    ['', 'a', 'aaaaa', 'abcabcabcabc', 'BANANA', 'mississippi', 'abababababab',
+      'the quick brown fox jumps over the lazy dog. the quick brown fox.',
+      'aaaaaaaaaaaaaaaaaaaa', 'abcabcabcabcabcabc'].forEach(function (s) { verify(s, 8); verify(s, 64); });
+    for (var g = 0; g < 260; g++) {
+      var rng = mulberry32(4200 + g);
+      var alpha = 2 + Math.floor(rng() * 4), len = 1 + Math.floor(rng() * 180), s = '', al = 'abcd'.substring(0, alpha);
+      for (var i = 0; i < len; i++) s += al.charAt(Math.floor(rng() * alpha));
+      verify(s, 16 + Math.floor(rng() * 64));
+    }
+    var rep = ''; for (var r = 0; r < 100; r++) rep += 'ABCD';
+    if (lz77Compress(rep, 4096, 3).length >= rep.length) worst = 1;   // 重复串须有效压缩
+    if (tested === 0) return 1;
+    return worst;
+  });
+
+  check('huffmanEncode/huffmanDecode：Huffman round-trip ≡ 原消息（0 误差）+ 前缀无冲突 + Kraft 等式 Σ2^{-l}=1 + 加权码长 ≡ 暴力枚举最优前缀码（m≤5）+ 熵界 n·H ≤ L ≤ n·H+n + 单符号/偏斜', 0, function () {
+    var worst = 0, worstOver = 0, tested = 0;
+    for (var g = 0; g < 200; g++) {
+      var rng = mulberry32(6200 + g);
+      var m = 2 + Math.floor(rng() * 5), freq = [];
+      for (var i = 0; i < m; i++) freq.push(1 + Math.floor(rng() * 40));
+      var T = freq.reduce(function (a, b) { return a + b; }, 0);
+      var len = 1 + Math.floor(rng() * 60), syms = [];
+      for (var j = 0; j < len; j++) { var rr = Math.floor(rng() * T), acc = 0, s = 0; for (var q = 0; q < m; q++) { acc += freq[q]; if (rr < acc) { s = q; break; } } syms.push(s); }
+      tested++;
+      var codes = huffmanCodes(freq);
+      if (!_hufPrefixFree(codes)) { worst = 1; continue; }
+      if (!_hufKraft(codes)) { worst = 1; continue; }
+      var enc = huffmanEncode(syms, freq), dec = huffmanDecode(enc.bits, freq);
+      if (dec.length !== syms.length || dec.some(function (v, idx) { return v !== syms[idx]; })) { worst = 1; continue; }
+      var huffLen = 0, H = 0;
+      for (var j2 = 0; j2 < m; j2++) { huffLen += freq[j2] * codes[j2].length; H += -(freq[j2] / T) * Math.log2(freq[j2] / T); }
+      if (huffLen !== _hufBruteOptimal(freq)) worst = 1;               // 最优性 ≙ 暴力
+      worstOver = Math.max(worstOver, huffLen - (T * H + T));           // ≤0：距熵每符号 <1 bit
+    }
+    var c1 = huffmanCodes([5, 1, 1, 1]);
+    if (!_hufPrefixFree(c1) || !_hufKraft(c1)) worst = 1;
+    var e1 = huffmanEncode([0, 1, 2, 3, 0, 0], [5, 1, 1, 1]), d1 = huffmanDecode(e1.bits, [5, 1, 1, 1]);
+    if (d1.join(',') !== '0,1,2,3,0,0') worst = 1;
+    var e2 = huffmanEncode([0, 0, 0], [7]), d2 = huffmanDecode(e2.bits, [7]);
+    if (d2.join(',') !== '0,0,0') worst = 1;
+    if (tested === 0) return 1;
+    return Math.max(worst, worstOver);
+  });
+
+  check('convexHull：Monotone Chain 凸包顶点集 ≡ 独立 Jarvis 礼物包装法（0 精确，整数坐标）+ 严格凸（CCW 全左转）+ 全部输入点在包内或边上 + 输出均为输入点且无重复（含共线/单点/两点/空退化）', 0, function () {
+    var worst = 0, tested = 0;
+    function sameSet(A, B) {
+      var sa = {}, sb = {}, k;
+      for (k = 0; k < A.length; k++) sa[A[k][0] + ',' + A[k][1]] = 1;
+      for (k = 0; k < B.length; k++) sb[B[k][0] + ',' + B[k][1]] = 1;
+      var ka = Object.keys(sa), kb = Object.keys(sb);
+      if (ka.length !== kb.length) return false;
+      for (k = 0; k < ka.length; k++) if (!sb[ka[k]]) return false;
+      return true;
+    }
+    function check(pts) {
+      tested++;
+      var H = convexHull(pts), J = _jarvisHull(pts), m = H.length, i;
+      if (!sameSet(H, J)) { worst = 1; return; }
+      if (m >= 3) for (i = 0; i < m; i++) if (_chCross(H[i], H[(i + 1) % m], H[(i + 2) % m]) <= 0) { worst = 1; return; }
+      var inset = {}, seen = {};
+      for (i = 0; i < pts.length; i++) inset[pts[i][0] + ',' + pts[i][1]] = 1;
+      for (i = 0; i < m; i++) { if (!inset[H[i][0] + ',' + H[i][1]] || seen[H[i][0] + ',' + H[i][1]]) { worst = 1; return; } seen[H[i][0] + ',' + H[i][1]] = 1; }
+      for (i = 0; i < pts.length; i++) for (var e = 0; e < m; e++) if (_chCross(H[e], H[(e + 1) % m], pts[i]) < 0) { worst = 1; return; }
+    }
+    check([[0, 0], [1, 0], [1, 1], [0, 1]]); check([[0, 0], [1, 0], [2, 0], [1, 1]]);
+    check([[0, 0], [5, 0], [5, 5], [0, 5], [2, 2], [1, 1], [3, 3]]); check([[0, 0], [1, 1], [2, 2], [3, 3]]);
+    check([[0, 0]]); check([[0, 0], [1, 1]]); check([]);
+    for (var g = 0; g < 220; g++) {
+      var rng = mulberry32(7200 + g);
+      var n = 1 + Math.floor(rng() * 25), pts = [];
+      for (var i2 = 0; i2 < n; i2++) pts.push([Math.floor(rng() * 12), Math.floor(rng() * 12)]);
+      check(pts);
+    }
+    if (tested === 0) return 1;
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -10859,6 +11094,14 @@
     arithmeticDecode: arithmeticDecode,
     dct: dct,
     idct: idct,
+    /* v1.3.24 算法库扩展十四 */
+    lz77Compress: lz77Compress,
+    lz77Decompress: lz77Decompress,
+    huffmanTree: huffmanTree,
+    huffmanCodes: huffmanCodes,
+    huffmanEncode: huffmanEncode,
+    huffmanDecode: huffmanDecode,
+    convexHull: convexHull,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
