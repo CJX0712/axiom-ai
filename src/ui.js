@@ -474,7 +474,11 @@
     /* v1.3.25 算法库扩展十五（计算几何） */
     { id: 'closestPair', name: '最近点对（分治）', src: 'Shamos–Hoey (1975)', api: 'AXIOM.closestPair', inv: '最小距离² ≡ 暴力 O(n²)（整数坐标 0 精确）+ 返回点对确为该距离（含重复点）', chk: ['closestPair：'] },
     { id: 'diameter', name: '旋转卡壳直径', src: 'Toussaint (1983)', api: 'AXIOM.diameter', inv: '直径² ≡ 暴力最大点对距²（0 精确）+ 对踵点对确为最远（复用已验证凸包）', chk: ['diameter：'] },
-    { id: 'minEnclosingCircle', name: '最小包围圆（Welzl）', src: 'Welzl (1991)', api: 'AXIOM.minEnclosingCircle', inv: '半径 ≡ 暴力枚举 2 点直径圆 + 3 点外接圆取最小覆盖半径（≤1e-9）+ 覆盖性', chk: ['minEnclosingCircle：'] }
+    { id: 'minEnclosingCircle', name: '最小包围圆（Welzl）', src: 'Welzl (1991)', api: 'AXIOM.minEnclosingCircle', inv: '半径 ≡ 暴力枚举 2 点直径圆 + 3 点外接圆取最小覆盖半径（≤1e-9）+ 覆盖性', chk: ['minEnclosingCircle：'] },
+    /* v1.3.26 算法库扩展十六（计算几何深化二） */
+    { id: 'segmentIntersection', name: '线段求交（扫描线）', src: 'Bentley–Ottmann (1979)；平面分片扫描', api: 'AXIOM.segmentIntersection', inv: '交点集合 ≡ 暴力 O(n²) 全配对逐对求交（0 精确，含交叉 / T 形 / 共享端点 / 共线重叠 / 平行退化）+ 去重', chk: ['segmentIntersection：'] },
+    { id: 'minWidth', name: '旋转卡壳最小宽度', src: 'Hyyro–Borg–Toussaint；旋转卡壳', api: 'AXIOM.minWidth', inv: '最小宽度 ≡ 暴力枚举每条边 × 每个顶点取最大距离再取最小（0 精确 ≤1e-9）+ 支撑线语义（复用已验证凸包）', chk: ['minWidth：'] },
+    { id: 'geoPrimitives', name: '多边形面积 + 点在多边形内', src: 'Shoelace (1767)；PNPOLY (1970s)', api: 'AXIOM.polygonArea / AXIOM.pointInPolygon', inv: '面积（Shoelace）≙ 三角扇分解（≤1e-9）+ 点在多边形内（射线法）≙ 环绕数判定（布尔一致，排除边界）+ 凹多边形分类', chk: ['polygonArea/pointInPolygon：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1424,6 +1428,57 @@
       '覆盖性（全部点在圆内或边上）= ' + (maxOut <= 1e-9) + '（最大超出 ' + maxOut.toExponential(2) + '）\n' +
       '暴力 2 点直径圆最优半径 = ' + brute.toFixed(6) + ' ⇒ 一致 = ' + (Math.abs(c.r - brute) <= 1e-9) + '\n' +
       (maxOut <= 1e-9 ? 'Welzl 随机增量 ≙ 暴力枚举 2/3 点圆（≤1e-9）' : '❌ 不一致');
+  },
+  segmentIntersection: function () {
+    var segs = [[[0, 0], [10, 10]], [[0, 10], [10, 0]], [[5, 0], [5, 10]], [[0, 5], [10, 5]]];
+    var pts = AXIOM.segmentIntersection(segs);
+    function norm(s) { var p = s[0], q = s[1]; if (p[0] > q[0] || (p[0] === q[0] && p[1] > q[1])) { var t = p; p = q; q = t; } return [p, q]; }
+    function brute(segments) {
+      var S = segments.map(norm), out = {}, keys = [];
+      for (var i = 0; i < S.length; i++) for (var j = i + 1; j < S.length; j++) {
+        var a = S[i], b = S[j], r0 = a[1][0] - a[0][0], r1 = a[1][1] - a[0][1], s0 = b[1][0] - b[0][0], s1v = b[1][1] - b[0][1];
+        var den = r0 * s1v - r1 * s0, qp0 = b[0][0] - a[0][0], qp1 = b[0][1] - a[0][1];
+        if (Math.abs(den) < 1e-9) continue;
+        var t = (qp0 * s1v - qp1 * s0) / den, u = (qp0 * r1 - qp1 * r0) / den;
+        if (t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) {
+          var x = a[0][0] + t * r0, y = a[0][1] + t * r1, kx = Math.round(x * 1e7), ky = Math.round(y * 1e7), key = kx + ',' + ky;
+          if (!out[key]) { out[key] = [x, y]; keys.push(key); }
+        }
+      }
+      return keys.length;
+    }
+    var nb = brute(segs);
+    return '4 条线段（两对角线 + 垂直中线 + 水平中线）\n' +
+      '扫描线求交 → 交点集合 = ' + pts.map(function (p) { return '(' + p[0] + ',' + p[1] + ')'; }).join(' ') + '（' + pts.length + ' 个）\n' +
+      '暴力 O(n²) 全配对逐对求交 → ' + nb + ' 个 ⇒ 集合一致 = ' + (pts.length === nb) + '\n' +
+      (pts.length === nb && pts.length === 1 ? '平面分片扫描 ≙ 暴力 ground truth（0 精确，四点共点归并为 1）' : '❌ 不一致');
+  },
+  minWidth: function () {
+    var pts = [[0, 0], [4, 0], [5, 3], [3, 6], [0, 4]], i, e;
+    var w = AXIOM.minWidth(pts);
+    var H = AXIOM.convexHull(pts), n = H.length, brute = Infinity;
+    function dpl(p, a, b) { var num = Math.abs((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1])); var den = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1])); return den < 1e-12 ? 0 : num / den; }
+    for (e = 0; e < n; e++) {
+      var a = H[e], b = H[(e + 1) % n], mx = 0;
+      for (i = 0; i < n; i++) mx = Math.max(mx, dpl(H[i], a, b));
+      if (mx < brute) brute = mx;
+    }
+    return '5 个 2D 点（凸五边形）\n' +
+      '旋转卡壳最小宽度 = ' + w.toFixed(6) + '\n' +
+      '暴力 每条边 × 每个顶点取最大距离再取最小 = ' + brute.toFixed(6) + ' ⇒ 一致 = ' + (Math.abs(w - brute) <= 1e-9) + '\n' +
+      (Math.abs(w - brute) <= 1e-9 ? 'O(h) 对踵点扫描 ≙ 暴力（0 精确 ≤1e-9）' : '❌ 不一致');
+  },
+  geoPrimitives: function () {
+    var poly = [[0, 0], [10, 0], [10, 10], [5, 5], [0, 10]];     // 凹（顶部中央内凹）
+    var area = AXIOM.polygonArea(poly);
+    var o = poly[0], fan = 0;
+    for (var i = 1; i < poly.length - 1; i++) fan += Math.abs((poly[i][0] - o[0]) * (poly[i + 1][1] - o[1]) - (poly[i][1] - o[1]) * (poly[i + 1][0] - o[0])) / 2;
+    var inPt = [5, 2], outPt = [5, 7];
+    var insideIn = AXIOM.pointInPolygon(inPt, poly), insideOut = AXIOM.pointInPolygon(outPt, poly);
+    return '凹多边形（正方形 100 − 内凹三角 25）→ 期望面积 75\n' +
+      'Shoelace 面积 = ' + area.toFixed(6) + ' · 三角扇分解 = ' + fan.toFixed(6) + ' ⇒ 一致 = ' + (Math.abs(area - fan) <= 1e-9) + '\n' +
+      '点在多边形内：(' + inPt[0] + ',' + inPt[1] + ') 主体内 = ' + insideIn + ' · (' + outPt[0] + ',' + outPt[1] + ') 凹口内 = ' + insideOut + '\n' +
+      (Math.abs(area - fan) <= 1e-9 && insideIn && !insideOut ? '面积 ≙ 三角扇（≤1e-9）+ 射线法分类正确（凹多边形）' : '❌ 不一致');
   }
   };
   var algoRun = null;

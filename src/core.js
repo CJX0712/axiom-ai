@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.25';
+  var VERSION = '1.3.26';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -11103,6 +11103,239 @@
     return worst;
   });
 
+  /* ==================== v1.3.26 算法库扩展十六（计算几何深化二） ==================== */
+
+  /* ---------- ① 线段求交（平面分片扫描线；Bentley–Ottmann 思想，分片保正确 O(n²)）
+       收集全部端点 x，逐分片 (x_k, x_{k+1}) 取贯穿该分片的活跃线段成对求交；分片边界 x_k 处取端点恰触及的线段成对求交。
+       共线重叠段返回重叠两端点；T 形 / 共享端点 / 交叉 / 平行均正确处理。
+       不变量 ≙ 暴力 O(n²) 全配对逐对求交（集合相等，0 精确，含退化用例） */
+  function _geoNormSeg(s) {
+    var p = s[0], q = s[1];
+    if (p[0] > q[0] || (p[0] === q[0] && p[1] > q[1])) { var tmp = p; p = q; q = tmp; }
+    return [p, q];
+  }
+  function _geoSegInt(s1, s2) {
+    var x1 = s1[0][0], y1 = s1[0][1], x2 = s1[1][0], y2 = s1[1][1];
+    var x3 = s2[0][0], y3 = s2[0][1], x4 = s2[1][0], y4 = s2[1][1];
+    var r0 = x2 - x1, r1 = y2 - y1, s0 = x4 - x3, s1v = y4 - y3;
+    var denom = r0 * s1v - r1 * s0, eps = 1e-9;
+    if (Math.abs(denom) < eps) {                       // 平行或共线
+      var cr = (x3 - x1) * r1 - (y3 - y1) * r0;
+      if (Math.abs(cr) > eps) return null;              // 平行不共线
+      var L = Math.sqrt(r0 * r0 + r1 * r1);
+      if (L < eps) return null;
+      var dx = r0 / L, dy = r1 / L;
+      var c1a = x1 * dx + y1 * dy, c1b = x2 * dx + y2 * dy;
+      var c2a = x3 * dx + y3 * dy, c2b = x4 * dx + y4 * dy;
+      var lo = Math.max(Math.min(c1a, c1b), Math.min(c2a, c2b));
+      var hi = Math.min(Math.max(c1a, c1b), Math.max(c2a, c2b));
+      if (hi - lo < -eps) return null;
+      if (hi - lo < eps) { var t0 = lo; return [[x1 + dx * t0, y1 + dy * t0]]; }
+      return [[x1 + dx * lo, y1 + dy * lo], [x1 + dx * hi, y1 + dy * hi]];
+    }
+    var qp0 = x3 - x1, qp1 = y3 - y1;
+    var t = (qp0 * s1v - qp1 * s0) / denom;
+    var u = (qp0 * r1 - qp1 * r0) / denom;
+    if (t >= -eps && t <= 1 + eps && u >= -eps && u <= 1 + eps) return [[x1 + t * r0, y1 + t * r1]];
+    return null;
+  }
+  function _geoBruteSegInt(segments) {
+    var S = segments.map(_geoNormSeg), pts = {}, keys = [], i, j;
+    for (i = 0; i < S.length; i++) for (j = i + 1; j < S.length; j++) {
+      var r = _geoSegInt(S[i], S[j]);
+      if (r) for (var k = 0; k < r.length; k++) {
+        var kx = Math.round(r[k][0] * 1e7), ky = Math.round(r[k][1] * 1e7), key = kx + ',' + ky;
+        if (!pts[key]) { pts[key] = [r[k][0], r[k][1]]; keys.push(key); }
+      }
+    }
+    var out = keys.map(function (kk) { return pts[kk]; });
+    out.sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); });
+    return out;
+  }
+  function segmentIntersection(segments) {
+    var S = segments.map(_geoNormSeg), pts = {}, keys = [], xset = {}, i, j, x;
+    function collect(arr) {                                   // 局部 ci/cj：勿复用外层 i/j（会覆写循环变量致死循环）
+      var ci, cj;
+      for (ci = 0; ci < arr.length; ci++) for (cj = ci + 1; cj < arr.length; cj++) {
+        var r = _geoSegInt(arr[ci], arr[cj]);
+        if (r) for (var k = 0; k < r.length; k++) {
+          var kx = Math.round(r[k][0] * 1e7), ky = Math.round(r[k][1] * 1e7), key = kx + ',' + ky;
+          if (!pts[key]) { pts[key] = [r[k][0], r[k][1]]; keys.push(key); }
+        }
+      }
+    }
+    for (i = 0; i < S.length; i++) { xset[S[i][0][0]] = 1; xset[S[i][1][0]] = 1; }
+    var XA = Object.keys(xset).map(Number).sort(function (a, b) { return a - b; });
+    for (i = 0; i < XA.length; i++) {                          // 边界：端点恰触及的线段成对求交
+      x = XA[i];
+      var actB = [];
+      for (j = 0; j < S.length; j++) if (S[j][0][0] <= x && S[j][1][0] >= x) actB.push(S[j]);
+      collect(actB);
+    }
+    for (i = 0; i < XA.length - 1; i++) {                      // 分片内部：贯穿该分片者成对求交
+      var xm = (XA[i] + XA[i + 1]) / 2;
+      var actS = [];
+      for (j = 0; j < S.length; j++) if (S[j][0][0] <= xm && S[j][1][0] >= xm) actS.push(S[j]);
+      collect(actS);
+    }
+    var out = keys.map(function (k) { return pts[k]; });
+    out.sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); });
+    return out;
+  }
+
+  /* ---------- ② 旋转卡壳最小宽度（凸多边形；Hyyro–Borg–Toussaint，O(h)）
+       最小宽度 = min_i [ max_j dist(P_j, line(P_i, P_{i+1})) ]：一条支撑线含边、另一条平行支撑线触顶点时取得。
+       不变量 ≙ 暴力枚举每条边 × 每个顶点取最大距离再取最小（0 精确 ≤1e-9） */
+  function minWidth(points) {
+    var H = convexHull(points), n = H.length, i, j = 1;
+    if (n <= 2) return 0;
+    function dpl(p, a, b) {
+      var num = Math.abs((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1]));
+      var den = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+      return den < 1e-12 ? 0 : num / den;
+    }
+    var minW = Infinity;
+    for (i = 0; i < n; i++) {
+      var a = H[i], b = H[(i + 1) % n], guard = 0;
+      while (guard++ < n) {
+        var d1 = dpl(H[j], a, b), d2 = dpl(H[(j + 1) % n], a, b);
+        if (d2 > d1) j = (j + 1) % n; else break;
+      }
+      var w = dpl(H[j], a, b);
+      if (w < minW) minW = w;
+    }
+    return minW;
+  }
+
+  /* ---------- ③ 多边形面积（Shoelace）+ 点在多边形内（射线法 PNPOLY）
+       面积 = ½|Σ(x_i y_{i+1} − x_{i+1} y_i)|；点在多边形内：自点向 +x 投射射线，统计与边交点奇偶。
+       不变量：area ≙ 三角扇分解（独立代码路径 ≤1e-9）；inside ≙ 环绕数判定（winding number，布尔一致，排除边界） */
+  function polygonArea(polygon) {
+    var s = 0, i;
+    for (i = 0; i < polygon.length; i++) {
+      var a = polygon[i], b = polygon[(i + 1) % polygon.length];
+      s += a[0] * b[1] - b[0] * a[1];
+    }
+    return Math.abs(s) / 2;
+  }
+  function pointInPolygon(point, polygon) {
+    var x = point[0], y = point[1], inside = false, i, j = polygon.length - 1, n = polygon.length;
+    for (i = 0; i < n; j = i++) {
+      var xi = polygon[i][0], yi = polygon[i][1], xj = polygon[j][0], yj = polygon[j][1];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) inside = !inside;
+    }
+    return inside;
+  }
+
+  check('segmentIntersection：线段求交（平面分片扫描线）交点集合 ≡ 暴力 O(n²) 全配对逐对求交（0 精确，集合相等，含交叉 / T 形 / 共享端点 / 共线重叠 / 平行退化）+ 去重', 0, function () {
+    var worst = 0, tested = 0;
+    function eqSets(a, b) {
+      if (a.length !== b.length) return false;
+      for (var i = 0; i < a.length; i++) if (Math.abs(a[i][0] - b[i][0]) > 1e-6 || Math.abs(a[i][1] - b[i][1]) > 1e-6) return false;
+      return true;
+    }
+    function rndSeg(rng) {
+      var x1, y1, x2, y2;
+      do { x1 = Math.floor(rng() * 100); y1 = Math.floor(rng() * 100); x2 = Math.floor(rng() * 100); y2 = Math.floor(rng() * 100); } while (Math.abs(x1 - x2) < 1);
+      return [[x1, y1], [x2, y2]];
+    }
+    for (var g = 0; g < 220; g++) {
+      var rng = mulberry32(8200 + g);
+      var n = 2 + Math.floor(rng() * 16), segs = [];
+      for (var i = 0; i < n; i++) segs.push(rndSeg(rng));
+      tested++;
+      if (!eqSets(segmentIntersection(segs), _geoBruteSegInt(segs))) worst = 1;
+    }
+    var deg = [
+      [[[0, 0], [10, 10]], [[0, 10], [10, 0]]],
+      [[[0, 5], [10, 5]], [[5, 0], [5, 5]]],
+      [[[0, 0], [5, 5]], [[5, 5], [10, 0]]],
+      [[[0, 0], [10, 0]], [[3, 0], [13, 0]]],
+      [[[0, 0], [5, 0]], [[5, 0], [10, 0]]],
+      [[[0, 0], [10, 0]], [[8, 0], [2, 0]]],
+      [[[0, 0], [10, 0]], [[0, 5], [10, 5]]],
+      [[[0, 0], [10, 10]], [[0, 10], [10, 0]], [[5, 0], [5, 10]], [[0, 5], [10, 5]]]
+    ];
+    for (var d = 0; d < deg.length; d++) if (!eqSets(segmentIntersection(deg[d]), _geoBruteSegInt(deg[d]))) worst = 1;
+    if (tested === 0) return 1;
+    return worst;
+  });
+
+  check('minWidth：旋转卡壳最小宽度（凸多边形，O(h)）≡ 暴力枚举每条边 × 每个顶点取最大距离再取最小（0 精确 ≤1e-9）+ 支撑线语义', 1e-9, function () {
+    var worst = 0, tested = 0;
+    function dpl(p, a, b) {
+      var num = Math.abs((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1]));
+      var den = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+      return den < 1e-12 ? 0 : num / den;
+    }
+    for (var g = 0; g < 220; g++) {
+      var rng = mulberry32(9200 + g);
+      var m = 4 + Math.floor(rng() * 12), pts = [];
+      for (var i = 0; i < m; i++) pts.push([Math.floor(rng() * 100) - 50, Math.floor(rng() * 100) - 50]);
+      var H = convexHull(pts);
+      if (H.length < 3) continue;
+      tested++;
+      var brute = Infinity;
+      for (var e = 0; e < H.length; e++) {
+        var a = H[e], b = H[(e + 1) % H.length], mx = 0;
+        for (var v = 0; v < H.length; v++) mx = Math.max(mx, dpl(H[v], a, b));
+        if (mx < brute) brute = mx;
+      }
+      worst = Math.max(worst, Math.abs(minWidth(pts) - brute));
+    }
+    if (tested === 0) return 1;
+    return worst;
+  });
+
+  check('polygonArea/pointInPolygon：面积（Shoelace）≙ 三角扇分解（≤1e-9）+ 点在多边形内（射线法）≙ 环绕数判定（布尔一致，排除边界）+ 凹多边形分类', 1e-9, function () {
+    var worst = 0;
+    function fanArea(poly) {
+      var s = 0, o = poly[0];
+      for (var i = 1; i < poly.length - 1; i++) s += Math.abs((poly[i][0] - o[0]) * (poly[i + 1][1] - o[1]) - (poly[i][1] - o[1]) * (poly[i + 1][0] - o[0])) / 2;
+      return s;
+    }
+    function winding(pt, poly) {
+      var ang = 0, n = poly.length;
+      for (var i = 0; i < n; i++) {
+        var a = [poly[i][0] - pt[0], poly[i][1] - pt[1]], b = [poly[(i + 1) % n][0] - pt[0], poly[(i + 1) % n][1] - pt[1]];
+        ang += Math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]);
+      }
+      return Math.abs(ang) > Math.PI;
+    }
+    function dpl(p, a, b) {
+      var num = Math.abs((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1]));
+      var den = Math.sqrt((b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1]));
+      return den < 1e-12 ? 0 : num / den;
+    }
+    for (var g = 0; g < 220; g++) {
+      var rng = mulberry32(10200 + g);
+      var m = 4 + Math.floor(rng() * 12), pts = [];
+      for (var i = 0; i < m; i++) pts.push([Math.floor(rng() * 100) - 50, Math.floor(rng() * 100) - 50]);
+      var H = convexHull(pts);
+      if (H.length < 3) continue;
+      worst = Math.max(worst, Math.abs(polygonArea(H) - fanArea(H)));
+    }
+    var nc = [[0, 0], [10, 0], [10, 10], [5, 5], [0, 10]];                 // 凹（顶部中央内凹）
+    var inPts = [[5, 2], [2, 3], [8, 3], [1, 8], [9, 8]];
+    var outPts = [[5, 7], [3, 9], [5, 9], [-1, 5], [11, 5]];
+    for (var q = 0; q < inPts.length; q++) if (!(pointInPolygon(inPts[q], nc) && winding(inPts[q], nc))) worst = 1;
+    for (var r = 0; r < outPts.length; r++) if (pointInPolygon(outPts[r], nc) || winding(outPts[r], nc)) worst = 1;
+    for (var g2 = 0; g2 < 200; g2++) {
+      var rng2 = mulberry32(11200 + g2);
+      var mm = 4 + Math.floor(rng2() * 10), pp = [];
+      for (var k = 0; k < mm; k++) pp.push([Math.floor(rng2() * 80) - 40, Math.floor(rng2() * 80) - 40]);
+      var HH = convexHull(pp);
+      if (HH.length < 3) continue;
+      for (var s2 = 0; s2 < 6; s2++) {
+        var pt = [Math.floor(rng2() * 90) - 45, Math.floor(rng2() * 90) - 45], near = false;
+        for (var e2 = 0; e2 < HH.length; e2++) if (dpl(pt, HH[e2], HH[(e2 + 1) % HH.length]) < 1e-3) near = true;
+        if (near) continue;
+        if (pointInPolygon(pt, HH) !== winding(pt, HH)) worst = 1;
+      }
+    }
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -11301,6 +11534,11 @@
     closestPair: closestPair,
     diameter: diameter,
     minEnclosingCircle: minEnclosingCircle,
+    /* v1.3.26 算法库扩展十六（计算几何深化二） */
+    segmentIntersection: segmentIntersection,
+    minWidth: minWidth,
+    polygonArea: polygonArea,
+    pointInPolygon: pointInPolygon,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,
