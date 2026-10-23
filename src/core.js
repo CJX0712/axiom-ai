@@ -20,7 +20,7 @@
 })(typeof self !== 'undefined' ? self : globalThis, function () {
   'use strict';
 
-  var VERSION = '1.3.24';
+  var VERSION = '1.3.25';
 
   /* ========================================================================
    * 0. 确定性随机与基础工具（可复现是一切验证的前提）
@@ -10908,6 +10908,201 @@
     return worst;
   });
 
+  /* ==================== v1.3.25 算法库扩展十五（计算几何） ==================== */
+
+  /* ---------- ① 最近点对 Closest Pair（分治 O(n log n)；Shamos–Hoey 1975）
+       按 x 排序后分治；合并期检查中线两侧宽度 < 当前最小距的条带，条带按 y 排序后只比邻近 7 点。
+       整数坐标下距离²为整数 ⇒ 不变量 ≙ 暴力 O(n²) 最小距离²（0 精确） */
+  function closestPair(points) {
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    var C = points.map(function (p, idx) { return [p[0], p[1], idx]; });
+    C.sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); });
+    function rec(arr) {
+      var n = arr.length, i, j, best = { d2: Infinity, i: -1, j: -1 }, dx;
+      if (n <= 3) {
+        for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+          var d0 = dd2(arr[i], arr[j]);
+          if (d0 < best.d2) best = { d2: d0, i: arr[i][2], j: arr[j][2] };
+        }
+        return best;
+      }
+      var mid = n >> 1, midx = arr[mid][0];
+      var dl = rec(arr.slice(0, mid)), dr = rec(arr.slice(mid));
+      best = dl.d2 <= dr.d2 ? dl : dr;
+      var strip = [];
+      for (i = 0; i < n; i++) { dx = arr[i][0] - midx; if (dx * dx < best.d2) strip.push(arr[i]); }
+      strip.sort(function (a, b) { return (a[1] - b[1]) || (a[0] - b[0]); });
+      for (i = 0; i < strip.length; i++)
+        for (j = i + 1; j < strip.length && (strip[j][1] - strip[i][1]) * (strip[j][1] - strip[i][1]) < best.d2; j++) {
+          var d1 = dd2(strip[i], strip[j]);
+          if (d1 < best.d2) best = { d2: d1, i: strip[i][2], j: strip[j][2] };
+        }
+      return best;
+    }
+    if (points.length < 2) return { d2: Infinity, i: -1, j: -1 };
+    return rec(C);
+  }
+
+  /* ---------- ② 旋转卡壳直径 Rotating Calipers（Toussaint 1983；O(h) 于凸包顶点）
+       复用 v1.3.24 已验证的 convexHull；对每条边推进对踵点 j（叉积面积单调），遍历全部对踵点对取最大距²。
+       直径必由凸包顶点对取得 ⇒ 不变量 ≙ 暴力最大点对距²（整数 0 精确） */
+  function diameter(points) {
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    var H = convexHull(points), h = H.length, i, k;
+    if (h <= 1) return { d2: 0, a: H[0], b: H[0] };
+    if (h === 2) return { d2: dd2(H[0], H[1]), a: H[0], b: H[1] };
+    var j = 1;
+    for (k = 1; k < h; k++) if (dd2(H[0], H[k]) > dd2(H[0], H[j])) j = k;
+    var best = { d2: 0, a: H[0], b: H[0] };
+    function consider(x, y) { var d = dd2(H[x], H[y]); if (d > best.d2) best = { d2: d, a: H[x], b: H[y] }; }
+    for (i = 0; i < h; i++) {
+      var ni = (i + 1) % h;
+      while (_chCross(H[i], H[ni], H[(j + 1) % h]) > _chCross(H[i], H[ni], H[j])) j = (j + 1) % h;
+      consider(i, j); consider(ni, j);
+    }
+    return best;
+  }
+
+  /* ---------- ③ 最小包围圆 Minimum Enclosing Circle（Welzl 1991；随机增量期望 O(n)）
+       确定性洗牌保证可复现。支撑集必为 2 点（直径圆）或 3 点（外接圆）；三点共线时退化为最远两点直径圆。
+       不变量 ≙ 暴力枚举全部 2 点直径圆 + 3 点外接圆取最小覆盖半径（≤1e-9）+ 覆盖性 */
+  function minEnclosingCircle(points) {
+    var EPS = 1e-9;
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    function dd(a, b) { return Math.sqrt(dd2(a, b)); }
+    function inside(c, p) { return dd2([c.x, c.y], p) <= c.r * c.r + EPS; }
+    function circ2(a, b) { return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, r: dd(a, b) / 2 }; }
+    function circ3(a, b, c) {
+      var s = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+      if (Math.abs(s) < 1e-12) {                            // 共线退化 → 最远两点直径圆
+        var cands = [circ2(a, b), circ2(b, c), circ2(a, c)], best = null, t, ok;
+        for (t = 0; t < cands.length; t++) {
+          ok = true;
+          if (!inside(cands[t], a) || !inside(cands[t], b) || !inside(cands[t], c)) ok = false;
+          if (ok && (best === null || cands[t].r < best.r)) best = cands[t];
+        }
+        return best;
+      }
+      var a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
+      var ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / s;
+      var uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / s;
+      return { x: ux, y: uy, r: dd([ux, uy], a) };
+    }
+    var P = points.map(function (p, idx) { return [p[0], p[1], idx]; });
+    P.sort(function (u, v) {
+      var ha = (u[2] * 1103515245 + 12345) % 2147483648, hb = (v[2] * 1103515245 + 12345) % 2147483648;
+      return (ha - hb) || (u[2] - v[2]);
+    });
+    var c = null, i, j, k;
+    for (i = 0; i < P.length; i++) {
+      if (c === null || !inside(c, P[i])) {
+        c = { x: P[i][0], y: P[i][1], r: 0 };
+        for (j = 0; j < i; j++)
+          if (!inside(c, P[j])) {
+            c = circ2(P[i], P[j]);
+            for (k = 0; k < j; k++)
+              if (!inside(c, P[k])) { var t3 = circ3(P[i], P[j], P[k]); if (t3) c = t3; }
+          }
+      }
+    }
+    return c || { x: 0, y: 0, r: 0 };
+  }
+  function _bruteMEC(points) {                   // 参照：枚举 2 点直径圆 + 3 点外接圆取最小覆盖半径
+    var EPS = 1e-9, n = points.length, i, j, k, best = Infinity;
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    function dd(a, b) { return Math.sqrt(dd2(a, b)); }
+    function circ2(a, b) { return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, r: dd(a, b) / 2 }; }
+    function circ3(a, b, c) {
+      var s = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+      if (Math.abs(s) < 1e-12) return null;
+      var a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
+      var ux = (a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / s;
+      var uy = (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / s;
+      return { x: ux, y: uy, r: dd([ux, uy], a) };
+    }
+    function covers(cir) { for (var t = 0; t < n; t++) if (dd2([cir.x, cir.y], points[t]) > cir.r * cir.r + EPS) return false; return true; }
+    if (n <= 1) return 0;
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) { var c2 = circ2(points[i], points[j]); if (covers(c2)) best = Math.min(best, c2.r); }
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) for (k = j + 1; k < n; k++) {
+      var c3 = circ3(points[i], points[j], points[k]);
+      if (c3 && covers(c3)) best = Math.min(best, c3.r);
+    }
+    return best;
+  }
+
+  check('closestPair：最近点对（分治 O(n log n)，Shamos–Hoey 1975）最小距离² ≡ 暴力 O(n²)（0 精确）+ 返回点对确为该距离 + 均为输入点（含重复点 d²=0）', 0, function () {
+    var worst = 0, tested = 0;
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    function check(pts) {
+      if (pts.length < 2) return;
+      tested++;
+      var r = closestPair(pts), b = Infinity, i, j;
+      for (i = 0; i < pts.length; i++) for (j = i + 1; j < pts.length; j++) b = Math.min(b, dd2(pts[i], pts[j]));
+      if (r.d2 !== b) { worst = 1; return; }
+      if (r.i < 0 || r.j < 0 || r.i === r.j || r.i >= pts.length || r.j >= pts.length || dd2(pts[r.i], pts[r.j]) !== r.d2) worst = 1;
+    }
+    check([[0, 0], [3, 4]]); check([[0, 0], [1, 1], [5, 5], [1, 0]]);
+    check([[0, 0], [0, 0], [5, 5]]); check([[0, 0], [10, 0], [10, 10], [0, 10], [5, 5]]);
+    for (var g = 0; g < 150; g++) {
+      var rng = mulberry32(2500 + g);
+      var n = 2 + Math.floor(rng() * 120), range = 1 + Math.floor(rng() * 40), pts = [];
+      for (var i = 0; i < n; i++) pts.push([Math.floor(rng() * range), Math.floor(rng() * range)]);
+      check(pts);
+    }
+    if (tested === 0) return 1;
+    return worst;
+  });
+
+  check('diameter：旋转卡壳直径（Toussaint 1983，O(h) 对踵点）≡ 暴力最大点对距²（0 精确）+ 对踵点对确为最远 + 内点/共线/重复不干扰', 0, function () {
+    var worst = 0, tested = 0;
+    function dd2(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return dx * dx + dy * dy; }
+    function check(pts) {
+      if (pts.length < 2) return;
+      tested++;
+      var r = diameter(pts), b = 0, i, j;
+      for (i = 0; i < pts.length; i++) for (j = i + 1; j < pts.length; j++) b = Math.max(b, dd2(pts[i], pts[j]));
+      if (r.d2 !== b) { worst = 1; return; }
+      if (dd2(r.a, r.b) !== r.d2) worst = 1;
+    }
+    check([[0, 0], [3, 4]]); check([[0, 0], [1, 0], [1, 1], [0, 1]]);
+    check([[0, 0], [5, 0], [5, 5], [0, 5], [2, 2]]); check([[0, 0], [10, 0], [0, 1]]);
+    check([[0, 0], [0, 0], [1, 1]]);
+    for (var g = 0; g < 150; g++) {
+      var rng = mulberry32(3500 + g);
+      var n = 2 + Math.floor(rng() * 60), range = 1 + Math.floor(rng() * 50), pts = [];
+      for (var i = 0; i < n; i++) pts.push([Math.floor(rng() * range), Math.floor(rng() * range)]);
+      check(pts);
+    }
+    if (tested === 0) return 1;
+    return worst;
+  });
+
+  check('minEnclosingCircle：最小包围圆（Welzl 1991 随机增量）半径 ≡ 暴力枚举 2 点直径圆 + 3 点外接圆取最小覆盖半径（≤1e-9）+ 覆盖性（全部点在圆内或边上）+ 共线/单点/重复退化', 1e-9, function () {
+    var worst = 0, tested = 0;
+    for (var g = 0; g < 150; g++) {
+      var rng = mulberry32(4800 + g);
+      var n = 1 + Math.floor(rng() * 12), range = 1 + Math.floor(rng() * 20), pts = [], i;
+      for (i = 0; i < n; i++) pts.push([Math.floor(rng() * range), Math.floor(rng() * range)]);
+      tested++;
+      var c = minEnclosingCircle(pts);
+      for (i = 0; i < pts.length; i++) {
+        var dx = pts[i][0] - c.x, dy = pts[i][1] - c.y;
+        worst = Math.max(worst, Math.sqrt(dx * dx + dy * dy) - c.r);   // 覆盖性
+      }
+      var b = _bruteMEC(pts);
+      if (b !== Infinity) worst = Math.max(worst, Math.abs(c.r - b));  // 半径 ≡ 暴力最优
+    }
+    [[[0, 0], [2, 0]], [[0, 0], [2, 0], [1, 0]], [[0, 0], [3, 0], [0, 4]], [[0, 0], [1, 0], [0, 1], [1, 1]],
+    [[5, 5]], [[0, 0], [0, 0], [1, 1]]].forEach(function (pts) {
+      tested++;
+      var c = minEnclosingCircle(pts), i, b2 = _bruteMEC(pts);
+      for (i = 0; i < pts.length; i++) { var dx = pts[i][0] - c.x, dy = pts[i][1] - c.y; worst = Math.max(worst, Math.sqrt(dx * dx + dy * dy) - c.r); }
+      if (b2 !== Infinity) worst = Math.max(worst, Math.abs(c.r - b2));
+    });
+    if (tested === 0) return 1;
+    return worst;
+  });
+
   function runChecks() {
     var results = checks.map(function (c) {
       var residual, err = null;
@@ -11102,6 +11297,10 @@
     huffmanEncode: huffmanEncode,
     huffmanDecode: huffmanDecode,
     convexHull: convexHull,
+    /* v1.3.25 算法库扩展十五（计算几何） */
+    closestPair: closestPair,
+    diameter: diameter,
+    minEnclosingCircle: minEnclosingCircle,
     /* 扩展：拟牛顿/MCMC/率失真（v1.1.1） */
     eye2: eye2, wolfeLineSearch: wolfeLineSearch, bfgs: bfgs, lbfgs: lbfgs, gradLayerNorm: gradLayerNorm,
     gibbsSampler: gibbsSampler, metropolisSample: metropolisSample, rateDistortion: rateDistortion,

@@ -1,6 +1,6 @@
 /* ============================================================================
  * AXIOM 仪表盘 UI —— 零依赖原生 JS，深色主题
- * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(66) / 管线编排 / 演示实验室 / 导出
+ * 视图：架构总览 / 指令集(1024) / 实时自检 / 算法库(69) / 管线编排 / 演示实验室 / 导出
  * 依赖全局：AXIOM（core.js）、AXIOM_REGISTRY（registry.js）
  * ==========================================================================*/
 (function () {
@@ -470,7 +470,11 @@
     /* v1.3.24 算法库扩展十四 */
     { id: 'lz77', name: 'LZ77 压缩', src: 'Lempel–Ziv (1977)；DEFLATE', api: 'AXIOM.lz77Compress / AXIOM.lz77Decompress', inv: 'round-trip ≡ 原串（0 误差）+ 每个匹配复现所引用历史子串 + 贪心最长匹配 + 重复串有效压缩', chk: ['lz77Compress/lz77Decompress：'] },
     { id: 'huffman', name: 'Huffman 编码（最优前缀码）', src: 'Huffman (1952)', api: 'AXIOM.huffmanEncode / AXIOM.huffmanDecode', inv: 'round-trip ≡ 原消息（0 误差）+ 前缀无冲突 + Kraft 等式 + 加权码长 ≡ 暴力枚举最优前缀码 + 熵界', chk: ['huffmanEncode/huffmanDecode：'] },
-    { id: 'convexHull', name: 'Monotone Chain 凸包', src: 'Andrew (1979)；计算几何', api: 'AXIOM.convexHull', inv: '顶点集 ≡ 独立 Jarvis 礼物包装法（0 精确）+ 严格凸（转向一致）+ 全部输入点在包内或边上', chk: ['convexHull：'] }
+    { id: 'convexHull', name: 'Monotone Chain 凸包', src: 'Andrew (1979)；计算几何', api: 'AXIOM.convexHull', inv: '顶点集 ≡ 独立 Jarvis 礼物包装法（0 精确）+ 严格凸（转向一致）+ 全部输入点在包内或边上', chk: ['convexHull：'] },
+    /* v1.3.25 算法库扩展十五（计算几何） */
+    { id: 'closestPair', name: '最近点对（分治）', src: 'Shamos–Hoey (1975)', api: 'AXIOM.closestPair', inv: '最小距离² ≡ 暴力 O(n²)（整数坐标 0 精确）+ 返回点对确为该距离（含重复点）', chk: ['closestPair：'] },
+    { id: 'diameter', name: '旋转卡壳直径', src: 'Toussaint (1983)', api: 'AXIOM.diameter', inv: '直径² ≡ 暴力最大点对距²（0 精确）+ 对踵点对确为最远（复用已验证凸包）', chk: ['diameter：'] },
+    { id: 'minEnclosingCircle', name: '最小包围圆（Welzl）', src: 'Welzl (1991)', api: 'AXIOM.minEnclosingCircle', inv: '半径 ≡ 暴力枚举 2 点直径圆 + 3 点外接圆取最小覆盖半径（≤1e-9）+ 覆盖性', chk: ['minEnclosingCircle：'] }
   ];
   function algoMaxDiff(A, B) {
     var m = 0;
@@ -1373,6 +1377,53 @@
       '严格凸（CCW 全左转）= ' + conv + ' · 全部输入点在包内或边上 = ' + inside + '\n' +
       '顶点集 ≡ 独立 Jarvis 礼物包装法\n' +
       (conv && inside ? 'O(n log n) 凸包 ≙ 暴力交叉（0 精确）' : '❌ 不一致');
+  },
+  closestPair: function () {
+    var pts = [[0, 0], [7, 7], [2, 1], [8, 9], [5, 2], [3, 3], [1, 1]], i, j;
+    var r = AXIOM.closestPair(pts);
+    var b = Infinity;                                  // 暴力 O(n²) 参照
+    for (i = 0; i < pts.length; i++) for (j = i + 1; j < pts.length; j++) {
+      var dx = pts[i][0] - pts[j][0], dy = pts[i][1] - pts[j][1];
+      b = Math.min(b, dx * dx + dy * dy);
+    }
+    return '7 个 2D 整数点\n' +
+      '分治最近点对：(' + pts[r.i][0] + ',' + pts[r.i][1] + ')–(' + pts[r.j][0] + ',' + pts[r.j][1] + ')，距离² = ' + r.d2 + '\n' +
+      '暴力 O(n²) 枚举全部点对 → 最小距离² = ' + b + ' ⇒ 一致 = ' + (r.d2 === b) + '\n' +
+      (r.d2 === b ? 'O(n log n) 分治 ≙ 暴力 ground truth（0 精确）' : '❌ 不一致');
+  },
+  diameter: function () {
+    var pts = [[0, 0], [5, 0], [5, 5], [0, 5], [2, 2], [3, 1]], i, j;
+    var r = AXIOM.diameter(pts), b = 0;
+    for (i = 0; i < pts.length; i++) for (j = i + 1; j < pts.length; j++) {
+      var dx = pts[i][0] - pts[j][0], dy = pts[i][1] - pts[j][1];
+      b = Math.max(b, dx * dx + dy * dy);
+    }
+    return '6 个 2D 整数点（含内点 (2,2)(3,1)）\n' +
+      '旋转卡壳直径：(' + r.a[0] + ',' + r.a[1] + ')–(' + r.b[0] + ',' + r.b[1] + ')，距离² = ' + r.d2 + '\n' +
+      '暴力 O(n²) 最大点对距² = ' + b + ' ⇒ 一致 = ' + (r.d2 === b) + '\n' +
+      (r.d2 === b ? 'O(h) 对踵点扫描 ≙ 暴力（0 精确，直径必由凸包顶点取得）' : '❌ 不一致');
+  },
+  minEnclosingCircle: function () {
+    var pts = [[0, 0], [3, 0], [0, 4]], i;
+    var c = AXIOM.minEnclosingCircle(pts);
+    var maxOut = 0;                                    // 覆盖性：全部点在圆内或边上
+    for (i = 0; i < pts.length; i++) {
+      var dx = pts[i][0] - c.x, dy = pts[i][1] - c.y;
+      maxOut = Math.max(maxOut, Math.sqrt(dx * dx + dy * dy) - c.r);
+    }
+    var brute = Infinity;                              // 暴力：枚举 2 点直径圆 + 3 点外接圆
+    for (i = 0; i < pts.length; i++) for (var j = i + 1; j < pts.length; j++) {
+      var cc = { x: (pts[i][0] + pts[j][0]) / 2, y: (pts[i][1] + pts[j][1]) / 2 }, rr = 0;
+      rr = Math.sqrt((pts[i][0] - cc.x) * (pts[i][0] - cc.x) + (pts[i][1] - cc.y) * (pts[i][1] - cc.y));
+      var ok = true;
+      for (var t = 0; t < pts.length; t++) if ((pts[t][0] - cc.x) * (pts[t][0] - cc.x) + (pts[t][1] - cc.y) * (pts[t][1] - cc.y) > rr * rr + 1e-9) ok = false;
+      if (ok) brute = Math.min(brute, rr);
+    }
+    return '3 个点 (0,0)(3,0)(0,4)（直角三角形）\n' +
+      'Welzl 最小包围圆：圆心 (' + c.x.toFixed(6) + ', ' + c.y.toFixed(6) + ')，半径 = ' + c.r.toFixed(6) + '\n' +
+      '覆盖性（全部点在圆内或边上）= ' + (maxOut <= 1e-9) + '（最大超出 ' + maxOut.toExponential(2) + '）\n' +
+      '暴力 2 点直径圆最优半径 = ' + brute.toFixed(6) + ' ⇒ 一致 = ' + (Math.abs(c.r - brute) <= 1e-9) + '\n' +
+      (maxOut <= 1e-9 ? 'Welzl 随机增量 ≙ 暴力枚举 2/3 点圆（≤1e-9）' : '❌ 不一致');
   }
   };
   var algoRun = null;
