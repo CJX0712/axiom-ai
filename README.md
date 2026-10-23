@@ -86,7 +86,9 @@ axiom-ai/
 │   ├── gen-registry.js     # 从分类学生成 1024 指令（含完整性断言）
 │   ├── gen-verification.js # 从真实运行结果生成验证报告
 │   ├── gen-isa-doc.js      # 生成指令集全目录
-│   └── build.js            # 打包单文件 HTML（构建期语法预检）
+│   ├── build.js            # 打包单文件 HTML（构建期语法预检）
+│   ├── push-api.js         # Git Data API 推送（github.com 不可达时的闭环通道，含逐层 sha 自校验）
+│   └── align-commit.js     # 本地/远端 commit 对象对齐（时区与消息尾换行差异）
 ├── docs/
 │   ├── ARCHITECTURE.md     # 十层架构 + 指令集规范
 │   ├── VERIFICATION.md     # 386 项不变量残差全表（自动生成）
@@ -113,6 +115,9 @@ node tools/gen-isa-doc.js
 
 # 构建单文件 HTML
 node tools/build.js
+
+# 推送（当 github.com 不可达、仅 api.github.com 可达时走 Git Data API 闭环通道）
+node tools/push-api.js
 ```
 
 浏览器用法：直接打开 `axiom.html`，七个视图——**架构总览 / 指令集（1024，可搜索过滤）/ 实时自检 / 算法库（72 组，每组可一键运行演示）/ 管线编排（L9）/ 演示实验室 / 导出**。
