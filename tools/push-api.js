@@ -79,11 +79,12 @@ async function api(method, endpoint, body) {
   console.log('  tree OK  ' + t.sha + '  (== 本地 tree)');
 
   // 3) commit
-  //    ⚠️ GitHub 在序列化 commit 对象时会给 message 追加一个结尾 '\n'。
-  //    故此处必须**去掉** message 原有尾部换行，交由 GitHub 补回 —— 否则远端对象比本地多一个 '\n'，
-  //    导致 commit SHA 不一致（可用 tools/align-commit.js 对齐）。
+  //    ⚠️ `git log --format=%B` 的输出 = 提交正文 + 一个格式终止符（即比 commit 对象里的正文多 1 个 '\n'）。
+  //    GitHub REST **原样存储**提交上来的 message，故此处必须**恰好去掉 1 个**尾部换行，
+  //    使 GitHub 存储的 message 与本地 commit 对象正文逐字节相同 → commit SHA 直接一致。
+  //    （去掉全部尾部换行会导致远端正文少一个 '\n'，SHA 与本地不符。）
   const meta = sh('git log -1 --format=%an%n%ae%n%aI%n%cn%n%ce%n%cI').split('\n');
-  const message = execSync('git log -1 --format=%B', { cwd: ROOT, encoding: 'utf8' }).replace(/\n+$/, '');
+  const message = execSync('git log -1 --format=%B', { cwd: ROOT, encoding: 'utf8' }).replace(/\n$/, '');
   const c = await api('POST', '/repos/' + REPO + '/git/commits', {
     message: message,
     tree: t.sha,
